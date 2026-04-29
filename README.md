@@ -11,35 +11,35 @@
 From the repository root:
 
 ```powershell
-tools\mcgsctl\mcgsctl.ps1 doctor --project FG2_HMI.MCE
-tools\mcgsctl\mcgsctl.ps1 mce export --project FG2_HMI.MCE --out .mcgsctl-runs\export
-tools\mcgsctl\mcgsctl.ps1 open --project FG2_HMI.MCE
-tools\mcgsctl\mcgsctl.ps1 menus
-tools\mcgsctl\mcgsctl.ps1 command --id 57603 --send
-tools\mcgsctl\mcgsctl.ps1 mdi --pid <pid>
-tools\mcgsctl\mcgsctl.ps1 guiinfo --hwnd 0x123456 --activate
-tools\mcgsctl\mcgsctl.ps1 modules --pid <pid> --filter Smart200
-tools\mcgsctl\mcgsctl.ps1 wndproc --hwnd 0x123456
-tools\mcgsctl\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\西门子\Smart200\Smart200.dll --filter SvrEdit
-tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 内部属性
-tools\mcgsctl\mcgsctl.ps1 windows
-tools\mcgsctl\mcgsctl.ps1 children --pid <pid> --class Button
-tools\mcgsctl\mcgsctl.ps1 find --pid <pid> --class SysTreeView32 --index 0
-tools\mcgsctl\mcgsctl.ps1 treeview --hwnd 0x123456 --caret
-tools\mcgsctl\mcgsctl.ps1 treeview --hwnd 0x123456 --notify-selchanged-text Smart200 --send
-tools\mcgsctl\mcgsctl.ps1 toolbar --hwnd 0x123456
-tools\mcgsctl\mcgsctl.ps1 listview --hwnd 0x123456 --double-text Smart200 --mouse
-tools\mcgsctl\mcgsctl.ps1 point --hwnd 0x123456 --x 20 --y 20 --right
-tools\mcgsctl\mcgsctl.ps1 drag --hwnd 0x123456 --x1 20 --y1 20 --x2 120 --y2 60 --mouse
-tools\mcgsctl\mcgsctl.ps1 popup --pid <pid> --open-hwnd 0x123456 --x 20 --y 20 --choose-id 32785 --exact --mouse
-tools\mcgsctl\mcgsctl.ps1 capture --out .mcgsctl-runs\capture
-tools\mcgsctl\mcgsctl.ps1 run --file workflow.actions.json
-tools\mcgsctl\mcgsctl.ps1 snapshot --project FG2_HMI.MCE --out .mcgsctl-runs\snapshot
-tools\mcgsctl\mcgsctl.ps1 workflow run realtime-db.add --project .codex_tmp\test.MCE --name HMI_UP --type switch --initial 0
-tools\mcgsctl\mcgsctl.ps1 workflow run window.button.add-momentary --project .codex_tmp\test.MCE --text 仰 --variable HMI_UP --x 610 --y 320
-tools\mcgsctl\mcgsctl.ps1 workflow run device.channel.map --project .codex_tmp\test.MCE --area V --address 603 --count 4 --data-type-index 0 --access 读写 --connect-base HMI_PTZ
-tools\mcgsctl\mcgsctl.ps1 workflow run script.edit --project .codex_tmp\test.MCE --text "TEST_FLAG=1" --button-text SCRIPT_TEST --verify-token TEST_FLAG
-tools\mcgsctl\mcgsctl.ps1 workflow run window.indicator.add --project .codex_tmp\test.MCE --text LIMIT_ON --expression LIMIT_EXPR
+.\mcgsctl.ps1 doctor --project FG2_HMI.MCE
+.\mcgsctl.ps1 mce export --project FG2_HMI.MCE --out .mcgsctl-runs\export
+.\mcgsctl.ps1 open --project FG2_HMI.MCE
+.\mcgsctl.ps1 menus
+.\mcgsctl.ps1 command --id 57603 --send
+.\mcgsctl.ps1 mdi --pid <pid>
+.\mcgsctl.ps1 guiinfo --hwnd 0x123456 --activate
+.\mcgsctl.ps1 modules --pid <pid> --filter Smart200
+.\mcgsctl.ps1 wndproc --hwnd 0x123456
+.\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\西门子\Smart200\Smart200.dll --filter SvrEdit
+.\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 内部属性
+.\mcgsctl.ps1 windows
+.\mcgsctl.ps1 children --pid <pid> --class Button
+.\mcgsctl.ps1 find --pid <pid> --class SysTreeView32 --index 0
+.\mcgsctl.ps1 treeview --hwnd 0x123456 --caret
+.\mcgsctl.ps1 treeview --hwnd 0x123456 --notify-selchanged-text Smart200 --send
+.\mcgsctl.ps1 toolbar --hwnd 0x123456
+.\mcgsctl.ps1 listview --hwnd 0x123456 --double-text Smart200 --mouse
+.\mcgsctl.ps1 point --hwnd 0x123456 --x 20 --y 20 --right
+.\mcgsctl.ps1 drag --hwnd 0x123456 --x1 20 --y1 20 --x2 120 --y2 60 --mouse
+.\mcgsctl.ps1 popup --pid <pid> --open-hwnd 0x123456 --x 20 --y 20 --choose-id 32785 --exact --mouse
+.\mcgsctl.ps1 capture --out .mcgsctl-runs\capture
+.\mcgsctl.ps1 run --file workflow.actions.json
+.\mcgsctl.ps1 snapshot --project FG2_HMI.MCE --out .mcgsctl-runs\snapshot
+.\mcgsctl.ps1 workflow run realtime-db.add --project .codex_tmp\test.MCE --name HMI_UP --type switch --initial 0
+.\mcgsctl.ps1 workflow run window.button.add-momentary --project .codex_tmp\test.MCE --text 仰 --variable HMI_UP --x 610 --y 320
+.\mcgsctl.ps1 workflow run device.channel.map --project .codex_tmp\test.MCE --area V --address 603 --count 4 --data-type-index 0 --access 读写 --connect-base HMI_PTZ
+.\mcgsctl.ps1 workflow run script.edit --project .codex_tmp\test.MCE --text "TEST_FLAG=1" --button-text SCRIPT_TEST --verify-token TEST_FLAG
+.\mcgsctl.ps1 workflow run window.indicator.add --project .codex_tmp\test.MCE --text LIMIT_ON --expression LIMIT_EXPR
 ```
 
 `mcgsctl.cmd` provides the same interface for `cmd.exe`.
@@ -92,7 +92,7 @@ tools\mcgsctl\mcgsctl.ps1 workflow run window.indicator.add --project .codex_tmp
 
 No workflow is currently registered in this category. New write-capable workflows should stay here until their dialogs have been profiled and verified on copied `.MCE` projects.
 
-Dialog profile drafts live in `tools/mcgsctl/profiles/dialogs/`. They record the observed controls, command IDs, remaining blockers, and evidence folders from copied `.MCE` experiments.
+Dialog profile drafts live in `profiles/dialogs/`. They record the observed controls, command IDs, remaining blockers, and evidence folders from copied `.MCE` experiments.
 
 ## Action Script Example
 
@@ -129,7 +129,7 @@ Dialog profile drafts live in `tools/mcgsctl/profiles/dialogs/`. They record the
 Run:
 
 ```powershell
-tools\mcgsctl\mcgsctl.ps1 verify --project FG2_HMI.MCE --spec spec.json
+.\mcgsctl.ps1 verify --project FG2_HMI.MCE --spec spec.json
 ```
 
 ## Known Limits
