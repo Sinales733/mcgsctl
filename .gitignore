@@ -2,4 +2,14 @@
 obj/
 .mcgsctl-cache/
 .mcgsctl-runs/
+.mcgsctl-work/
+.codex_tmp/
 *.user
+*.bak
+*.log
+*.tmp
+*.temp
+*.zip
+*.7z
+*.rar
+*.png

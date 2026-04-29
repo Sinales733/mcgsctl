@@ -120,12 +120,12 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
-  mcgsctl workflow run project.check-save --project <mce> [--out <dir>]
-  mcgsctl workflow run realtime-db.add --project <mce> --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>] [--allow-original]
-  mcgsctl workflow run window.button.add-momentary --project <mce> --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--allow-original]
-  mcgsctl workflow run device.channel.map --project <mce> --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>] [--skip-reopen-verify] [--allow-original]
-  mcgsctl workflow run script.edit --project <mce> (--text <script>|--file <txt>) [--event down|up] [--button-text <label>] [--verify-token <text>] [--allow-original]
-  mcgsctl workflow run window.indicator.add --project <mce> --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--allow-original]
+  mcgsctl workflow run project.check-save (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
+  mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
+  mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run device.channel.map (--source <mce>|--project <copy.mce>) --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>]
+  mcgsctl workflow run script.edit (--source <mce>|--project <copy.mce>) (--text <script>|--file <txt>) [--event down|up] [--button-text <label>] [--verify-token <text>] [--allow-create-dataobjects]
+  mcgsctl workflow run window.indicator.add (--source <mce>|--project <copy.mce>) --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl close --save|--discard [--pid <pid>]
 """);
     }
@@ -154,16 +154,7 @@ Commands:
         Check("Jackcess jars", jars.All(File.Exists), string.Join("; ", jars.Select(Path.GetFileName)), ref failures);
 
         var csproj = Path.Combine(toolRoot, "McgsCtl.csproj");
-        if (File.Exists(csproj))
-        {
-            var text = File.ReadAllText(csproj);
-            Warn("FlaUI packages", text.Contains("FlaUI.Core") && text.Contains("FlaUI.UIA3") && text.Contains("FlaUI.UIA2"),
-                "FlaUI.Core/UIA3/UIA2 package references", ref warnings);
-        }
-        else
-        {
-            Warn("FlaUI packages", false, "source project not found; packaged binary can still run", ref warnings);
-        }
+        Warn("UI automation driver", File.Exists(csproj), "Win32/MFC handle primitives; FlaUI is not required", ref warnings);
 
         if (File.Exists(project))
         {
@@ -969,16 +960,23 @@ Commands:
         if (name.Equals("project.check-save", StringComparison.OrdinalIgnoreCase))
         {
             var project = Opt(args, "--project");
+            var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "check-save-" + Timestamp()));
+            Directory.CreateDirectory(outDir);
+            WorkflowProjectContext? workflowProject = null;
             IntPtr hwnd;
             Process? process = null;
             if (OptInt(args, "--pid").HasValue)
             {
+                if (!Has(args, "--allow-attached"))
+                    return Fail("project.check-save with --pid requires --allow-attached because it can save an already-open editor instance.");
                 hwnd = ResolveMainWindow(args);
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(project)) return Fail("project.check-save requires --project or --pid.");
-                project = FullPath(project);
+                if (string.IsNullOrWhiteSpace(project) && string.IsNullOrWhiteSpace(Opt(args, "--source")))
+                    return Fail("project.check-save requires --source, --project, or --pid.");
+                workflowProject = PrepareWorkflowProject(args, "project.check-save", outDir);
+                project = workflowProject.Project;
                 var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
                 process = Process.Start(new ProcessStartInfo(editor, Quote(project))
                 {
@@ -994,8 +992,6 @@ Commands:
             UiAutomation.SendCommand(hwnd, CheckCommandId);
             Thread.Sleep(1500);
 
-            var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "check-save-" + Timestamp()));
-            Directory.CreateDirectory(outDir);
             File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(hwnd), Encoding.UTF8);
             File.WriteAllLines(Path.Combine(outDir, "menus.txt"),
                 UiAutomation.GetMenus(hwnd).Select(m => m.Id.HasValue ? $"{m.Id.Value}\t{m.Path}" : $"-\t{m.Path}"),
@@ -1005,8 +1001,9 @@ Commands:
             {
                 MceExporter.Export(project, Path.Combine(outDir, "mce"));
             }
+            if (workflowProject != null) WriteWorkflowAuditEnd(outDir, workflowProject, saved: true, success: true);
             Console.WriteLine("workflow evidence: " + outDir);
-            _ = process;
+            if (process != null && !process.HasExited) CloseEditorProcess(process.Id, hwnd, saveIntent: true);
             return 0;
         }
 
@@ -1048,14 +1045,6 @@ Commands:
 
     private static int WorkflowRealtimeDbAdd(string[] args)
     {
-        var project = RequiredPath(args, "--project");
-        var defaultProject = FullPath(DefaultProject());
-        if (!Has(args, "--allow-original") &&
-            Path.GetFullPath(project).Equals(Path.GetFullPath(defaultProject), StringComparison.OrdinalIgnoreCase))
-        {
-            return Fail("Refusing to write the default project without --allow-original. Use a copied .MCE for profiling.");
-        }
-
         var objectName = Required(args, "--name");
         var typeText = NormalizeRealtimeType(Opt(args, "--type") ?? "switch");
         var initial = Opt(args, "--initial") ?? "0";
@@ -1063,11 +1052,14 @@ Commands:
         var note = Opt(args, "--note") ?? "";
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "realtime-db-add-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "realtime-db.add", outDir);
+        var project = workflowProject.Project;
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         var saved = false;
+        var success = false;
 
         try
         {
@@ -1125,6 +1117,8 @@ Commands:
                 Encoding.UTF8);
 
             saved = true;
+            success = found;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, found);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(found ? "realtime db add verification: PASS" : "realtime db add verification: CHECK EVIDENCE");
             return found ? 0 : 1;
@@ -1136,6 +1130,7 @@ Commands:
             {
                 try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
             }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.Error.WriteLine("workflow failed: " + ex.Message);
             return 1;
         }
@@ -1212,14 +1207,6 @@ Commands:
 
     private static int WorkflowAddMomentaryButton(string[] args)
     {
-        var project = RequiredPath(args, "--project");
-        var defaultProject = FullPath(DefaultProject());
-        if (!Has(args, "--allow-original") &&
-            Path.GetFullPath(project).Equals(Path.GetFullPath(defaultProject), StringComparison.OrdinalIgnoreCase))
-        {
-            return Fail("Refusing to write the default project without --allow-original. Use a copied .MCE for profiling.");
-        }
-
         var label = Required(args, "--text");
         var variable = Required(args, "--variable");
         var windowIndex = ParseInt(args, "--window-index", 2);
@@ -1229,11 +1216,14 @@ Commands:
         var height = ParseInt(args, "--height", 70);
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "momentary-button-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.button.add-momentary", outDir);
+        var project = workflowProject.Project;
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         var saved = false;
+        var success = false;
 
         try
         {
@@ -1304,6 +1294,8 @@ Commands:
                 Encoding.UTF8);
 
             saved = true;
+            success = labelFound && variableFound;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(labelFound && variableFound
                 ? "momentary button verification: PASS"
@@ -1317,6 +1309,7 @@ Commands:
             {
                 try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
             }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.Error.WriteLine("workflow failed: " + ex.Message);
             return 1;
         }
@@ -1347,14 +1340,6 @@ Commands:
 
     private static int WorkflowDeviceChannelMap(string[] args)
     {
-        var project = RequiredPath(args, "--project");
-        var defaultProject = FullPath(DefaultProject());
-        if (!Has(args, "--allow-original") &&
-            Path.GetFullPath(project).Equals(Path.GetFullPath(defaultProject), StringComparison.OrdinalIgnoreCase))
-        {
-            return Fail("Refusing to write the default project without --allow-original. Use a copied .MCE for profiling.");
-        }
-
         var deviceText = Opt(args, "--device-text") ?? "Smart200";
         var area = (Opt(args, "--area") ?? "V").Trim().ToUpperInvariant();
         var channelType = Opt(args, "--channel-type") ?? DeviceAreaToChannelType(area);
@@ -1370,9 +1355,14 @@ Commands:
         var timeout = TimeSpan.FromSeconds(ParseInt(args, "--timeout", 25));
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "device-channel-map-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "device.channel.map", outDir);
+        var project = workflowProject.Project;
 
         if (address < 0) return Fail("--address must be >= 0.");
         if (count <= 0 || count > 256) return Fail("--count must be between 1 and 256.");
+        var skipReopenVerify = Has(args, "--skip-reopen-verify");
+        if (skipReopenVerify && !Has(args, "--debug-allow-skip-reopen-verify"))
+            return Fail("--skip-reopen-verify is disabled for safety. Add --debug-allow-skip-reopen-verify only for profiling runs.");
 
         var expectedChannels = explicitExpectedChannels.Length > 0
             ? explicitExpectedChannels
@@ -1385,6 +1375,7 @@ Commands:
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         var saved = false;
+        var success = false;
 
         try
         {
@@ -1474,7 +1465,7 @@ Commands:
 
             saved = true;
             var reopenVerified = true;
-            if (!Has(args, "--skip-reopen-verify"))
+            if (!skipReopenVerify)
             {
                 CloseEditorProcess(process.Id, main, saveIntent: true);
                 process = null;
@@ -1510,6 +1501,8 @@ Commands:
 
             Console.WriteLine("workflow evidence: " + outDir);
             var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && reopenVerified;
+            success = passed;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine(passed
                 ? "device channel map verification: PASS"
                 : "device channel map verification: CHECK EVIDENCE");
@@ -1522,6 +1515,7 @@ Commands:
             {
                 try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
             }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.Error.WriteLine("workflow failed: " + ex.Message);
             return 1;
         }
@@ -1552,14 +1546,6 @@ Commands:
 
     private static int WorkflowWindowIndicatorAdd(string[] args)
     {
-        var project = RequiredPath(args, "--project");
-        var defaultProject = FullPath(DefaultProject());
-        if (!Has(args, "--allow-original") &&
-            Path.GetFullPath(project).Equals(Path.GetFullPath(defaultProject), StringComparison.OrdinalIgnoreCase))
-        {
-            return Fail("Refusing to write the default project without --allow-original. Use a copied .MCE for profiling.");
-        }
-
         var label = Required(args, "--text");
         var expression = Required(args, "--expression");
         var windowIndex = ParseInt(args, "--window-index", 2);
@@ -1570,11 +1556,14 @@ Commands:
         var invisibleWhenNonzero = Has(args, "--invisible-when-nonzero");
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "indicator-add-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.indicator.add", outDir);
+        var project = workflowProject.Project;
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         var saved = false;
+        var success = false;
 
         try
         {
@@ -1661,6 +1650,8 @@ Commands:
                 Encoding.UTF8);
 
             saved = true;
+            success = labelFound && expressionFound;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(labelFound && expressionFound
                 ? "indicator add verification: PASS"
@@ -1674,6 +1665,7 @@ Commands:
             {
                 try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
             }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.Error.WriteLine("workflow failed: " + ex.Message);
             return 1;
         }
@@ -1688,14 +1680,6 @@ Commands:
 
     private static int WorkflowScriptEdit(string[] args)
     {
-        var project = RequiredPath(args, "--project");
-        var defaultProject = FullPath(DefaultProject());
-        if (!Has(args, "--allow-original") &&
-            Path.GetFullPath(project).Equals(Path.GetFullPath(defaultProject), StringComparison.OrdinalIgnoreCase))
-        {
-            return Fail("Refusing to write the default project without --allow-original. Use a copied .MCE for profiling.");
-        }
-
         var script = Opt(args, "--text");
         var file = Opt(args, "--file");
         if (script == null && file == null) return Fail("script.edit requires --text or --file.");
@@ -1728,11 +1712,14 @@ Commands:
         }
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "script-edit-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "script.edit", outDir);
+        var project = workflowProject.Project;
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         var saved = false;
+        var success = false;
 
         try
         {
@@ -1802,7 +1789,7 @@ Commands:
                 CaptureProcessWindows(process.Id, Path.Combine(outDir, "script-editor-after-check"));
             }
 
-            ConfirmScriptDialog(process.Id, scriptDialog);
+            ConfirmScriptDialog(process.Id, scriptDialog, Has(args, "--allow-create-dataobjects"));
             Thread.Sleep(500);
 
             var propertyDialog = Native.IsWindow(dialog) && Native.IsWindowVisible(dialog)
@@ -1845,6 +1832,8 @@ Commands:
                 Encoding.UTF8);
 
             saved = true;
+            success = labelFound && scriptFound;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(labelFound && scriptFound
                 ? "script edit verification: PASS"
@@ -1858,6 +1847,7 @@ Commands:
             {
                 try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
             }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.Error.WriteLine("workflow failed: " + ex.Message);
             return 1;
         }
@@ -2529,14 +2519,14 @@ Commands:
         }
     }
 
-    private static void ConfirmScriptDialog(int pid, IntPtr scriptDialog)
+    private static void ConfirmScriptDialog(int pid, IntPtr scriptDialog, bool allowCreateDataObjects)
     {
         for (var attempt = 0; attempt < 3; attempt++)
         {
             if (!Native.IsWindow(scriptDialog) || !Native.IsWindowVisible(scriptDialog)) return;
             if (!ClickButtonByNormalizedText(scriptDialog, mouse: true, "确定(Y)", "确定(&Y)", "确定"))
                 throw new InvalidOperationException("Script editor OK button was not found.");
-            HandleScriptConfirmDialogs(pid, scriptDialog, TimeSpan.FromSeconds(8));
+            HandleScriptConfirmDialogs(pid, scriptDialog, TimeSpan.FromSeconds(8), allowCreateDataObjects);
             WaitForWindowClosed(scriptDialog, TimeSpan.FromSeconds(3));
         }
 
@@ -2544,11 +2534,18 @@ Commands:
             throw new InvalidOperationException("Script editor did not close after confirmation.");
     }
 
-    private static void HandleScriptConfirmDialogs(int pid, IntPtr scriptDialog, TimeSpan timeout)
+    private static void HandleScriptConfirmDialogs(int pid, IntPtr scriptDialog, TimeSpan timeout, bool allowCreateDataObjects)
     {
         var until = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < until)
         {
+            if (!allowCreateDataObjects && UiAutomation.TopWindowsForPid(pid).Any(h =>
+                    h != scriptDialog && Native.GetClass(h) == "#32770"))
+            {
+                throw new InvalidOperationException(
+                    "Script confirmation opened a secondary MCGS dialog. Refusing to auto-confirm it without --allow-create-dataobjects.");
+            }
+
             var handled = false;
             foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
                          h != scriptDialog && Native.GetClass(h) == "#32770"))
@@ -2849,6 +2846,127 @@ Commands:
         var path = FullPath(Required(args, name));
         if (!File.Exists(path)) throw new FileNotFoundException(path);
         return path;
+    }
+
+    private sealed record WorkflowProjectContext(
+        string Project,
+        string? Source,
+        string? WorkDir,
+        string ProjectSha256Before,
+        string? SourceSha256,
+        bool CreatedCopy);
+
+    private static WorkflowProjectContext PrepareWorkflowProject(string[] args, string workflowName, string outDir)
+    {
+        var sourceOpt = Opt(args, "--source");
+        var projectOpt = Opt(args, "--project");
+        if (!string.IsNullOrWhiteSpace(sourceOpt) && !string.IsNullOrWhiteSpace(projectOpt))
+            throw new ArgumentException("Use either --source or --project, not both.");
+
+        if (!string.IsNullOrWhiteSpace(sourceOpt))
+        {
+            var source = FullPath(sourceOpt);
+            if (!File.Exists(source)) throw new FileNotFoundException(source);
+            var workDir = FullPath(Opt(args, "--workdir") ?? Path.Combine(".mcgsctl-work", SafeFile(workflowName) + "-" + Timestamp()));
+            Directory.CreateDirectory(workDir);
+            var copyName = Path.GetFileNameWithoutExtension(source) + "-" + SafeFile(workflowName) + "-" + Timestamp() + Path.GetExtension(source);
+            var project = Path.Combine(workDir, copyName);
+            File.Copy(source, project, overwrite: false);
+            var context = new WorkflowProjectContext(project, source, workDir, Sha256(project), Sha256(source), CreatedCopy: true);
+            WriteWorkflowAuditStart(outDir, workflowName, context, args);
+            return context;
+        }
+
+        if (string.IsNullOrWhiteSpace(projectOpt))
+            throw new ArgumentException("Write workflows require --source <mce> or --project <copy.mce>.");
+
+        var existingProject = RequiredPath(args, "--project");
+        var projectSha = Sha256(existingProject);
+        if (!IsWorkflowCopyProject(existingProject))
+        {
+            if (!Has(args, "--allow-original"))
+            {
+                throw new InvalidOperationException(
+                    "Refusing to write a project outside .codex_tmp or .mcgsctl-work. Use --source to let mcgsctl create a working copy.");
+            }
+
+            var expectedSha = Opt(args, "--expected-project-sha256");
+            if (string.IsNullOrWhiteSpace(expectedSha))
+            {
+                throw new InvalidOperationException(
+                    "Direct writes require --expected-project-sha256 with --allow-original.");
+            }
+
+            if (!projectSha.Equals(expectedSha.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Project SHA256 mismatch. Expected {expectedSha}, actual {projectSha}.");
+            }
+        }
+
+        var directContext = new WorkflowProjectContext(existingProject, null, null, projectSha, null, CreatedCopy: false);
+        WriteWorkflowAuditStart(outDir, workflowName, directContext, args);
+        return directContext;
+    }
+
+    private static bool IsWorkflowCopyProject(string project)
+        => IsPathUnder(project, FullPath(".codex_tmp")) || IsPathUnder(project, FullPath(".mcgsctl-work"));
+
+    private static bool IsPathUnder(string path, string root)
+    {
+        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void WriteWorkflowAuditStart(string outDir, string workflowName, WorkflowProjectContext context, string[] args)
+    {
+        Directory.CreateDirectory(outDir);
+        File.WriteAllText(Path.Combine(outDir, "audit-start.json"),
+            JsonSerializer.Serialize(new
+            {
+                workflow = workflowName,
+                startedAt = DateTimeOffset.Now,
+                context.Project,
+                context.Source,
+                context.WorkDir,
+                context.CreatedCopy,
+                context.ProjectSha256Before,
+                context.SourceSha256,
+                args = RedactArgs(args)
+            }, JsonOptions()),
+            Encoding.UTF8);
+    }
+
+    private static void WriteWorkflowAuditEnd(string outDir, WorkflowProjectContext context, bool saved, bool success)
+    {
+        File.WriteAllText(Path.Combine(outDir, "audit-end.json"),
+            JsonSerializer.Serialize(new
+            {
+                finishedAt = DateTimeOffset.Now,
+                context.Project,
+                context.Source,
+                context.CreatedCopy,
+                saved,
+                success,
+                projectSha256Before = context.ProjectSha256Before,
+                projectSha256After = File.Exists(context.Project) ? Sha256(context.Project) : null
+            }, JsonOptions()),
+            Encoding.UTF8);
+    }
+
+    private static string[] RedactArgs(string[] args)
+    {
+        var result = (string[])args.Clone();
+        for (var i = 0; i < result.Length - 1; i++)
+        {
+            if (result[i].Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                result[i].Contains("token", StringComparison.OrdinalIgnoreCase))
+            {
+                result[i + 1] = "<redacted>";
+            }
+        }
+        return result;
     }
 
     private static bool Has(string[] args, string name)
