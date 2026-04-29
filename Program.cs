@@ -5,9 +5,10 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
-internal static class Program
+internal static partial class Program
 {
     private const uint SaveCommandId = 57603;
     private const uint CheckCommandId = 32786;
@@ -120,6 +121,7 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
+  mcgsctl workflow run project.check (--source <mce>|--project <copy.mce>|--pid <pid>) [--workdir <dir>] [--out <dir>] [--allow-attached]
   mcgsctl workflow run project.check-save (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
@@ -957,54 +959,14 @@ Commands:
             return Fail("Usage: mcgsctl workflow run <name> [--args ...]");
 
         var name = args[2];
+        if (name.Equals("project.check", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowProjectCheck(args, saveAfterPass: false);
+        }
+
         if (name.Equals("project.check-save", StringComparison.OrdinalIgnoreCase))
         {
-            var project = Opt(args, "--project");
-            var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "check-save-" + Timestamp()));
-            Directory.CreateDirectory(outDir);
-            WorkflowProjectContext? workflowProject = null;
-            IntPtr hwnd;
-            Process? process = null;
-            if (OptInt(args, "--pid").HasValue)
-            {
-                if (!Has(args, "--allow-attached"))
-                    return Fail("project.check-save with --pid requires --allow-attached because it can save an already-open editor instance.");
-                hwnd = ResolveMainWindow(args);
-            }
-            else
-            {
-                if (string.IsNullOrWhiteSpace(project) && string.IsNullOrWhiteSpace(Opt(args, "--source")))
-                    return Fail("project.check-save requires --source, --project, or --pid.");
-                workflowProject = PrepareWorkflowProject(args, "project.check-save", outDir);
-                project = workflowProject.Project;
-                var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-                process = Process.Start(new ProcessStartInfo(editor, Quote(project))
-                {
-                    UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
-                });
-                if (process == null) return Fail("Failed to open editor.");
-                hwnd = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(20));
-            }
-
-            UiAutomation.SendCommand(hwnd, SaveCommandId);
-            Thread.Sleep(800);
-            UiAutomation.SendCommand(hwnd, CheckCommandId);
-            Thread.Sleep(1500);
-
-            File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(hwnd), Encoding.UTF8);
-            File.WriteAllLines(Path.Combine(outDir, "menus.txt"),
-                UiAutomation.GetMenus(hwnd).Select(m => m.Id.HasValue ? $"{m.Id.Value}\t{m.Path}" : $"-\t{m.Path}"),
-                Encoding.UTF8);
-            TryScreenshot(hwnd, Path.Combine(outDir, "window.png"));
-            if (!string.IsNullOrWhiteSpace(project) && File.Exists(project))
-            {
-                MceExporter.Export(project, Path.Combine(outDir, "mce"));
-            }
-            if (workflowProject != null) WriteWorkflowAuditEnd(outDir, workflowProject, saved: true, success: true);
-            Console.WriteLine("workflow evidence: " + outDir);
-            if (process != null && !process.HasExited) CloseEditorProcess(process.Id, hwnd, saveIntent: true);
-            return 0;
+            return WorkflowProjectCheck(args, saveAfterPass: true);
         }
 
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
@@ -1043,10 +1005,195 @@ Commands:
         return Fail("Unknown workflow: " + name);
     }
 
+    private sealed record ProjectCheckResult(
+        bool Passed,
+        bool Unknown,
+        int ErrorCount,
+        int WarningCount,
+        string[] DialogTexts,
+        string[] DialogTitles);
+
+    private static int WorkflowProjectCheck(string[] args, bool saveAfterPass)
+    {
+        var workflowName = saveAfterPass ? "project.check-save" : "project.check";
+        var projectOpt = Opt(args, "--project");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", workflowName + "-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+
+        WorkflowProjectContext? workflowProject = null;
+        Process? process = null;
+        IntPtr hwnd = IntPtr.Zero;
+        string? project = null;
+        var saved = false;
+        var success = false;
+
+        try
+        {
+            if (OptInt(args, "--pid").HasValue)
+            {
+                if (!Has(args, "--allow-attached"))
+                    return Fail(workflowName + " with --pid requires --allow-attached because it can act on an already-open editor instance.");
+                hwnd = ResolveMainWindow(args);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(projectOpt) && string.IsNullOrWhiteSpace(Opt(args, "--source")))
+                    return Fail(workflowName + " requires --source, --project, or --pid.");
+
+                workflowProject = PrepareWorkflowProject(args, workflowName, outDir);
+                project = workflowProject.Project;
+                var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+                process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+                });
+                if (process == null) return Fail("Failed to open editor.");
+                hwnd = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+                HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+                hwnd = UiAutomation.FindMainWindow(process.Id);
+                if (hwnd == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+            }
+
+            var pid = UiAutomation.GetWindowProcessId(hwnd);
+            var check = RunProjectCheck(pid, hwnd, outDir, TimeSpan.FromSeconds(ParseInt(args, "--check-timeout", 8)));
+            if (!check.Passed)
+            {
+                WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
+                Console.WriteLine("workflow evidence: " + outDir);
+                Console.WriteLine(check.Unknown ? "project check verification: UNKNOWN" : "project check verification: FAIL");
+                return 1;
+            }
+
+            if (saveAfterPass)
+            {
+                CloseProjectCheckDialogs(pid);
+                UiAutomation.SendCommand(hwnd, SaveCommandId);
+                Thread.Sleep(1500);
+                saved = true;
+                if (project != null && File.Exists(project))
+                    MceExporter.Export(project, Path.Combine(outDir, "mce"));
+            }
+
+            success = true;
+            WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(saveAfterPass ? "project check-save verification: PASS" : "project check verification: PASS");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, hwnd, saveAfterPass && saved); } catch { }
+            }
+        }
+    }
+
+    private static ProjectCheckResult RunProjectCheck(int pid, IntPtr main, string outDir, TimeSpan timeout)
+    {
+        var before = UiAutomation.TopWindowsForPid(pid).ToHashSet();
+        UiAutomation.SendCommand(main, CheckCommandId);
+        var until = DateTime.UtcNow + timeout;
+        ProjectCheckResult result;
+        do
+        {
+            Thread.Sleep(500);
+            HandleProjectCheckPrompt(pid);
+            result = AnalyzeProjectCheck(pid, before);
+            if (!result.Unknown) break;
+        } while (DateTime.UtcNow < until);
+
+        CaptureProcessWindows(pid, Path.Combine(outDir, "project-check"));
+        File.WriteAllText(Path.Combine(outDir, "check-result.json"),
+            JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+        File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+        TryScreenshot(main, Path.Combine(outDir, "window.png"));
+        return result;
+    }
+
+    private static void HandleProjectCheckPrompt(int pid)
+    {
+        foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32770"))
+        {
+            var text = DialogText(dialog);
+            if (!ContainsAny(text, "是否检查所有窗口", "用户程序", "表达式")) continue;
+            ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是");
+            Thread.Sleep(500);
+        }
+    }
+
+    private static ProjectCheckResult AnalyzeProjectCheck(int pid, HashSet<IntPtr> before)
+    {
+        var dialogs = UiAutomation.TopWindowsForPid(pid)
+            .Where(h => Native.GetClass(h) == "#32770")
+            .Where(h => !before.Contains(h) || DialogText(h).Contains("检查", StringComparison.OrdinalIgnoreCase) ||
+                         DialogText(h).Contains("错误", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var texts = dialogs.Select(DialogText).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray();
+        var titles = dialogs.Select(Native.GetText).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray();
+        var combined = string.Join("\n", texts);
+        var errorCount = ParseIssueCount(combined, "错误", "error", "errors");
+        var warningCount = ParseIssueCount(combined, "警告", "warning", "warnings");
+        var hasFatalText = ContainsAny(combined, "失败", "不通过", "error", "Error", "ERROR");
+        var passText = ContainsAny(combined, "0个错误", "0 个错误", "无错误", "没有错误", "检查通过", "成功", "完成");
+        var known = texts.Length > 0 && (passText || errorCount > 0 || warningCount > 0 || hasFatalText);
+        var passed = known && errorCount == 0 && !hasFatalText;
+        return new ProjectCheckResult(passed, !known, errorCount, warningCount, texts, titles);
+    }
+
+    private static int ParseIssueCount(string text, params string[] labels)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var max = 0;
+        foreach (var label in labels)
+        {
+            foreach (Match match in Regex.Matches(text, @"(\d+)\s*(?:个|條|条)?\s*" + Regex.Escape(label), RegexOptions.IgnoreCase))
+            {
+                if (int.TryParse(match.Groups[1].Value, out var value)) max = Math.Max(max, value);
+            }
+        }
+        if (max == 0 && labels.Any(label => text.Contains(label, StringComparison.OrdinalIgnoreCase)) &&
+            !ContainsAny(text, "0个", "0 个", "无", "没有"))
+        {
+            max = 1;
+        }
+        return max;
+    }
+
+    private static void CloseProjectCheckDialogs(int pid)
+    {
+        foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32770"))
+        {
+            var text = DialogText(dialog);
+            if (!ContainsAny(text, "检查", "错误", "警告", "成功", "完成")) continue;
+            ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "关闭", "关闭(&C)");
+            Thread.Sleep(300);
+        }
+    }
+
+    private static void WriteWorkflowAuditEndIfNeeded(string outDir, WorkflowProjectContext? context, bool saved, bool success)
+    {
+        if (context != null) WriteWorkflowAuditEnd(outDir, context, saved, success);
+    }
+
     private static int WorkflowRealtimeDbAdd(string[] args)
     {
         var objectName = Required(args, "--name");
-        var typeText = NormalizeRealtimeType(Opt(args, "--type") ?? "switch");
+        var rawType = Opt(args, "--type") ?? "switch";
+        var typeText = NormalizeRealtimeType(rawType);
+        var expectedTypeCode = RealtimeTypeCode(rawType);
         var initial = Opt(args, "--initial") ?? "0";
         var unit = Opt(args, "--unit") ?? "";
         var note = Opt(args, "--note") ?? "";
@@ -1063,6 +1210,11 @@ Commands:
 
         try
         {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeMatches = beforeSnapshot.FindDataObjects(objectName);
+            if (beforeMatches.Length > 0)
+                throw new InvalidOperationException("Data object already exists before workflow: " + objectName);
+
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
                 UseShellExecute = true,
@@ -1099,29 +1251,67 @@ Commands:
             UiAutomation.SendCommand(main, SaveCommandId);
             Thread.Sleep(2000);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
-            MceExporter.Export(project, Path.Combine(outDir, "mce"));
-
-            var data = File.ReadAllText(Path.Combine(outDir, "mce", "data.json"), Encoding.UTF8);
-            var found = data.Contains("\"strName\": \"" + objectName + "\"", StringComparison.Ordinal);
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterMatches = afterSnapshot.FindDataObjects(objectName);
+            var addedRow = afterMatches.LastOrDefault();
+            var nameDelta = afterMatches.Length - beforeMatches.Length;
+            var initialMatches = addedRow != null && SameOptionalText(addedRow.Initial, initial);
+            var unitMatches = addedRow != null && SameOptionalText(addedRow.Unit, unit);
+            var noteMatches = addedRow != null && SameOptionalText(addedRow.Note, note);
+            var typeMatches = expectedTypeCode == null || (addedRow != null && addedRow.DataType == expectedTypeCode);
+            var found = beforeMatches.Length == 0 &&
+                        afterMatches.Length == 1 &&
+                        nameDelta == 1 &&
+                        initialMatches &&
+                        unitMatches &&
+                        noteMatches &&
+                        typeMatches;
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenMatches = reopenSnapshot.FindDataObjects(objectName);
+            var reopenedRow = reopenMatches.LastOrDefault();
+            var reopenVerified = found &&
+                                 reopenMatches.Length == 1 &&
+                                 reopenedRow != null &&
+                                 SameOptionalText(reopenedRow.Initial, initial) &&
+                                 SameOptionalText(reopenedRow.Unit, unit) &&
+                                 SameOptionalText(reopenedRow.Note, note) &&
+                                 (expectedTypeCode == null || reopenedRow.DataType == expectedTypeCode);
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
                     project,
                     name = objectName,
+                    rawType,
                     type = typeText,
+                    expectedTypeCode,
                     initial,
                     unit,
                     note,
+                    beforeCount = beforeMatches.Length,
+                    afterCount = afterMatches.Length,
+                    nameDelta,
+                    addedRow,
+                    initialMatches,
+                    unitMatches,
+                    noteMatches,
+                    typeMatches,
+                    reopenCount = reopenMatches.Length,
+                    reopenedRow,
+                    reopenVerified,
                     found
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            saved = true;
-            success = found;
-            WriteWorkflowAuditEnd(outDir, workflowProject, saved, found);
+            success = found && reopenVerified;
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
-            Console.WriteLine(found ? "realtime db add verification: PASS" : "realtime db add verification: CHECK EVIDENCE");
-            return found ? 0 : 1;
+            Console.WriteLine(success ? "realtime db add verification: PASS" : "realtime db add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
         }
         catch (Exception ex)
         {
@@ -1227,6 +1417,11 @@ Commands:
 
         try
         {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
+            if (beforeLabelCount > 0)
+                throw new InvalidOperationException("Button label already exists in MCE blobs before workflow: " + label);
+
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
                 UseShellExecute = true,
@@ -1250,15 +1445,15 @@ Commands:
             Thread.Sleep(300);
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
 
             UiAutomation.SendCommand(main, 32785);
             var dialog = UiAutomation.WaitForWindow(process.Id, "标准按钮构件属性设置", "#32770", TimeSpan.FromSeconds(8));
             if (dialog == IntPtr.Zero) throw new TimeoutException("标准按钮构件属性设置 dialog was not found.");
             Thread.Sleep(300);
 
-            var baseEdit = FindBaseButtonTextEdit(dialog);
-            UiAutomation.SetControlText(baseEdit, label, paste: true);
-            Thread.Sleep(250);
+            ConfigureStandardButtonText(dialog, label);
 
             var tab = FindFirstChild(dialog, "SysTabControl32", null);
             UiAutomation.TabSelectIndex(tab, 1, mouse: true);
@@ -1268,18 +1463,29 @@ Commands:
             ConfigureMomentaryOperation(dialog, "抬起功能", "清0", variable);
 
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "configured-before-confirm"));
-            if (!UiAutomation.ClickButtonByText(dialog, "确认", mouse: true))
-                throw new InvalidOperationException("确认 button was not found.");
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "确认(Y)", "确认(&Y)", "确认"))
+                throw new InvalidOperationException("Button property confirm button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            WaitForWindowClosed(dialog, TimeSpan.FromSeconds(8));
             Thread.Sleep(1000);
 
             UiAutomation.SendCommand(main, SaveCommandId);
             Thread.Sleep(2000);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
-            MceExporter.Export(project, Path.Combine(outDir, "mce"));
-
-            var blob = File.ReadAllText(Path.Combine(outDir, "mce", "blob_strings.json"), Encoding.UTF8);
-            var labelFound = blob.Contains(label, StringComparison.Ordinal);
-            var variableFound = blob.Contains(variable, StringComparison.Ordinal);
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var tokenDeltas = BuildTokenDeltas(beforeSnapshot, afterSnapshot, new[] { label, variable });
+            var labelDelta = tokenDeltas.First(delta => delta.Token == label);
+            var variableDelta = tokenDeltas.First(delta => delta.Token == variable);
+            var labelFound = labelDelta.Increased;
+            var variableIncreased = variableDelta.Increased;
+            var variableFound = variableDelta.PresentAfter;
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, variable });
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -1288,19 +1494,21 @@ Commands:
                     variable,
                     windowIndex,
                     rectangle = new { x, y, width, height },
+                    tokenDeltas,
                     labelFound,
-                    variableFound
+                    variableIncreased,
+                    variableFound,
+                    reopenVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            saved = true;
-            success = labelFound && variableFound;
+            success = labelFound && variableFound && reopenVerified;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
-            Console.WriteLine(labelFound && variableFound
+            Console.WriteLine(success
                 ? "momentary button verification: PASS"
                 : "momentary button verification: CHECK EVIDENCE");
-            return labelFound && variableFound ? 0 : 1;
+            return success ? 0 : 1;
         }
         catch (Exception ex)
         {
@@ -1370,6 +1578,7 @@ Commands:
         var expectedVariables = string.IsNullOrWhiteSpace(connectBase)
             ? Array.Empty<string>()
             : Enumerable.Range(0, count).Select(i => connectBase + i.ToString("00")).ToArray();
+        var allowExistingVariables = Has(args, "--allow-existing-variables");
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
@@ -1379,6 +1588,17 @@ Commands:
 
         try
         {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var existingExpectedVariables = expectedVariables
+                .Where(name => beforeSnapshot.FindDataObjects(name).Length > 0)
+                .ToArray();
+            if (existingExpectedVariables.Length > 0 && !allowExistingVariables)
+            {
+                throw new InvalidOperationException(
+                    "Expected connected variables already exist before workflow. Use --allow-existing-variables only when reusing existing Data objects intentionally: " +
+                    string.Join(", ", existingExpectedVariables));
+            }
+
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
                 UseShellExecute = true,
@@ -1447,16 +1667,31 @@ Commands:
             UiAutomation.SendCommand(main, SaveCommandId);
             Thread.Sleep(2000);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "04-after-save"));
-            MceExporter.Export(project, Path.Combine(outDir, "mce"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
 
-            var blobPath = Path.Combine(outDir, "mce", "blob_strings.json");
-            var dataPath = Path.Combine(outDir, "mce", "data.json");
-            var blob = File.Exists(blobPath) ? File.ReadAllText(blobPath, Encoding.UTF8) : "";
-            var data = File.Exists(dataPath) ? File.ReadAllText(dataPath, Encoding.UTF8) : "";
-            var channelStringsFound = expectedChannels.All(s => blob.Contains(s, StringComparison.Ordinal));
+            var channelStringsFound = expectedChannels.All(s => afterSnapshot.CountBlobToken(s) > 0);
             var variableStringsFound = expectedVariables.Length == 0 ||
-                                       expectedVariables.All(s => blob.Contains(s, StringComparison.Ordinal) ||
-                                                                  data.Contains(s, StringComparison.Ordinal));
+                                       expectedVariables.All(s => afterSnapshot.CountBlobToken(s) > 0 ||
+                                                                  afterSnapshot.FindDataObjects(s).Length > 0);
+            var expectedVariableDeltas = expectedVariables
+                .Select(name =>
+                {
+                    var beforeCount = beforeSnapshot.FindDataObjects(name).Length;
+                    var afterCount = afterSnapshot.FindDataObjects(name).Length;
+                    return new
+                    {
+                        name,
+                        beforeCount,
+                        afterCount,
+                        delta = afterCount - beforeCount
+                    };
+                })
+                .ToArray();
+            var dataObjectsDeltaVerified = expectedVariables.Length == 0 ||
+                                           expectedVariableDeltas.All(delta =>
+                                               allowExistingVariables
+                                                   ? delta.afterCount > 0
+                                                   : delta.beforeCount == 0 && delta.afterCount == 1 && delta.delta == 1);
             var guiRowsVerified = expectedChannels.All(expected =>
                 targetRows.Any(row => row.Texts.Any(t => t.Equals(expected, StringComparison.OrdinalIgnoreCase))));
             var guiVariablesVerified = expectedVariables.Length == 0 ||
@@ -1493,6 +1728,10 @@ Commands:
                     expectedVariables,
                     channelStringsFound,
                     variableStringsFound,
+                    allowExistingVariables,
+                    existingExpectedVariables,
+                    expectedVariableDeltas,
+                    dataObjectsDeltaVerified,
                     guiRowsVerified,
                     guiVariablesVerified,
                     reopenVerified
@@ -1500,7 +1739,7 @@ Commands:
                 Encoding.UTF8);
 
             Console.WriteLine("workflow evidence: " + outDir);
-            var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && reopenVerified;
+            var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && dataObjectsDeltaVerified && reopenVerified;
             success = passed;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine(passed
@@ -1567,6 +1806,11 @@ Commands:
 
         try
         {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
+            if (beforeLabelCount > 0)
+                throw new InvalidOperationException("Indicator label already exists in MCE blobs before workflow: " + label);
+
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
                 UseShellExecute = true,
@@ -1593,15 +1837,15 @@ Commands:
             Thread.Sleep(300);
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
 
             UiAutomation.SendCommand(main, 32785);
             var dialog = UiAutomation.WaitForWindow(process.Id, "标准按钮构件属性设置", "#32770", TimeSpan.FromSeconds(8));
             if (dialog == IntPtr.Zero) throw new TimeoutException("标准按钮构件属性设置 dialog was not found.");
             Thread.Sleep(300);
 
-            var baseEdit = FindBaseButtonTextEdit(dialog);
-            UiAutomation.SetControlText(baseEdit, label, paste: true);
-            Thread.Sleep(250);
+            ConfigureStandardButtonText(dialog, label);
 
             var tab = FindFirstChild(dialog, "SysTabControl32", null);
             UiAutomation.TabSelectIndex(tab, 3, mouse: true);
@@ -1630,11 +1874,20 @@ Commands:
             UiAutomation.SendCommand(main, SaveCommandId);
             Thread.Sleep(2000);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
-            MceExporter.Export(project, Path.Combine(outDir, "mce"));
-
-            var blob = File.ReadAllText(Path.Combine(outDir, "mce", "blob_strings.json"), Encoding.UTF8);
-            var labelFound = blob.Contains(label, StringComparison.Ordinal);
-            var expressionFound = blob.Contains(expression, StringComparison.Ordinal);
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var tokenDeltas = BuildTokenDeltas(beforeSnapshot, afterSnapshot, new[] { label, expression });
+            var labelDelta = tokenDeltas.First(delta => delta.Token == label);
+            var expressionDelta = tokenDeltas.First(delta => delta.Token == expression);
+            var labelFound = labelDelta.Increased;
+            var expressionIncreased = expressionDelta.Increased;
+            var expressionFound = expressionDelta.PresentAfter;
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, expression });
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -1644,19 +1897,21 @@ Commands:
                     invisibleWhenNonzero,
                     windowIndex,
                     rectangle = new { x, y, width, height },
+                    tokenDeltas,
                     labelFound,
-                    expressionFound
+                    expressionIncreased,
+                    expressionFound,
+                    reopenVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            saved = true;
-            success = labelFound && expressionFound;
+            success = labelFound && expressionFound && reopenVerified;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
-            Console.WriteLine(labelFound && expressionFound
+            Console.WriteLine(success
                 ? "indicator add verification: PASS"
                 : "indicator add verification: CHECK EVIDENCE");
-            return labelFound && expressionFound ? 0 : 1;
+            return success ? 0 : 1;
         }
         catch (Exception ex)
         {
@@ -1723,6 +1978,11 @@ Commands:
 
         try
         {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
+            if (beforeLabelCount > 0)
+                throw new InvalidOperationException("Script button label already exists in MCE blobs before workflow: " + label);
+
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
                 UseShellExecute = true,
@@ -1749,15 +2009,15 @@ Commands:
             Thread.Sleep(300);
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
 
             UiAutomation.SendCommand(main, 32785);
             var dialog = UiAutomation.WaitForWindow(process.Id, "标准按钮构件属性设置", "#32770", TimeSpan.FromSeconds(8));
             if (dialog == IntPtr.Zero) throw new TimeoutException("标准按钮构件属性设置 dialog was not found.");
             Thread.Sleep(300);
 
-            var baseEdit = FindBaseButtonTextEdit(dialog);
-            UiAutomation.SetControlText(baseEdit, label, paste: true);
-            Thread.Sleep(250);
+            ConfigureStandardButtonText(dialog, label);
 
             var tab = FindFirstChild(dialog, "SysTabControl32", null);
             UiAutomation.TabSelectIndex(tab, 2, mouse: true);
@@ -1789,7 +2049,7 @@ Commands:
                 CaptureProcessWindows(process.Id, Path.Combine(outDir, "script-editor-after-check"));
             }
 
-            ConfirmScriptDialog(process.Id, scriptDialog, Has(args, "--allow-create-dataobjects"));
+            ConfirmScriptDialog(process.Id, scriptDialog, dialog, Has(args, "--allow-create-dataobjects"));
             Thread.Sleep(500);
 
             var propertyDialog = Native.IsWindow(dialog) && Native.IsWindowVisible(dialog)
@@ -1810,11 +2070,21 @@ Commands:
             UiAutomation.SendCommand(main, SaveCommandId);
             Thread.Sleep(2000);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
-            MceExporter.Export(project, Path.Combine(outDir, "mce"));
-
-            var blob = File.ReadAllText(Path.Combine(outDir, "mce", "blob_strings.json"), Encoding.UTF8);
-            var labelFound = blob.Contains(label, StringComparison.Ordinal);
-            var scriptFound = verifyTokens.Length == 0 || verifyTokens.All(token => blob.Contains(token, StringComparison.Ordinal));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var tokenDeltas = BuildTokenDeltas(beforeSnapshot, afterSnapshot, new[] { label }.Concat(verifyTokens));
+            var labelDelta = tokenDeltas.First(delta => delta.Token == label);
+            var labelFound = labelDelta.Increased;
+            var scriptFound = verifyTokens.Length == 0 ||
+                              verifyTokens.All(token => tokenDeltas.Any(delta =>
+                                  delta.Token == token && delta.Increased));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot,
+                new[] { label }.Concat(verifyTokens));
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -1826,19 +2096,20 @@ Commands:
                     rectangle = new { x, y, width, height },
                     checkScript,
                     verifyTokens,
+                    tokenDeltas,
                     labelFound,
-                    scriptFound
+                    scriptFound,
+                    reopenVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            saved = true;
-            success = labelFound && scriptFound;
+            success = labelFound && scriptFound && reopenVerified;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
-            Console.WriteLine(labelFound && scriptFound
+            Console.WriteLine(success
                 ? "script edit verification: PASS"
                 : "script edit verification: CHECK EVIDENCE");
-            return labelFound && scriptFound ? 0 : 1;
+            return success ? 0 : 1;
         }
         catch (Exception ex)
         {
@@ -2311,6 +2582,46 @@ Commands:
     private static bool ContainsAny(string text, params string[] needles)
         => needles.Any(n => text.Contains(n, StringComparison.OrdinalIgnoreCase));
 
+    private static bool IsDialogErrorText(string text)
+    {
+        if (ContainsAny(text,
+                "\u6ca1\u6709\u9519\u8bef",
+                "\u65e0\u9519\u8bef",
+                "0\u4e2a\u9519\u8bef",
+                "0 \u4e2a\u9519\u8bef"))
+        {
+            return false;
+        }
+
+        return ContainsAny(text,
+            "error", "Error", "ERROR",
+            "\u9519\u8bef",
+            "\u5931\u8d25",
+            "\u4e0d\u901a\u8fc7");
+    }
+
+    private static bool IsUnknownObjectDialogText(string text)
+        => ContainsAny(text,
+            "\u672a\u77e5\u5bf9\u8c61",
+            "\u662f\u5426\u589e\u52a0",
+            "\u6dfb\u52a0\u6570\u636e\u5bf9\u8c61");
+
+    private static bool IsBenignInfoDialogText(string text)
+        => ContainsAny(text,
+            "\u63d0\u793a",
+            "\u6210\u529f",
+            "\u5b8c\u6210",
+            "\u6b63\u786e",
+            "\u68c0\u67e5",
+            "\u6ca1\u6709\u9519\u8bef",
+            "\u65e0\u9519\u8bef");
+
+    private static string ShortDialogText(IntPtr dialog)
+    {
+        var compact = Regex.Replace(DialogText(dialog), @"\s+", " ").Trim();
+        return compact.Length <= 240 ? compact : compact[..240] + "...";
+    }
+
     private static IntPtr WaitForTopWindow(int pid, Func<IntPtr, bool> predicate, TimeSpan timeout)
     {
         var until = DateTime.UtcNow + timeout;
@@ -2377,6 +2688,45 @@ Commands:
             }
         }
     }
+
+    private static MceSnapshot ReopenProjectAndExportSnapshot(string project, string editor, string outDir,
+        string captureName, string exportName, TimeSpan timeout)
+    {
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window was not found during reopen verification.");
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, captureName));
+            CloseEditorProcess(process.Id, main, saveIntent: false);
+            process = null;
+            main = IntPtr.Zero;
+            Thread.Sleep(500);
+            return ExportMceSnapshot(project, Path.Combine(outDir, exportName));
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private static bool ReopenTokenCountsPreserved(MceSnapshot afterSave, MceSnapshot afterReopen, IEnumerable<string> tokens)
+        => tokens.Where(token => !string.IsNullOrWhiteSpace(token))
+            .Distinct(StringComparer.Ordinal)
+            .All(token => afterSave.CountBlobToken(token) > 0 &&
+                          afterReopen.CountBlobToken(token) >= afterSave.CountBlobToken(token));
 
     private static void CloseEditorProcess(int pid, IntPtr main, bool saveIntent)
     {
@@ -2452,6 +2802,43 @@ Commands:
         return edit;
     }
 
+    private static void ConfigureStandardButtonText(IntPtr dialog, string label)
+    {
+        var tab = FindFirstChild(dialog, "SysTabControl32", null);
+        UiAutomation.TabSelectIndex(tab, 0, mouse: true);
+        Thread.Sleep(300);
+
+        foreach (var stateButton in new[] { "\u62ac\u8d77\u72b6\u6001", "\u6309\u4e0b\u72b6\u6001" })
+        {
+            ClickButtonByNormalizedText(dialog, mouse: true, stateButton);
+            Thread.Sleep(150);
+            var edit = FindBaseButtonTextEdit(dialog);
+            UiAutomation.SetControlText(edit, label, paste: true);
+            Thread.Sleep(150);
+            var actual = Native.GetText(edit);
+            if (!string.Equals(actual, label, StringComparison.Ordinal))
+            {
+                PasteTextWithKeyboard(edit, label);
+                Thread.Sleep(150);
+            }
+        }
+    }
+
+    private static void PasteTextWithKeyboard(IntPtr edit, string text)
+    {
+        Native.SetForegroundWindow(Native.GetAncestor(edit, Native.GA_ROOT));
+        Native.SetFocus(edit);
+        var rect = UiAutomation.GetWindowRect(edit);
+        UiAutomation.ClickPoint(edit, Math.Max(1, rect.Width / 2), Math.Max(1, rect.Height / 2),
+            MouseButton.Left, doubleClick: false, mouse: true);
+        Thread.Sleep(80);
+        Clipboard.SetText(text ?? "");
+        SendKeys.SendWait("^a");
+        Thread.Sleep(80);
+        SendKeys.SendWait("^v");
+        Thread.Sleep(150);
+    }
+
     private static IntPtr FindLargestEdit(IntPtr root)
     {
         var edit = UiAutomation.EnumerateChildren(root)
@@ -2492,6 +2879,11 @@ Commands:
             foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
                          h != ownerDialog && Native.GetClass(h) == "#32770"))
             {
+                var text = DialogText(dialog);
+                if (IsUnknownObjectDialogText(text) || IsDialogErrorText(text))
+                    throw new InvalidOperationException("Refusing to auto-confirm property dialog: " + ShortDialogText(dialog));
+                if (!IsBenignInfoDialogText(text))
+                    throw new InvalidOperationException("Unexpected property dialog: " + ShortDialogText(dialog));
                 ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是(&Y)", "是");
                 handled = true;
             }
@@ -2510,6 +2902,11 @@ Commands:
             foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
                          h != scriptDialog && Native.GetClass(h) == "#32770"))
             {
+                var text = DialogText(dialog);
+                if (IsUnknownObjectDialogText(text) || IsDialogErrorText(text))
+                    throw new InvalidOperationException("Script check failed or referenced unknown objects: " + ShortDialogText(dialog));
+                if (!IsBenignInfoDialogText(text))
+                    throw new InvalidOperationException("Unexpected script check dialog: " + ShortDialogText(dialog));
                 ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是(Y)", "是");
                 handled = true;
             }
@@ -2519,14 +2916,14 @@ Commands:
         }
     }
 
-    private static void ConfirmScriptDialog(int pid, IntPtr scriptDialog, bool allowCreateDataObjects)
+    private static void ConfirmScriptDialog(int pid, IntPtr scriptDialog, IntPtr ownerDialog, bool allowCreateDataObjects)
     {
         for (var attempt = 0; attempt < 3; attempt++)
         {
             if (!Native.IsWindow(scriptDialog) || !Native.IsWindowVisible(scriptDialog)) return;
             if (!ClickButtonByNormalizedText(scriptDialog, mouse: true, "确定(Y)", "确定(&Y)", "确定"))
                 throw new InvalidOperationException("Script editor OK button was not found.");
-            HandleScriptConfirmDialogs(pid, scriptDialog, TimeSpan.FromSeconds(8), allowCreateDataObjects);
+            HandleScriptConfirmDialogs(pid, scriptDialog, ownerDialog, TimeSpan.FromSeconds(8), allowCreateDataObjects);
             WaitForWindowClosed(scriptDialog, TimeSpan.FromSeconds(3));
         }
 
@@ -2534,13 +2931,13 @@ Commands:
             throw new InvalidOperationException("Script editor did not close after confirmation.");
     }
 
-    private static void HandleScriptConfirmDialogs(int pid, IntPtr scriptDialog, TimeSpan timeout, bool allowCreateDataObjects)
+    private static void HandleScriptConfirmDialogs(int pid, IntPtr scriptDialog, IntPtr ownerDialog, TimeSpan timeout, bool allowCreateDataObjects)
     {
         var until = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < until)
         {
             if (!allowCreateDataObjects && UiAutomation.TopWindowsForPid(pid).Any(h =>
-                    h != scriptDialog && Native.GetClass(h) == "#32770"))
+                    h != scriptDialog && h != ownerDialog && Native.GetClass(h) == "#32770"))
             {
                 throw new InvalidOperationException(
                     "Script confirmation opened a secondary MCGS dialog. Refusing to auto-confirm it without --allow-create-dataobjects.");
@@ -2548,7 +2945,7 @@ Commands:
 
             var handled = false;
             foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
-                         h != scriptDialog && Native.GetClass(h) == "#32770"))
+                         h != scriptDialog && h != ownerDialog && Native.GetClass(h) == "#32770"))
             {
                 var text = DialogText(dialog);
                 if (ContainsAny(text, "未知对象", "是否增加此对象", "组态错误"))
@@ -2950,7 +3347,8 @@ Commands:
                 saved,
                 success,
                 projectSha256Before = context.ProjectSha256Before,
-                projectSha256After = File.Exists(context.Project) ? Sha256(context.Project) : null
+                projectSha256After = TrySha256(context.Project, out var afterShaError),
+                projectSha256AfterError = afterShaError
             }, JsonOptions()),
             Encoding.UTF8);
     }
