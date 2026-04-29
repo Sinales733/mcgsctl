@@ -1,0 +1,75 @@
+{
+  "workflow": "realtime-db.add",
+  "mcgsProfile": "MCGS-7.7.zh-CN",
+  "status": "enabled-for-single-object-add",
+  "evidence": [
+    ".codex_tmp/profiles/10-realtime-db-page",
+    ".codex_tmp/profiles/12-realtime-db-add-dialog-mouse",
+    ".codex_tmp/profiles/14-realtime-db-object-properties-dialog",
+    ".codex_tmp/realtime_db_e2e_2",
+    ".codex_tmp/workflow_realtime_test/evidence"
+  ],
+  "entry": {
+    "workbenchCommandId": 33957,
+    "pageTitle": "实时数据库",
+    "buttons": {
+      "add": "新增对象",
+      "batchAdd": "成组增加",
+      "properties": "对象属性"
+    }
+  },
+  "observedBehavior": [
+    "The realtime database page is a workbench list plus three Win32 Button controls.",
+    "新增对象 inserts a default row in the list; it does not open a modal dialog immediately.",
+    "对象属性 opens the 数据对象属性设置 dialog for the selected row."
+  ],
+  "dialogs": {
+    "dataObjectProperties": {
+      "title": "数据对象属性设置",
+      "className": "#32770",
+      "tabs": [
+        "基本属性",
+        "存盘属性",
+        "报警属性",
+        "组对象成员"
+      ],
+      "baseControls": {
+        "nameLabel": "对象名称",
+        "initialValueLabel": "对象初值",
+        "unitLabel": "工程单位",
+        "commentGroup": "对象内容注释",
+        "writeMethod": "set-text --paste; old MFC Edit controls need EM_SETSEL + WM_CLEAR + WM_PASTE",
+        "controlBinding": {
+          "nameEdit": "Edit width 110..150, left column, first row",
+          "initialEdit": "Edit width 110..150, left column, second row",
+          "unitEdit": "Edit width 110..150, left column, third row",
+          "noteEdit": "wide Edit under 对象内容注释"
+        },
+        "typeOptions": [
+          "开关",
+          "数值",
+          "字符",
+          "事件",
+          "组对象"
+        ],
+        "buttons": [
+          "检查(&C)",
+          "确认(&Y)",
+          "取消(&N)",
+          "帮助[&H]"
+        ]
+      }
+    }
+  },
+  "enabledCommand": {
+    "command": "mcgsctl workflow run realtime-db.add --project <copy.mce> --name <object> --type switch|numeric|string|event|group --initial <value> --unit <unit> --note <note>",
+    "safety": "refuses FG2_HMI.MCE unless --allow-original is supplied",
+    "verification": "exports Data table and checks exact strName"
+  },
+  "automationNotes": [
+    "Use PostMessage or mouse fallback for workbench buttons; BM_CLICK alone may not trigger every MFC path.",
+    "After add, select the new row and open 对象属性 to set name/type/note.",
+    "Enabled workflow creates one object per run; batch add remains a separate future workflow.",
+    "Do not save during profiling; use a copied .MCE."
+  ]
+}

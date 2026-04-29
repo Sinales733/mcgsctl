@@ -1,0 +1,203 @@
+{
+  "workflow": "device.channel.map",
+  "mcgsProfile": "MCGS-7.7.zh-CN",
+  "status": "enabled-and-verified-on-reinstalled-mcgs",
+  "lastUpdated": "2026-04-29",
+  "evidence": [
+    ".codex_tmp/profiles/20-device-page",
+    ".codex_tmp/profiles/21-device-config-window",
+    ".codex_tmp/device_profile_20260429_135040",
+    ".codex_tmp/device_edit_entry_20260429_140129",
+    ".codex_tmp/smart200_entry_20260429_141048",
+    ".codex_tmp/pro_route_test_20260429_152720",
+    ".codex_tmp/smart200_reinstall_dialog_capture",
+    ".codex_tmp/smart200_add_channel_capture",
+    ".codex_tmp/smart200_quick_connect_capture",
+    ".mcgsctl-runs/device-channel-map-test-20260429-163557"
+  ],
+  "entry": {
+    "workbenchCommandId": 33954,
+    "configureButtonText": "device configuration",
+    "deviceConfigTitle": "device configuration: device window"
+  },
+  "deviceConfigWindow": {
+    "class": "AfxFrameOrView42",
+    "treeClass": "SysTreeView32",
+    "observedRootText": "device0--[Siemens_Smart200]",
+    "mdiVerification": {
+      "command": "mcgsctl mdi --pid <pid>",
+      "observedActiveClass": "AfxFrameOrView42",
+      "observedActiveText": "device configuration: device window"
+    },
+    "treeSelectionVerification": {
+      "commands": [
+        "mcgsctl treeview --hwnd <tree> --select-text Smart200",
+        "mcgsctl treeview --hwnd <tree> --caret",
+        "mcgsctl guiinfo --hwnd <tree> --activate"
+      ],
+      "observed": "caret item and focus can both be verified on the Smart200 tree item"
+    },
+    "contextMenu": [
+      { "index": 0, "id": 32848, "text": "device toolbox" },
+      { "index": 2, "id": 33049, "text": "move device up" },
+      { "index": 3, "id": 33050, "text": "move device down" },
+      { "index": 5, "id": 59392, "text": "toolbar" },
+      { "index": 6, "id": 59393, "text": "status bar" },
+      { "index": 8, "id": 32785, "text": "properties" },
+      { "index": 10, "id": 57632, "text": "delete" }
+    ],
+    "toolbar": {
+      "class": "ToolbarWindow32",
+      "observedButtons": [
+        { "index": 0, "id": 32790, "observed": "returns from device configuration to workbench" },
+        { "index": 1, "id": 32801, "observed": "opens data object browser" },
+        { "index": 2, "id": 57603, "observed": "save" },
+        { "index": 14, "id": 32848, "observed": "toggles device toolbox" },
+        { "index": 16, "id": 33049, "observed": "move device up" },
+        { "index": 17, "id": 33050, "observed": "move device down" },
+        { "index": 19, "id": 32785, "observed": "properties command is enabled but does not open Smart200 editor" },
+        { "index": 20, "id": 32786, "observed": "configuration check; copied project reported no errors" },
+        { "index": 21, "id": 32787, "observed": "run/download path; not used for profiling" },
+        { "index": 23, "id": 57669, "observed": "no visible effect in current Smart200 tests" }
+      ]
+    }
+  },
+  "smart200EntryTests": {
+    "originalSmart200Node": {
+      "tested": [
+        "synchronous TVM_SELECTITEM plus caret verification",
+        "GetGUIThreadInfo focus verification",
+        "WM_COMMAND 32785 to active MDI view with SendMessageTimeout",
+        "WM_COMMAND 32785 to main frame with SendMessageTimeout",
+        "WM_COMMAND 32785 with HIWORD 1",
+        "physical double-click with toolbox hidden",
+        "Alt+Enter with tree focus",
+        "physical context menu plus exact menu item click on properties",
+        "full NMTREEVIEW/TVN_SELCHANGEDA plus properties command",
+        "full NMTREEVIEW/TVN_SELCHANGEDW plus properties command"
+      ],
+      "result": "no Smart200 property, device editor, or channel dialog opened"
+    },
+    "newSmart200Node": {
+      "setup": "added a generic TCP/IP parent device, selected it, then added Siemens Smart200 from the toolbox",
+      "observedTree": [
+        "device0--[Siemens_Smart200]",
+        "generic TCPIP parent device0--[generic TCP/IP parent device]",
+        "device1--[Siemens_Smart200]"
+      ],
+      "result": "new Smart200 was a sibling, not a child; it also did not open through properties or double-click"
+    },
+    "genericTcpIpNode": {
+      "observed": "double-click can open the generic TCP/IP device property editor, sometimes after an unsupported-operation message",
+      "conclusion": "generic TCP/IP parent properties and Smart200 internal channel configuration use different entry paths"
+    }
+  },
+  "deviceManagementProbe": {
+    "evidence": ".codex_tmp/device_mgmt_probe",
+    "entry": "device toolbox -> device management",
+    "controls": {
+      "tree": "available devices",
+      "list": "selected toolbox devices",
+      "buttons": ["add", "delete", "install", "ok", "cancel"]
+    },
+    "observedSelectedDevices": [
+      "generic TCP/IP parent device",
+      "generic serial parent device",
+      "Siemens_S7200PPI",
+      "Mitsubishi_FX programming port",
+      "extended OmronHostLink",
+      "Siemens_Smart200 -> E:/MCGSE/Program/Drivers/PLC/<Siemens>/Smart200/Smart200.dll"
+    ],
+    "conclusion": "device management only controls which driver types appear in the device toolbox. It is not the Smart200 channel/internal-property editor."
+  },
+  "localHelpAndBinaryFindings": {
+    "smart200Help": "E:/MCGSE/Program/Drivers/PLC/Siemens/Smart200/Siemens_Smart200.chm",
+    "decompiledHelp": ".codex_tmp/chm-smart200/Smart200.htm",
+    "helpConclusion": "Smart200 channels are documented as being added through the device component internal property row: [internal property] = set device internal property.",
+    "smart200DllExports": [
+      "SvrEditCustomProperty",
+      "SvrEditProperties",
+      "SvrGetChlInfo",
+      "SvrSetChlInfo",
+      "SvrDeleteChlInfo",
+      "SvrGetChannel",
+      "SvrEnumPropertyValue",
+      "SvrGetProperty",
+      "SvrSetProperty"
+    ],
+    "mcgsSetEStrings": [
+      "CDevDllPage1",
+      "CDlgChlConfig",
+      "set device internal property",
+      "add device channel",
+      "channel information import",
+      "channel information export"
+    ],
+    "newDiagnostics": {
+      "peExportsCommand": "mcgsctl pe exports --file E:/MCGSE/Program/Drivers/PLC/<Siemens>/Smart200/Smart200.dll --filter SvrEdit",
+      "moduleProbeCommand": "mcgsctl modules --pid <pid> --filter Smart200",
+      "windowProcCommand": "mcgsctl wndproc --hwnd <dialog-or-control>",
+      "stringsCommands": [
+        "mcgsctl strings --file E:/MCGSE/Program/McgsSetE.exe --filter <internal-property-text>",
+        "mcgsctl strings --file E:/MCGSE/Program/McgsSetE.exe --filter CDevDllPage",
+        "mcgsctl strings --file E:/MCGSE/Program/Drivers/PLC/<Siemens>/Smart200/Smart200.dll --filter <channel-text>"
+      ],
+      "observed": [
+        "Smart200.dll is PE32/x86 and exports SvrEditCustomProperty and SvrEditProperties.",
+        "Smart200.dll is not loaded by merely entering the device configuration page.",
+        "McgsSetE.exe contains UTF-16 strings for [internal property] and set device internal property at offsets 0x69245A and 0x692468.",
+        "McgsSetE.exe contains CDevDllPage1..4 and CDlgChlConfig RTTI strings around offsets 0x4A9D2C and 0x4AE660.",
+        "Smart200.dll contains ANSI strings for device channel, channel property setting, channel name, and SvrEditCustomProperty/SvrEditProperties.",
+        "wndproc can map standard controls such as SysTreeView32 back to COMCTL32.dll; it will be used when a Smart200 dialog is captured."
+      ]
+    }
+  },
+  "implementedWorkflow": {
+    "name": "device.channel.map",
+    "entryRoute": [
+      "command 33954 enters the device workbench",
+      "click the device-configuration entry when the Smart200 tree is not yet visible",
+      "select and physically double-click the Smart200 SysTreeView32 node",
+      "wait for the #32770 device editor",
+      "click 增加设备通道",
+      "bind the two top-row ComboBox controls by top-row grouping and left-to-right order",
+      "set channel type by area index: I=0, Q=1, M=2, V=3",
+      "paste address/count into Edit controls",
+      "click access mode, confirm, then verify new rows in the SysListView32 channel table",
+      "optionally click 快速连接变量 and use custom variable base; Smart200 appends 00, 01, 02...",
+      "on 添加数据对象, click 全部添加",
+      "save, close, reopen the copied project, and verify the Smart200 channel table again"
+    ],
+    "verifiedCopy": ".codex_tmp/device_channel_workflow_20260429_163557/FG2_HMI_DEVICE_CHANNEL_20260429_163557.MCE",
+    "verifiedEvidence": ".mcgsctl-runs/device-channel-map-test-20260429-163557",
+    "verifiedRows": [
+      "0054 HMI_PTZ00 读写V603.0",
+      "0055 HMI_PTZ01 读写V603.1",
+      "0056 HMI_PTZ02 读写V603.2",
+      "0057 HMI_PTZ03 读写V603.3"
+    ],
+    "verifiedNumericRows": [
+      ".mcgsctl-runs/device-channel-numeric-verify-20260429-170001",
+      "0054 <blank> 读写VBUB604 from --data-type-index 8 --address 604 --count 1"
+    ],
+    "notes": [
+      "The channel address strings are not reliable in blob_strings.json; they appear to be stored in the device binary object. Reopen-and-readback is the acceptance check.",
+      "For non-bit channel types, the workflow captures newly added rows from the Smart200 table and uses the real displayed channel text for verification instead of guessing the VB/VW/VD notation.",
+      "The MCGS startup prompt 存在同名的不同工程备份 is safe to confirm on copied projects.",
+      "The ODBC 选择数据源 startup dialog is canceled by the workflow when it appears."
+    ]
+  },
+  "currentConclusion": {
+    "proven": [
+      "After reinstall, the Smart200 device editor opens from a physical double-click on the tree node.",
+      "The CLI can add Smart200 V-bit channels through the GUI on a copied project.",
+      "The CLI can quick-connect variables, accept the data-object creation prompt, save, reopen, and verify the channel table."
+    ]
+  },
+  "nextExperiments": [
+    "Generalize device.channel.map for Q20.0 through Q20.3 once the HMI variable naming convention is finalized.",
+    "Add a workflow option for exact per-channel variable names instead of Smart200 quick-connect base plus numeric suffix.",
+    "Profile window.indicator.add and script.edit next.",
+    "Do not write WndDevice.lbObjects directly unless the binary object format is fully understood and reversible."
+  ]
+}

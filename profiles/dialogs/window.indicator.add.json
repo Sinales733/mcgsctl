@@ -1,0 +1,63 @@
+{
+  "workflow": "window.indicator.add",
+  "mcgsProfile": "MCGS-7.7.zh-CN",
+  "status": "enabled-button-visibility-indicator",
+  "scope": {
+    "implemented": "Create a standard button and use its visibility expression as a status indicator.",
+    "deferred": "Native object-library indicator lamp placement remains a future extension because its drag/place and property flow is separate from the verified standard-button path."
+  },
+  "evidence": [
+    ".codex_tmp/profiles/45-user-button-visibility-tab",
+    ".codex_tmp/profiles/50-insert-element-dialog",
+    ".mcgsctl-runs/indicator-add-verify-20260429-171441"
+  ],
+  "implementedWorkflow": {
+    "name": "window.indicator.add",
+    "requiredArgs": [
+      "--project",
+      "--text",
+      "--expression"
+    ],
+    "optionalArgs": [
+      "--window-index",
+      "--x",
+      "--y",
+      "--width",
+      "--height",
+      "--invisible-when-nonzero",
+      "--allow-original"
+    ],
+    "safety": [
+      "Refuses the default project unless --allow-original is supplied.",
+      "Writes only through the visible MCGS editor GUI.",
+      "Exports the copied project after save and verifies tokens in blob_strings.json."
+    ]
+  },
+  "entryRoute": [
+    "Open copied .MCE project.",
+    "Run user-window command 33955.",
+    "Select user window index 2 by default.",
+    "Click animation configuration.",
+    "Run standard-button command 32938.",
+    "Draw the button on the canvas at the requested rectangle.",
+    "Run property command 32785.",
+    "Set the base button text.",
+    "Select tab index 3, the visibility property page.",
+    "Set the visibility expression Edit control.",
+    "Select visible-when-nonzero by default, or invisible-when-nonzero when requested.",
+    "Confirm, save, export, and verify."
+  ],
+  "verifiedTokens": {
+    "label": "MCGSCTL_INDICATOR",
+    "expression": "MCGSCTL_INDICATOR_EXPR",
+    "result": {
+      "labelFound": true,
+      "expressionFound": true
+    }
+  },
+  "notes": [
+    "This workflow intentionally avoids direct writes to WndUser.lbObjects.",
+    "The standard-button route is enough for simple limit/action/conflict status displays because MCGS stores both the label and visibility expression in the window object blob.",
+    "The object-element library profile is retained as reference only until the native indicator lamp workflow is independently verified."
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "workflow": "script.edit",
+  "mcgsProfile": "MCGS-7.7.zh-CN",
+  "status": "enabled-and-verified",
+  "evidence": [
+    ".codex_tmp/profiles/44-user-button-script-tab",
+    ".codex_tmp/profiles/46-script-editor-from-button",
+    ".mcgsctl-runs/script-edit-verify-20260429-170919"
+  ],
+  "dialog": {
+    "title": "script program dialog",
+    "className": "#32770",
+    "mainEdit": {
+      "className": "Edit",
+      "role": "script text area",
+      "observedRect": "large left edit area"
+    },
+    "tree": {
+      "className": "SysTreeView32",
+      "groupsObserved": [
+        "system variables",
+        "system functions",
+        "data objects",
+        "devices",
+        "user windows",
+        "user strategies"
+      ]
+    },
+    "buttons": [
+      "cut",
+      "copy",
+      "paste",
+      "find",
+      "replace",
+      "indent",
+      "outdent",
+      "check",
+      "help",
+      "cancel",
+      "ok"
+    ]
+  },
+  "implementedWorkflow": {
+    "name": "script.edit",
+    "entryRoute": [
+      "enter user-window animation configuration",
+      "create a standard button",
+      "open the standard-button property dialog",
+      "select the script tab",
+      "choose press-script or release-script",
+      "open the script editor",
+      "paste script text into the large Edit control",
+      "click OK, handle the unknown-object prompt, and repeat OK if needed",
+      "re-find the standard-button property dialog because its HWND can change",
+      "confirm, save, export, and verify script tokens"
+    ],
+    "verifiedEvidence": ".mcgsctl-runs/script-edit-verify-20260429-170919",
+    "verifiedTokens": [
+      "MCGSCTL_SCRIPT_BTN",
+      "MCGSCTL_SCRIPT_TOKEN_170919"
+    ]
+  },
+  "automationNotes": [
+    "Opening the editor from a modal properties dialog creates another modal dialog; CLI command/click must use PostMessage or physical mouse input to avoid blocking.",
+    "Script text can be written into the large Edit control and optionally checked before OK.",
+    "When the script references an unknown object, MCGS prompts whether to add it. The workflow accepts this prompt on copied projects.",
+    "After accepting the script editor, MCGS may rebuild the parent standard-button property dialog with a new HWND. The workflow re-finds the current dialog by title before clicking confirm."
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "workflow": "window.button.add-momentary",
+  "mcgsProfile": "MCGS-7.7.zh-CN",
+  "status": "enabled-for-new-standard-button",
+  "evidence": [
+    ".codex_tmp/profiles/40-user-window-workbench",
+    ".codex_tmp/profiles/41-user-animation-config",
+    ".codex_tmp/profiles/42-user-button-property-dialog",
+    ".codex_tmp/profiles/43-user-button-operation-tab",
+    ".codex_tmp/profiles/44-user-button-script-tab",
+    ".codex_tmp/profiles/45-user-button-visibility-tab",
+    ".codex_tmp/momentary_button_e2e_3",
+    ".codex_tmp/workflow_momentary_test/evidence"
+  ],
+  "entry": {
+    "workbenchCommandId": 33955,
+    "pageTitle": "用户窗口",
+    "buttons": {
+      "animate": "动画组态",
+      "newWindow": "新建窗口",
+      "windowProperties": "窗口属性"
+    }
+  },
+  "animationWindow": {
+    "titlePattern": "动画组态*",
+    "canvasClass": "Afx:400000:100b:0:6:0",
+    "drawCommandId": 32938,
+    "propertyCommandId": 32785,
+    "note": "Drawn controls are not exposed as child HWNDs; create by command 32938 plus canvas-relative drag, then open properties with command 32785 and verify through WndUser.lbObjects strings."
+  },
+  "buttonPropertiesDialog": {
+    "title": "标准按钮构件属性设置",
+    "className": "#32770",
+    "tabs": [
+      "基本属性",
+      "操作属性",
+      "脚本程序",
+      "可见度属性"
+    ],
+    "baseTab": {
+      "textEdit": {
+        "className": "Edit",
+        "relativeBounds": {
+          "width": "120..180",
+          "height": "70..110",
+          "top": "< dialogTop + 200"
+        },
+        "writeMethod": "set-text --paste; WM_SETTEXT alone is not enough for this old MFC dialog"
+      },
+      "buttonTypeOptions": [
+        "3D按钮",
+        "轻触按钮"
+      ],
+      "confirm": "确认(&Y)",
+      "cancel": "取消(&C)"
+    },
+    "operationTab": {
+      "subTabs": [
+        "抬起功能",
+        "按下功能"
+      ],
+      "controls": [
+        "数据对象值操作",
+        "按位操作",
+        "清空所有操作"
+      ],
+      "dataObjectOperation": {
+        "checkboxText": "数据对象值操作",
+        "operationComboItems": [
+          "置1",
+          "清0",
+          "取反"
+        ],
+        "variableEdit": "Edit immediately to the right of the operation ComboBox",
+        "writeMethod": "set-text --paste"
+      },
+      "momentaryMapping": {
+        "press": "按下功能 -> 数据对象值操作 -> 置1 -> variable",
+        "release": "抬起功能 -> 数据对象值操作 -> 清0 -> variable"
+      }
+    },
+    "scriptTab": {
+      "subTabs": [
+        "抬起脚本",
+        "按下脚本"
+      ],
+      "openEditorButton": "打开脚本程序编辑器",
+      "clearButton": "清空所有脚本"
+    },
+    "visibilityTab": {
+      "expressionEdit": "表达式",
+      "options": [
+        "按钮可见",
+        "按钮不可见"
+      ]
+    }
+  },
+  "enabledCommand": {
+    "command": "mcgsctl workflow run window.button.add-momentary --project <copy.mce> --text <label> --variable <dataObject> --window-index 2 --x <canvasX> --y <canvasY> --width <w> --height <h>",
+    "defaultWindowIndex": 2,
+    "safety": "refuses FG2_HMI.MCE unless --allow-original is supplied"
+  },
+  "automationNotes": [
+    "This profile confirms momentary buttons can be implemented without scripts by setting different press/release operations.",
+    "The first enabled workflow creates a standard button, configures the two operations, saves the copied project, captures evidence, and verifies label/variable strings in the exported .MCE."
+  ]
+}

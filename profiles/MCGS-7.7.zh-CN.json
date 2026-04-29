@@ -1,0 +1,29 @@
+{
+  "name": "MCGS 7.7 zh-CN",
+  "processName": "McgsSetE",
+  "mainWindowTitleContains": [
+    "MCGS嵌入版组态环境"
+  ],
+  "commands": {
+    "save": 57603,
+    "projectCheck": 32786,
+    "runEnvironment": 32787,
+    "pageMainControl": 33953,
+    "pageDevice": 33954,
+    "pageUserWindow": 33955,
+    "pageRealtimeDatabase": 33957,
+    "pageStrategy": 33060
+  },
+  "workbenchButtons": {
+    "userWindow": [
+      "动画组态",
+      "新建窗口",
+      "窗口属性"
+    ],
+    "realtimeDatabase": [
+      "新增对象",
+      "成组增加",
+      "对象属性"
+    ]
+  }
+}
