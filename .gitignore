@@ -4,6 +4,7 @@ obj/
 .mcgsctl-runs/
 .mcgsctl-work/
 .codex_tmp/
+dist/
 *.user
 *.bak
 *.log
@@ -13,3 +14,15 @@ obj/
 *.7z
 *.rar
 *.png
+*.jpg
+*.jpeg
+*.bmp
+*.tree.txt
+evidence/
+*.MCE
+*.mce
+*.ldb
+*.laccdb
+~$*
+Thumbs.db
+desktop.ini

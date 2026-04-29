@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,6 +14,7 @@ internal static partial class Program
     private const uint SaveCommandId = 57603;
     private const uint CheckCommandId = 32786;
     private const string ProcessName = "McgsSetE";
+    private const string ToolVersion = "0.3.0";
 
     [STAThread]
     public static int Main(string[] args)
@@ -20,6 +22,13 @@ internal static partial class Program
         Console.OutputEncoding = Encoding.UTF8;
         try
         {
+            if (args.Length > 0 && (args[0].Equals("--version", StringComparison.OrdinalIgnoreCase) ||
+                                    args[0].Equals("version", StringComparison.OrdinalIgnoreCase)))
+            {
+                PrintVersion();
+                return 0;
+            }
+
             if (args.Length == 0 || Has(args, "--help") || Has(args, "-h"))
             {
                 PrintUsage();
@@ -84,6 +93,7 @@ internal static partial class Program
 mcgsctl - MCGS embedded editor automation helper
 
 Commands:
+  mcgsctl --version
   mcgsctl doctor [--project <mce>] [--editor <exe>]
   mcgsctl open --project <mce> [--editor <exe>]
   mcgsctl tree [--pid <pid>]
@@ -130,6 +140,21 @@ Commands:
   mcgsctl workflow run window.indicator.add (--source <mce>|--project <copy.mce>) --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl close --save|--discard [--pid <pid>]
 """);
+    }
+
+    private static void PrintVersion()
+    {
+        var assemblyPath = Assembly.GetExecutingAssembly().Location;
+        WriteJson(new
+        {
+            name = "mcgsctl",
+            version = ToolVersion,
+            commit = Environment.GetEnvironmentVariable("MCGSCTL_COMMIT") ?? TryGitCommit(),
+            runtime = RuntimeInformation.FrameworkDescription,
+            processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            assemblyPath,
+            buildTimeUtc = File.Exists(assemblyPath) ? File.GetLastWriteTimeUtc(assemblyPath).ToString("O") : null
+        });
     }
 
     private static int Doctor(string[] args)
@@ -1011,7 +1036,11 @@ Commands:
         int ErrorCount,
         int WarningCount,
         string[] DialogTexts,
-        string[] DialogTitles);
+        string[] DialogTitles,
+        string[] ResultRows,
+        int ResultControlCount,
+        bool ResultControlsReadable,
+        string VerdictReason);
 
     private static int WorkflowProjectCheck(string[] args, bool saveAfterPass)
     {
@@ -1056,12 +1085,17 @@ Commands:
             }
 
             var pid = UiAutomation.GetWindowProcessId(hwnd);
-            var check = RunProjectCheck(pid, hwnd, outDir, TimeSpan.FromSeconds(ParseInt(args, "--check-timeout", 8)));
+            var failOnWarning = Has(args, "--fail-on-warning");
+            var maxWarnings = OptInt(args, "--max-warnings");
+            var check = RunProjectCheck(pid, hwnd, outDir, TimeSpan.FromSeconds(ParseInt(args, "--check-timeout", 8)),
+                failOnWarning, maxWarnings);
             if (!check.Passed)
             {
                 WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
                 Console.WriteLine("workflow evidence: " + outDir);
-                Console.WriteLine(check.Unknown ? "project check verification: UNKNOWN" : "project check verification: FAIL");
+                Console.WriteLine(check.Unknown
+                    ? "project check verification: UNKNOWN - " + check.VerdictReason
+                    : "project check verification: FAIL - " + check.VerdictReason);
                 return 1;
             }
 
@@ -1078,7 +1112,8 @@ Commands:
             success = true;
             WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
-            Console.WriteLine(saveAfterPass ? "project check-save verification: PASS" : "project check verification: PASS");
+            var warningText = check.WarningCount > 0 ? $" with {check.WarningCount} warning(s)" : "";
+            Console.WriteLine((saveAfterPass ? "project check-save verification: PASS" : "project check verification: PASS") + warningText);
             return 0;
         }
         catch (Exception ex)
@@ -1101,7 +1136,8 @@ Commands:
         }
     }
 
-    private static ProjectCheckResult RunProjectCheck(int pid, IntPtr main, string outDir, TimeSpan timeout)
+    private static ProjectCheckResult RunProjectCheck(int pid, IntPtr main, string outDir, TimeSpan timeout,
+        bool failOnWarning, int? maxWarnings)
     {
         var before = UiAutomation.TopWindowsForPid(pid).ToHashSet();
         UiAutomation.SendCommand(main, CheckCommandId);
@@ -1111,7 +1147,7 @@ Commands:
         {
             Thread.Sleep(500);
             HandleProjectCheckPrompt(pid);
-            result = AnalyzeProjectCheck(pid, before);
+            result = AnalyzeProjectCheck(pid, before, failOnWarning, maxWarnings);
             if (!result.Unknown) break;
         } while (DateTime.UtcNow < until);
 
@@ -1134,7 +1170,8 @@ Commands:
         }
     }
 
-    private static ProjectCheckResult AnalyzeProjectCheck(int pid, HashSet<IntPtr> before)
+    private static ProjectCheckResult AnalyzeProjectCheck(int pid, HashSet<IntPtr> before,
+        bool failOnWarning, int? maxWarnings)
     {
         var dialogs = UiAutomation.TopWindowsForPid(pid)
             .Where(h => Native.GetClass(h) == "#32770")
@@ -1143,14 +1180,92 @@ Commands:
             .ToArray();
         var texts = dialogs.Select(DialogText).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray();
         var titles = dialogs.Select(Native.GetText).Where(t => !string.IsNullOrWhiteSpace(t)).ToArray();
-        var combined = string.Join("\n", texts);
+        var resultRows = ReadProjectCheckResultRows(dialogs, out var resultControlCount, out var resultControlsReadable);
+        var combined = string.Join("\n", texts.Concat(resultRows));
         var errorCount = ParseIssueCount(combined, "错误", "error", "errors");
         var warningCount = ParseIssueCount(combined, "警告", "warning", "warnings");
-        var hasFatalText = ContainsAny(combined, "失败", "不通过", "error", "Error", "ERROR");
-        var passText = ContainsAny(combined, "0个错误", "0 个错误", "无错误", "没有错误", "检查通过", "成功", "完成");
-        var known = texts.Length > 0 && (passText || errorCount > 0 || warningCount > 0 || hasFatalText);
-        var passed = known && errorCount == 0 && !hasFatalText;
-        return new ProjectCheckResult(passed, !known, errorCount, warningCount, texts, titles);
+        var hasFatalText = IsDialogErrorText(combined) || ContainsAny(combined, "失败", "不通过");
+        var explicitZeroErrors = ContainsAny(combined, "0个错误", "0 个错误", "无错误", "没有错误");
+        var explicitPass = ContainsAny(combined, "检查通过");
+        var readableEmptyResultList = resultControlCount > 0 && resultControlsReadable && resultRows.Length == 0;
+        var known = texts.Length > 0 || resultControlCount > 0;
+
+        string reason;
+        var passed = false;
+        var unknown = false;
+        if (!known)
+        {
+            unknown = true;
+            reason = "no project-check result dialog was found";
+        }
+        else if (!resultControlsReadable)
+        {
+            unknown = true;
+            reason = "project-check result list exists but could not be read";
+        }
+        else if (hasFatalText || errorCount > 0)
+        {
+            reason = $"error count is {errorCount}";
+        }
+        else if (failOnWarning && warningCount > 0)
+        {
+            reason = $"warning count is {warningCount} and --fail-on-warning is set";
+        }
+        else if (maxWarnings.HasValue && warningCount > maxWarnings.Value)
+        {
+            reason = $"warning count {warningCount} exceeds --max-warnings {maxWarnings.Value}";
+        }
+        else if (explicitZeroErrors || explicitPass || readableEmptyResultList)
+        {
+            passed = true;
+            reason = explicitZeroErrors ? "explicit zero-error text found" :
+                explicitPass ? "explicit pass text found" :
+                "readable result list has zero rows";
+        }
+        else
+        {
+            unknown = true;
+            reason = "no explicit zero-error/pass text and no readable empty result list";
+        }
+
+        return new ProjectCheckResult(passed, unknown, errorCount, warningCount, texts, titles,
+            resultRows, resultControlCount, resultControlsReadable, reason);
+    }
+
+    private static string[] ReadProjectCheckResultRows(IEnumerable<IntPtr> dialogs, out int controlCount, out bool readable)
+    {
+        var rows = new List<string>();
+        controlCount = 0;
+        readable = true;
+        foreach (var dialog in dialogs)
+        {
+            foreach (var child in UiAutomation.EnumerateChildren(dialog))
+            {
+                var className = Native.GetClass(child);
+                try
+                {
+                    if (className.Contains("SysListView32", StringComparison.OrdinalIgnoreCase))
+                    {
+                        controlCount++;
+                        rows.AddRange(UiAutomation.ListViewItems(child)
+                            .Select(item => string.Join("\t", item.Texts.Where(t => !string.IsNullOrWhiteSpace(t))))
+                            .Where(text => !string.IsNullOrWhiteSpace(text)));
+                    }
+                    else if (className.Contains("ListBox", StringComparison.OrdinalIgnoreCase))
+                    {
+                        controlCount++;
+                        rows.AddRange(UiAutomation.ListBoxItems(child)
+                            .Select(item => item.Text)
+                            .Where(text => !string.IsNullOrWhiteSpace(text)));
+                    }
+                }
+                catch
+                {
+                    readable = false;
+                }
+            }
+        }
+        return rows.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private static int ParseIssueCount(string text, params string[] labels)
@@ -1194,6 +1309,8 @@ Commands:
         var rawType = Opt(args, "--type") ?? "switch";
         var typeText = NormalizeRealtimeType(rawType);
         var expectedTypeCode = RealtimeTypeCode(rawType);
+        if (expectedTypeCode == null)
+            return Fail("Realtime DB type verification is not implemented for --type " + rawType + ". Supported verified types: switch, numeric.");
         var initial = Opt(args, "--initial") ?? "0";
         var unit = Opt(args, "--unit") ?? "";
         var note = Opt(args, "--note") ?? "";
@@ -1459,10 +1576,14 @@ Commands:
             UiAutomation.TabSelectIndex(tab, 1, mouse: true);
             Thread.Sleep(400);
 
-            ConfigureMomentaryOperation(dialog, "按下功能", "置1", variable);
-            ConfigureMomentaryOperation(dialog, "抬起功能", "清0", variable);
+            ConfigureMomentaryOperation(process.Id, dialog, "按下功能", "置1", variable, outDir);
+            ConfigureMomentaryOperation(process.Id, dialog, "抬起功能", "清0", variable, outDir);
 
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "configured-before-confirm"));
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "检查(K)", "检查(&K)", "检查"))
+                throw new InvalidOperationException("Button property check button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            Thread.Sleep(500);
             if (!ClickButtonByNormalizedText(dialog, mouse: true, "确认(Y)", "确认(&Y)", "确认"))
                 throw new InvalidOperationException("Button property confirm button was not found.");
             HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
@@ -1483,9 +1604,9 @@ Commands:
             CloseEditorProcess(process.Id, main, saveIntent: true);
             process = null;
             main = IntPtr.Zero;
-            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
-                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
-            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, variable });
+            var propertyReadbackVerified = ReopenVerifyMomentaryButton(project, editor, label, variable, windowIndex,
+                x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)), afterSnapshot,
+                out var reopenVerified);
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -1498,11 +1619,12 @@ Commands:
                     labelFound,
                     variableIncreased,
                     variableFound,
+                    propertyReadbackVerified,
                     reopenVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            success = labelFound && variableFound && reopenVerified;
+            success = labelFound && variableFound && propertyReadbackVerified && reopenVerified;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -1579,6 +1701,7 @@ Commands:
             ? Array.Empty<string>()
             : Enumerable.Range(0, count).Select(i => connectBase + i.ToString("00")).ToArray();
         var allowExistingVariables = Has(args, "--allow-existing-variables");
+        var allowExistingChannels = Has(args, "--allow-existing-channels");
 
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
         Process? process = null;
@@ -1625,6 +1748,29 @@ Commands:
             var existingTargets = expectedChannels.Length == 0
                 ? Array.Empty<DeviceChannelRow>()
                 : FindDeviceChannelRows(beforeRows, expectedChannels);
+            var conflictingExistingTargets = expectedChannels
+                .Select((channel, index) => new
+                {
+                    channel,
+                    expectedVariable = index < expectedVariables.Length ? expectedVariables[index] : "",
+                    rows = beforeRows.Where(row => row.Channel.Equals(channel, StringComparison.OrdinalIgnoreCase)).ToArray()
+                })
+                .Where(item => !string.IsNullOrWhiteSpace(item.expectedVariable) &&
+                               item.rows.Any(row => !string.IsNullOrWhiteSpace(row.Variable) &&
+                                                    !row.Variable.Equals(item.expectedVariable, StringComparison.OrdinalIgnoreCase)))
+                .Select(item => item.channel + " -> expected " + item.expectedVariable)
+                .ToArray();
+            if (conflictingExistingTargets.Length > 0)
+            {
+                throw new InvalidOperationException("Target PLC address is already mapped to a different variable: " +
+                                                    string.Join(", ", conflictingExistingTargets));
+            }
+            if (existingTargets.Length > 0 && !allowExistingChannels)
+            {
+                throw new InvalidOperationException(
+                    "Target channels already exist before workflow. Use --allow-existing-channels only when intentionally reusing existing rows: " +
+                    string.Join(", ", existingTargets.Select(row => row.Channel)));
+            }
             if (expectedChannels.Length > 0 && existingTargets.Length > 0 && existingTargets.Length < expectedChannels.Length)
             {
                 throw new InvalidOperationException(
@@ -1647,7 +1793,12 @@ Commands:
                     expectedChannels = targetRows.Select(row => row.Channel).Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
             }
 
-            WriteDeviceRows(Path.Combine(outDir, "channels-after-add.json"), ReadDeviceChannelRows(channelList));
+            var rowsAfterAdd = ReadDeviceChannelRows(channelList);
+            WriteDeviceRows(Path.Combine(outDir, "channels-after-add.json"), rowsAfterAdd);
+            var channelRowDelta = rowsAfterAdd.Length - beforeRows.Length;
+            var channelDeltaVerified = allowExistingChannels
+                ? existingTargets.Length == expectedChannels.Length || channelRowDelta == count
+                : channelRowDelta == count;
 
             if (!string.IsNullOrWhiteSpace(connectBase))
             {
@@ -1729,7 +1880,11 @@ Commands:
                     channelStringsFound,
                     variableStringsFound,
                     allowExistingVariables,
+                    allowExistingChannels,
                     existingExpectedVariables,
+                    existingTargetChannels = existingTargets.Select(row => row.Channel).ToArray(),
+                    channelRowDelta,
+                    channelDeltaVerified,
                     expectedVariableDeltas,
                     dataObjectsDeltaVerified,
                     guiRowsVerified,
@@ -1739,7 +1894,8 @@ Commands:
                 Encoding.UTF8);
 
             Console.WriteLine("workflow evidence: " + outDir);
-            var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && dataObjectsDeltaVerified && reopenVerified;
+            var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && dataObjectsDeltaVerified &&
+                         channelDeltaVerified && reopenVerified;
             success = passed;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine(passed
@@ -1955,6 +2111,12 @@ Commands:
         var width = ParseInt(args, "--width", 160);
         var height = ParseInt(args, "--height", 70);
         var checkScript = Has(args, "--check");
+        var allowCreateDataObjects = Has(args, "--allow-create-dataobjects");
+        var expectedNewDataObjects = ParseNameList(args, "--expected-new-dataobjects");
+        if (allowCreateDataObjects && expectedNewDataObjects.Length == 0)
+            return Fail("--allow-create-dataobjects requires --expected-new-dataobjects <name[,name...]>.");
+        if (!allowCreateDataObjects && expectedNewDataObjects.Length > 0)
+            return Fail("--expected-new-dataobjects requires --allow-create-dataobjects.");
         var verifyTokens = Opts(args, "--verify-token").ToArray();
         if (verifyTokens.Length == 0)
         {
@@ -2049,7 +2211,7 @@ Commands:
                 CaptureProcessWindows(process.Id, Path.Combine(outDir, "script-editor-after-check"));
             }
 
-            ConfirmScriptDialog(process.Id, scriptDialog, dialog, Has(args, "--allow-create-dataobjects"));
+            ConfirmScriptDialog(process.Id, scriptDialog, dialog, allowCreateDataObjects);
             Thread.Sleep(500);
 
             var propertyDialog = Native.IsWindow(dialog) && Native.IsWindowVisible(dialog)
@@ -2077,6 +2239,22 @@ Commands:
             var scriptFound = verifyTokens.Length == 0 ||
                               verifyTokens.All(token => tokenDeltas.Any(delta =>
                                   delta.Token == token && delta.Increased));
+            var beforeDataNames = beforeSnapshot.DataObjects
+                .Select(row => row.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToHashSet(StringComparer.Ordinal);
+            var newDataObjects = afterSnapshot.DataObjects
+                .Select(row => row.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name) && !beforeDataNames.Contains(name))
+                .Select(name => name!)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var expectedNewDataObjectsSorted = expectedNewDataObjects
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var newDataObjectsVerified = allowCreateDataObjects
+                ? newDataObjects.SequenceEqual(expectedNewDataObjectsSorted, StringComparer.Ordinal)
+                : newDataObjects.Length == 0;
             saved = true;
             CloseEditorProcess(process.Id, main, saveIntent: true);
             process = null;
@@ -2095,6 +2273,10 @@ Commands:
                     windowIndex,
                     rectangle = new { x, y, width, height },
                     checkScript,
+                    allowCreateDataObjects,
+                    expectedNewDataObjects,
+                    newDataObjects,
+                    newDataObjectsVerified,
                     verifyTokens,
                     tokenDeltas,
                     labelFound,
@@ -2103,7 +2285,7 @@ Commands:
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            success = labelFound && scriptFound && reopenVerified;
+            success = labelFound && scriptFound && newDataObjectsVerified && reopenVerified;
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -2722,6 +2904,156 @@ Commands:
         }
     }
 
+    private static bool ReopenVerifyMomentaryButton(string project, string editor, string label, string variable,
+        int windowIndex, int x, int y, int width, int height, string outDir, TimeSpan timeout,
+        MceSnapshot afterSaveSnapshot, out bool tokenReopenVerified)
+    {
+        tokenReopenVerified = false;
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window was not found during momentary readback.");
+
+            UiAutomation.SendCommand(main, 33955);
+            Thread.Sleep(700);
+            var userList = FindListViewByItemCount(main, 3);
+            UiAutomation.ListViewSelectIndex(userList, windowIndex);
+            Thread.Sleep(250);
+            if (!ClickButtonByNormalizedText(main, mouse: true, "动画组态"))
+                throw new InvalidOperationException("动画组态 button was not found during momentary readback.");
+            Thread.Sleep(1000);
+
+            var canvas = FindCanvas(main);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
+            UiAutomation.SendCommand(main, 32785);
+            var dialog = UiAutomation.WaitForWindow(process.Id, "标准按钮构件属性设置", "#32770", TimeSpan.FromSeconds(8));
+            if (dialog == IntPtr.Zero) throw new TimeoutException("Button property dialog was not found during momentary readback.");
+            Thread.Sleep(300);
+
+            var tab = FindFirstChild(dialog, "SysTabControl32", null);
+            UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+            Thread.Sleep(400);
+            var pressReadback = VerifyMomentaryOperation(dialog, "按下功能", "置1", variable);
+            var releaseReadback = VerifyMomentaryOperation(dialog, "抬起功能", "清0", variable);
+            var pressOk = pressReadback.Passed;
+            var releaseOk = releaseReadback.Passed;
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-momentary-operation-readback"));
+
+            UiAutomation.TabSelectIndex(tab, 2, mouse: true);
+            Thread.Sleep(300);
+            var scriptText = Native.GetText(FindLargestEdit(dialog));
+            var scriptEmpty = string.IsNullOrWhiteSpace(scriptText);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-momentary-readback"));
+
+            UiAutomation.CloseWindow(dialog);
+            Thread.Sleep(300);
+            CloseEditorProcess(process.Id, main, saveIntent: false);
+            process = null;
+            main = IntPtr.Zero;
+
+            var reopenSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-reopen"));
+            tokenReopenVerified = ReopenTokenCountsPreserved(afterSaveSnapshot, reopenSnapshot, new[] { label, variable });
+            File.WriteAllText(Path.Combine(outDir, "momentary-readback.json"),
+                JsonSerializer.Serialize(new
+                {
+                    label,
+                    variable,
+                    pressOk,
+                    releaseOk,
+                    pressReadback,
+                    releaseReadback,
+                    scriptEmpty,
+                    tokenReopenVerified
+                }, JsonOptions()), Encoding.UTF8);
+            return pressOk && releaseOk && scriptEmpty;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private sealed record MomentaryOperationReadback(
+        string SubTab,
+        string ExpectedOperation,
+        string ExpectedVariable,
+        bool TabClicked,
+        int CheckboxState,
+        bool CheckedOk,
+        int ComboCurrentIndex,
+        string SelectedOperation,
+        string[] ComboItems,
+        bool OperationOk,
+        string VariableText,
+        bool VariableOk,
+        bool Passed,
+        string? Error);
+
+    private static MomentaryOperationReadback VerifyMomentaryOperation(IntPtr dialog, string subTab, string operation, string variable)
+    {
+        if (!ClickButtonByNormalizedText(dialog, mouse: true, subTab))
+            return new MomentaryOperationReadback(subTab, operation, variable, false, 0, false, -1, "",
+                Array.Empty<string>(), false, "", false, false, "sub-tab button was not found");
+        Thread.Sleep(250);
+        try
+        {
+            var checkbox = FindButtonByNormalizedText(dialog, "数据对象值操作");
+            var checkboxState = checkbox == IntPtr.Zero ? 0 : UiAutomation.ButtonGetCheck(checkbox);
+            var checkedOk = checkbox != IntPtr.Zero && checkboxState != 0;
+            var combo = FindVisibleComboWithItem(dialog, operation);
+            var comboItems = UiAutomation.ComboItems(combo);
+            var currentIndex = UiAutomation.ComboCurrentIndex(combo);
+            var selectedOperation = comboItems.FirstOrDefault(item => item.Index == currentIndex)?.Text ?? Native.GetText(combo);
+            var operationOk = selectedOperation.Contains(operation, StringComparison.OrdinalIgnoreCase);
+            var edit = FindEditRightOf(dialog, combo);
+            var variableText = Native.GetText(edit);
+            var variableOk = string.Equals(variableText, variable, StringComparison.Ordinal);
+            var passed = checkedOk && operationOk && variableOk;
+            return new MomentaryOperationReadback(subTab, operation, variable, true, checkboxState, checkedOk,
+                currentIndex, selectedOperation, comboItems.Select(item => item.Text).ToArray(), operationOk,
+                variableText, variableOk, passed, null);
+        }
+        catch (Exception ex)
+        {
+            return new MomentaryOperationReadback(subTab, operation, variable, true, 0, false, -1, "",
+                Array.Empty<string>(), false, "", false, false, ex.Message);
+        }
+    }
+
+    private static IntPtr FindButtonByNormalizedText(IntPtr root, params string[] labels)
+    {
+        var targets = labels
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(CompactLabel)
+            .Where(s => s.Length > 0)
+            .ToArray();
+        var buttons = UiAutomation.EnumerateChildren(root)
+            .Where(h => Native.GetClass(h).Contains("Button", StringComparison.OrdinalIgnoreCase) && Native.IsWindowVisible(h))
+            .Select(h => new { Handle = h, Compact = CompactLabel(Native.GetText(h)) })
+            .ToArray();
+        return targets
+                   .Select(target => buttons.FirstOrDefault(b => b.Compact.Equals(target, StringComparison.OrdinalIgnoreCase)))
+                   .FirstOrDefault(button => button != null)?.Handle
+               ?? targets
+                   .Select(target => buttons.FirstOrDefault(b => b.Compact.Contains(target, StringComparison.OrdinalIgnoreCase)))
+                   .FirstOrDefault(button => button != null)?.Handle
+               ?? IntPtr.Zero;
+    }
+
     private static bool ReopenTokenCountsPreserved(MceSnapshot afterSave, MceSnapshot afterReopen, IEnumerable<string> tokens)
         => tokens.Where(token => !string.IsNullOrWhiteSpace(token))
             .Distinct(StringComparer.Ordinal)
@@ -2967,7 +3299,8 @@ Commands:
         }
     }
 
-    private static void ConfigureMomentaryOperation(IntPtr dialog, string subTab, string comboText, string variable)
+    private static void ConfigureMomentaryOperation(int pid, IntPtr dialog, string subTab, string comboText, string variable,
+        string outDir)
     {
         if (!UiAutomation.ClickButtonByText(dialog, subTab, mouse: true))
             throw new InvalidOperationException(subTab + " button was not found.");
@@ -2981,7 +3314,107 @@ Commands:
         Thread.Sleep(100);
         var edit = FindEditRightOf(dialog, combo);
         UiAutomation.SetControlText(edit, variable, paste: true);
+        SelectDataObjectWithPicker(pid, dialog, edit, variable, outDir, subTab);
         Thread.Sleep(150);
+    }
+
+    private static void SelectDataObjectWithPicker(int pid, IntPtr ownerDialog, IntPtr edit, string variable,
+        string outDir, string subTab)
+    {
+        var selectorButton = FindQuestionButtonRightOf(ownerDialog, edit);
+        if (selectorButton == IntPtr.Zero)
+            throw new InvalidOperationException("Data-object selector button was not found for " + subTab + ".");
+
+        var selectorRect = UiAutomation.GetWindowRect(selectorButton);
+        UiAutomation.ClickPoint(selectorButton, Math.Max(1, selectorRect.Width / 2), Math.Max(1, selectorRect.Height / 2),
+            MouseButton.Left, doubleClick: false, mouse: true);
+        var picker = WaitForTopWindow(pid,
+            h => h != ownerDialog && Native.GetClass(h) == "#32770" && Native.IsWindowVisible(h),
+            TimeSpan.FromSeconds(8));
+        if (picker == IntPtr.Zero)
+            throw new TimeoutException("Data-object selector dialog was not found for " + subTab + ".");
+
+        Thread.Sleep(300);
+        SelectDataObjectInPicker(picker, variable);
+        Thread.Sleep(300);
+        if (!Native.IsWindow(picker) || !Native.IsWindowVisible(picker))
+            return;
+        CaptureProcessWindows(pid, Path.Combine(outDir, "data-object-picker-" + SafeFile(subTab)));
+        if (!ClickButtonByNormalizedText(picker, mouse: true, "确认(Y)", "确认(&Y)", "确定", "确认", "OK"))
+            throw new InvalidOperationException("Data-object selector confirm button was not found.");
+        WaitForWindowClosed(picker, TimeSpan.FromSeconds(8));
+        Thread.Sleep(250);
+    }
+
+    private static void SelectDataObjectInPicker(IntPtr picker, string variable)
+    {
+        foreach (var list in UiAutomation.EnumerateChildren(picker).Where(h =>
+                     Native.GetClass(h).Equals("SysListView32", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                UiAutomation.ListViewDoubleClickText(list, variable, mouse: true);
+                return;
+            }
+            catch
+            {
+                // Try the next picker control.
+            }
+        }
+
+        foreach (var list in UiAutomation.EnumerateChildren(picker).Where(h =>
+                     Native.GetClass(h).Contains("ListBox", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                UiAutomation.ListBoxSelectText(list, variable);
+                return;
+            }
+            catch
+            {
+                // Try the next picker control.
+            }
+        }
+
+        foreach (var tree in UiAutomation.EnumerateChildren(picker).Where(h =>
+                     Native.GetClass(h).Equals("SysTreeView32", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                UiAutomation.TreeViewSelectText(tree, variable);
+                return;
+            }
+            catch
+            {
+                // Try the next picker control.
+            }
+        }
+
+        var edit = UiAutomation.EnumerateChildren(picker)
+            .FirstOrDefault(h => Native.GetClass(h).Equals("Edit", StringComparison.OrdinalIgnoreCase));
+        if (edit != IntPtr.Zero)
+        {
+            UiAutomation.SetControlText(edit, variable, paste: true);
+            return;
+        }
+
+        throw new InvalidOperationException("Data-object selector did not expose a selectable variable control for " + variable + ".");
+    }
+
+    private static IntPtr FindQuestionButtonRightOf(IntPtr root, IntPtr edit)
+    {
+        var editRect = UiAutomation.GetWindowRect(edit);
+        return UiAutomation.EnumerateChildren(root)
+            .Where(h => Native.GetClass(h).Contains("Button", StringComparison.OrdinalIgnoreCase) &&
+                        Native.GetText(h).Trim() == "?" &&
+                        Native.IsWindowVisible(h))
+            .Select(h => new { Handle = h, Rect = UiAutomation.GetWindowRect(h) })
+            .Where(b => Math.Abs(b.Rect.Top - editRect.Top) <= 10 &&
+                        b.Rect.Left >= editRect.Right - 2 &&
+                        b.Rect.Left <= editRect.Right + 40)
+            .OrderBy(b => b.Rect.Left)
+            .Select(b => b.Handle)
+            .FirstOrDefault();
     }
 
     private static IntPtr FindComboWithItem(IntPtr root, string text)
@@ -2994,10 +3427,22 @@ Commands:
         throw new InvalidOperationException("Combo item not found: " + text);
     }
 
+    private static IntPtr FindVisibleComboWithItem(IntPtr root, string text)
+    {
+        foreach (var combo in UiAutomation.EnumerateChildren(root).Where(h =>
+                     Native.GetClass(h).Equals("ComboBox", StringComparison.OrdinalIgnoreCase) &&
+                     Native.IsWindowVisible(h)))
+        {
+            if (UiAutomation.ComboItems(combo).Any(i => i.Text.Contains(text, StringComparison.OrdinalIgnoreCase)))
+                return combo;
+        }
+        return FindComboWithItem(root, text);
+    }
+
     private static IntPtr FindEditRightOf(IntPtr root, IntPtr combo)
     {
         var comboRect = UiAutomation.GetWindowRect(combo);
-        var edit = UiAutomation.EnumerateChildren(root)
+        var candidates = UiAutomation.EnumerateChildren(root)
             .Where(h => Native.GetClass(h).Equals("Edit", StringComparison.OrdinalIgnoreCase))
             .Select(h => new { Handle = h, Rect = UiAutomation.GetWindowRect(h) })
             .Where(e =>
@@ -3005,9 +3450,17 @@ Commands:
                 e.Rect.Left > comboRect.Left &&
                 e.Rect.Width >= 60 &&
                 e.Rect.Width <= 160)
+            .ToArray();
+        var edit = candidates
+            .Where(e => Native.IsWindowVisible(e.Handle))
             .OrderBy(e => e.Rect.Left)
             .Select(e => e.Handle)
             .FirstOrDefault();
+        if (edit == IntPtr.Zero)
+            edit = candidates
+                .OrderBy(e => e.Rect.Left)
+                .Select(e => e.Handle)
+                .FirstOrDefault();
         if (edit == IntPtr.Zero) throw new InvalidOperationException("Edit right of operation combo was not found.");
         return edit;
     }
@@ -3200,6 +3653,13 @@ Commands:
         }
     }
 
+    private static string[] ParseNameList(string[] args, string name)
+        => Opts(args, name)
+            .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     private static int? OptInt(string[] args, string name)
     {
         var value = Opt(args, name);
@@ -3249,9 +3709,20 @@ Commands:
         string Project,
         string? Source,
         string? WorkDir,
+        string? WorkspaceMarker,
         string ProjectSha256Before,
         string? SourceSha256,
-        bool CreatedCopy);
+        bool CreatedCopy,
+        bool ProfilingCopy);
+
+    private sealed record WorkflowWorkspaceMarker(
+        string CreatedBy,
+        string Workflow,
+        string Source,
+        string SourceSha256,
+        string WorkingCopy,
+        string WorkingCopySha256Before,
+        DateTimeOffset CreatedAt);
 
     private static WorkflowProjectContext PrepareWorkflowProject(string[] args, string workflowName, string outDir)
     {
@@ -3265,11 +3736,35 @@ Commands:
             var source = FullPath(sourceOpt);
             if (!File.Exists(source)) throw new FileNotFoundException(source);
             var workDir = FullPath(Opt(args, "--workdir") ?? Path.Combine(".mcgsctl-work", SafeFile(workflowName) + "-" + Timestamp()));
+            EnsureNoReparsePoint(source, "source project");
+            EnsureNoReparsePoint(Path.GetDirectoryName(workDir) ?? Environment.CurrentDirectory, "workdir parent");
+            EnsureSourceCanBeCopied(source, Has(args, "--allow-copy-open-source"));
+            var sourceShaBefore = Sha256(source);
             Directory.CreateDirectory(workDir);
+            EnsureNoReparsePoint(workDir, "workdir");
             var copyName = Path.GetFileNameWithoutExtension(source) + "-" + SafeFile(workflowName) + "-" + Timestamp() + Path.GetExtension(source);
             var project = Path.Combine(workDir, copyName);
             File.Copy(source, project, overwrite: false);
-            var context = new WorkflowProjectContext(project, source, workDir, Sha256(project), Sha256(source), CreatedCopy: true);
+            EnsureNoReparsePoint(project, "working copy");
+            var sourceShaAfter = Sha256(source);
+            if (!sourceShaBefore.Equals(sourceShaAfter, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDeleteFile(project);
+                throw new InvalidOperationException("Source project changed while it was being copied. Working copy was deleted.");
+            }
+
+            var workingProjectSha = Sha256(project);
+            if (!workingProjectSha.Equals(sourceShaAfter, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDeleteFile(project);
+                throw new InvalidOperationException("Working copy SHA256 does not match stable source SHA256. Working copy was deleted.");
+            }
+
+            var workspaceMarkerPath = Path.Combine(workDir, "mcgsctl-workspace.json");
+            var marker = new WorkflowWorkspaceMarker("mcgsctl", workflowName, source, sourceShaAfter, project, workingProjectSha, DateTimeOffset.Now);
+            File.WriteAllText(workspaceMarkerPath, JsonSerializer.Serialize(marker, JsonOptions()), Encoding.UTF8);
+            var context = new WorkflowProjectContext(project, source, workDir, workspaceMarkerPath, workingProjectSha, sourceShaAfter,
+                CreatedCopy: true, ProfilingCopy: false);
             WriteWorkflowAuditStart(outDir, workflowName, context, args);
             return context;
         }
@@ -3278,8 +3773,16 @@ Commands:
             throw new ArgumentException("Write workflows require --source <mce> or --project <copy.mce>.");
 
         var existingProject = RequiredPath(args, "--project");
+        EnsureNoReparsePoint(existingProject, "project");
         var projectSha = Sha256(existingProject);
-        if (!IsWorkflowCopyProject(existingProject))
+        var underWork = IsPathUnder(existingProject, FullPath(".mcgsctl-work"));
+        var underCodexTmp = IsPathUnder(existingProject, FullPath(".codex_tmp"));
+        string? markerPath = null;
+        if (underWork)
+        {
+            markerPath = ValidateWorkflowWorkspaceMarker(existingProject);
+        }
+        else if (!underCodexTmp)
         {
             if (!Has(args, "--allow-original"))
             {
@@ -3301,13 +3804,108 @@ Commands:
             }
         }
 
-        var directContext = new WorkflowProjectContext(existingProject, null, null, projectSha, null, CreatedCopy: false);
+        var directContext = new WorkflowProjectContext(existingProject, null, null, markerPath, projectSha, null,
+            CreatedCopy: false, ProfilingCopy: underCodexTmp);
         WriteWorkflowAuditStart(outDir, workflowName, directContext, args);
         return directContext;
     }
 
     private static bool IsWorkflowCopyProject(string project)
         => IsPathUnder(project, FullPath(".codex_tmp")) || IsPathUnder(project, FullPath(".mcgsctl-work"));
+
+    private static string ValidateWorkflowWorkspaceMarker(string project)
+    {
+        var workRoot = Path.GetFullPath(".mcgsctl-work");
+        var directory = Path.GetDirectoryName(Path.GetFullPath(project)) ??
+                        throw new InvalidOperationException("Project directory was not found.");
+        while (IsPathUnder(directory, workRoot) || string.Equals(
+                   Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                   Path.GetFullPath(workRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                   StringComparison.OrdinalIgnoreCase))
+        {
+            var markerPath = Path.Combine(directory, "mcgsctl-workspace.json");
+            if (File.Exists(markerPath))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(markerPath, Encoding.UTF8));
+                var root = doc.RootElement;
+                var createdBy = root.TryGetProperty("CreatedBy", out var cb) ? cb.GetString() :
+                    root.TryGetProperty("createdBy", out cb) ? cb.GetString() : null;
+                var workingCopy = root.TryGetProperty("WorkingCopy", out var wc) ? wc.GetString() :
+                    root.TryGetProperty("workingCopy", out wc) ? wc.GetString() : null;
+                if (!string.Equals(createdBy, "mcgsctl", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Invalid mcgsctl workspace marker: createdBy mismatch.");
+                if (string.IsNullOrWhiteSpace(workingCopy) ||
+                    !Path.GetFullPath(workingCopy).Equals(Path.GetFullPath(project), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Invalid mcgsctl workspace marker: workingCopy mismatch.");
+                return markerPath;
+            }
+
+            var parent = Directory.GetParent(directory);
+            if (parent == null) break;
+            directory = parent.FullName;
+        }
+
+        throw new InvalidOperationException("Projects under .mcgsctl-work require a matching mcgsctl-workspace.json marker.");
+    }
+
+    private static void EnsureSourceCanBeCopied(string source, bool allowOpenSource)
+    {
+        var directory = Path.GetDirectoryName(source) ?? Environment.CurrentDirectory;
+        var stem = Path.GetFileNameWithoutExtension(source);
+        var locks = new[]
+            {
+                Path.Combine(directory, stem + ".ldb"),
+                Path.Combine(directory, stem + ".laccdb")
+            }
+            .Where(File.Exists)
+            .ToArray();
+        if (locks.Length > 0 && !allowOpenSource)
+            throw new InvalidOperationException("Source project appears open because Access lock file(s) exist: " + string.Join(", ", locks));
+
+        if (allowOpenSource) return;
+        try
+        {
+            using var stream = File.Open(source, FileMode.Open, FileAccess.Read, FileShare.None);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException("Source project is locked/open. Close MCGS or use --allow-copy-open-source for profiling only.", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new InvalidOperationException("Source project cannot be opened exclusively for copy safety.", ex);
+        }
+    }
+
+    private static void EnsureNoReparsePoint(string path, string label)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full);
+        if (string.IsNullOrWhiteSpace(root)) return;
+        var relative = Path.GetRelativePath(root, full);
+        var current = root;
+        foreach (var part in relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = string.IsNullOrEmpty(current) ? part : Path.Combine(current, part);
+            if (!File.Exists(current) && !Directory.Exists(current)) continue;
+            var attributes = File.GetAttributes(current);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"{label} contains a junction/symlink/reparse point: {current}");
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Best effort cleanup after a failed safe copy.
+        }
+    }
 
     private static bool IsPathUnder(string path, string root)
     {
@@ -3327,7 +3925,9 @@ Commands:
                 context.Project,
                 context.Source,
                 context.WorkDir,
+                context.WorkspaceMarker,
                 context.CreatedCopy,
+                context.ProfilingCopy,
                 context.ProjectSha256Before,
                 context.SourceSha256,
                 args = RedactArgs(args)
@@ -3344,6 +3944,8 @@ Commands:
                 context.Project,
                 context.Source,
                 context.CreatedCopy,
+                context.ProfilingCopy,
+                context.WorkspaceMarker,
                 saved,
                 success,
                 projectSha256Before = context.ProjectSha256Before,
@@ -3356,9 +3958,14 @@ Commands:
     private static string[] RedactArgs(string[] args)
     {
         var result = (string[])args.Clone();
+        var includeScriptText = Has(args, "--audit-include-script-text");
         for (var i = 0; i < result.Length - 1; i++)
         {
-            if (result[i].Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            if (result[i].Equals("--text", StringComparison.OrdinalIgnoreCase) && !includeScriptText)
+            {
+                result[i + 1] = $"<sha256:{Sha256Text(result[i + 1])};length:{(result[i + 1] ?? "").Length}>";
+            }
+            else if (result[i].Contains("password", StringComparison.OrdinalIgnoreCase) ||
                 result[i].Contains("token", StringComparison.OrdinalIgnoreCase))
             {
                 result[i + 1] = "<redacted>";
@@ -3366,6 +3973,9 @@ Commands:
         }
         return result;
     }
+
+    private static string Sha256Text(string text)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text ?? ""))).ToLowerInvariant();
 
     private static bool Has(string[] args, string name)
         => args.Any(a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -3394,6 +4004,19 @@ Commands:
         => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))
             ? fallback
             : Environment.GetEnvironmentVariable(name)!;
+
+    private static string TryGitCommit()
+    {
+        try
+        {
+            var result = ProcessRunner.Run("git", "rev-parse --short HEAD", ToolPaths.FindToolRoot(), 10000);
+            return result.ExitCode == 0 ? result.StdOut.Trim() : "unknown";
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
 
     private static string DefaultProject()
     {
@@ -5469,6 +6092,7 @@ internal static class Native
     public const uint WM_NOTIFY = 0x004E;
     public const uint WM_CONTEXTMENU = 0x007B;
     public const uint WM_CLOSE = 0x0010;
+    public const uint WM_GETTEXT = 0x000D;
     public const uint WM_SETTEXT = 0x000C;
     public const uint WM_CLEAR = 0x0303;
     public const uint WM_PASTE = 0x0302;
@@ -5581,6 +6205,15 @@ internal static class Native
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowTextA", CharSet = CharSet.Ansi)]
+    private static extern int GetWindowTextAnsi(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageText(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageA", CharSet = CharSet.Ansi)]
+    private static extern IntPtr SendMessageTextAnsi(IntPtr hWnd, uint msg, IntPtr wParam, StringBuilder lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
@@ -5707,7 +6340,22 @@ internal static class Native
     {
         var sb = new StringBuilder(1024);
         GetWindowText(hwnd, sb, sb.Capacity);
-        return sb.ToString();
+        var text = sb.ToString();
+        if (!string.IsNullOrEmpty(text)) return text;
+
+        var wmText = new StringBuilder(1024);
+        SendMessageText(hwnd, WM_GETTEXT, new IntPtr(wmText.Capacity), wmText);
+        text = wmText.ToString();
+        if (!string.IsNullOrEmpty(text)) return text;
+
+        var ansi = new StringBuilder(1024);
+        GetWindowTextAnsi(hwnd, ansi, ansi.Capacity);
+        text = ansi.ToString();
+        if (!string.IsNullOrEmpty(text)) return text;
+
+        var wmAnsi = new StringBuilder(1024);
+        SendMessageTextAnsi(hwnd, WM_GETTEXT, new IntPtr(wmAnsi.Capacity), wmAnsi);
+        return wmAnsi.ToString();
     }
 
     public static string GetClass(IntPtr hwnd)

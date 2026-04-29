@@ -106,8 +106,8 @@ internal static partial class Program
     {
         return rawType.Trim().ToLowerInvariant() switch
         {
-            "switch" or "bool" or "boolean" or "bit" => 1,
-            "numeric" or "number" or "float" or "int" => 2,
+            "switch" or "bool" or "boolean" or "bit" or "开关" => 1,
+            "numeric" or "number" or "float" or "int" or "数值" => 2,
             _ => null
         };
     }
