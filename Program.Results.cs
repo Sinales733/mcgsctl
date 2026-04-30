@@ -132,9 +132,13 @@ internal static partial class Program
     private static string ComputeResultStatus(IEnumerable<ResultCheck> checks, IEnumerable<string>? limitations = null)
     {
         var list = checks.ToArray();
+        var limitationList = (limitations ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         if (list.Any(c => !IsValidCheckStatus(c.Status))) return "FAIL";
         if (list.Any(c => c.Required && c.Status == "FAIL")) return "FAIL";
         if (list.Any(c => c.Required && c.Status is "UNKNOWN" or "NOT_REQUESTED")) return "UNKNOWN";
+        if (list.Any(c => !c.Required && c.Status is "WARNING" or "UNKNOWN" &&
+                          !limitationList.Any(l => l.Contains(c.Name, StringComparison.OrdinalIgnoreCase))))
+            return "UNKNOWN";
         return "PASS";
     }
 
@@ -422,6 +426,18 @@ internal static partial class Program
                 summary.BlockedReasons.Add("index/result operationId mismatch: " + entry.Path);
             if (!Path.GetFileNameWithoutExtension(resultPath).Equals(operationId, StringComparison.OrdinalIgnoreCase))
                 summary.BlockedReasons.Add("result file stem does not match operationId: " + entry.Path);
+            if (!entry.MutatesCandidate)
+                summary.BlockedReasons.Add("index entry is not mutating: " + entry.Path);
+            var resultMutates = root.TryGetProperty("mutatesCandidate", out var mutates) &&
+                                mutates.ValueKind == JsonValueKind.True;
+            if (!resultMutates)
+                summary.BlockedReasons.Add("workflow result mutatesCandidate is not true: " + entry.Path);
+            if (!root.TryGetProperty("candidateSha256Before", out var beforeProp) ||
+                beforeProp.ValueKind is not JsonValueKind.String)
+                summary.BlockedReasons.Add("mutating result missing candidateSha256Before: " + entry.Path);
+            if (!root.TryGetProperty("candidateSha256After", out var afterProp) ||
+                afterProp.ValueKind is not JsonValueKind.String)
+                summary.BlockedReasons.Add("mutating result missing candidateSha256After: " + entry.Path);
             var resultProblem = ValidateResultDocument(root, actualSha, finalCandidateRequired: false);
             if (resultProblem != null) summary.BlockedReasons.Add(entry.Path + ": " + resultProblem);
             var status = JsonString(root, "status") ?? "";
@@ -467,6 +483,10 @@ internal static partial class Program
             }
             using var resultDoc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
             var root = resultDoc.RootElement;
+            var finalMutates = root.TryGetProperty("mutatesCandidate", out var finalMutatesProp) &&
+                               finalMutatesProp.ValueKind == JsonValueKind.True;
+            if (finalMutates)
+                summary.BlockedReasons.Add(rel + " mutatesCandidate must be false");
             var problem = ValidateResultDocument(root, actualSha, finalCandidateRequired: true);
             if (problem != null) summary.BlockedReasons.Add(rel + ": " + problem);
             var status = JsonString(root, "status") ?? "";
@@ -536,7 +556,8 @@ internal static partial class Program
             candidateFinalExport = summary.CandidateFinalExport,
             mutationChain = summary.MutationChain,
             blockedReasons = summary.BlockedReasons,
-            requiredResults = summary.RequiredResults
+            requiredResults = summary.RequiredResults,
+            resultSha256 = summary.ResultSha256
         };
         File.WriteAllText(summaryPath, JsonSerializer.Serialize(jsonDoc, ResultJsonOptions()), Encoding.UTF8);
         summary.ResultSha256["candidate-summary.json"] = Sha256(summaryPath);
@@ -619,14 +640,34 @@ internal static partial class Program
             problems.Add("approval.requiredResults is missing");
             return problems;
         }
+        var approvalRequiredPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in required.EnumerateArray())
         {
             var path = JsonString(item, "path") ?? "";
+            if (!string.IsNullOrWhiteSpace(path)) approvalRequiredPaths.Add(path);
+            var kind = JsonString(item, "kind") ?? "";
+            var requiredStatus = JsonString(item, "requiredStatus") ?? "";
             var shaPolicy = JsonString(item, "shaPolicy") ?? "";
+            var expected = summary.RequiredResults.FirstOrDefault(x =>
+                x.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (shaPolicy is not ("chain" or "finalCandidate"))
                 problems.Add("approval required result has invalid shaPolicy: " + path);
-            if (!summary.RequiredResults.Any(x => x.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            if (expected == null)
+            {
                 problems.Add("approval required result is not in candidate summary: " + path);
+                continue;
+            }
+            if (!requiredStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                problems.Add("approval required result requiredStatus is not PASS: " + path);
+            if (!kind.Equals(expected.Kind, StringComparison.OrdinalIgnoreCase))
+                problems.Add("approval required result kind mismatch for " + path);
+            if (!shaPolicy.Equals(expected.ShaPolicy, StringComparison.OrdinalIgnoreCase))
+                problems.Add("approval required result shaPolicy mismatch for " + path);
+        }
+        foreach (var expected in summary.RequiredResults)
+        {
+            if (!approvalRequiredPaths.Contains(expected.Path))
+                problems.Add("approval.requiredResults missing " + expected.Path);
         }
         return problems;
     }
