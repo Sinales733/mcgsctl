@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -75,6 +77,79 @@ internal static partial class Program
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    private static string? _dialogEvidenceRoot;
+    private static int _dialogEvidenceSequence;
+
+    private static void SetDialogEvidenceRoot(string? outDir)
+    {
+        _dialogEvidenceRoot = string.IsNullOrWhiteSpace(outDir) ? null : outDir;
+        _dialogEvidenceSequence = 0;
+        if (_dialogEvidenceRoot == null) return;
+        Directory.CreateDirectory(_dialogEvidenceRoot);
+        EnsureJsonlFile("dialogs.jsonl");
+        EnsureJsonlFile("popups.jsonl");
+        EnsureJsonlFile("startup-dialogs.jsonl");
+    }
+
+    private static void EnsureJsonlFile(string name)
+    {
+        if (_dialogEvidenceRoot == null) return;
+        var path = Path.Combine(_dialogEvidenceRoot, name);
+        if (!File.Exists(path)) File.WriteAllText(path, "", Encoding.UTF8);
+    }
+
+    private static void RecordDialogEvidence(string stream, int pid, IntPtr hwnd, string action, string state)
+    {
+        if (_dialogEvidenceRoot == null || hwnd == IntPtr.Zero) return;
+        try
+        {
+            var screenshotRel = "";
+            if (Native.IsWindow(hwnd))
+            {
+                var shotDir = Path.Combine(_dialogEvidenceRoot, "dialog-screenshots");
+                Directory.CreateDirectory(shotDir);
+                screenshotRel = "dialog-screenshots/" + Interlocked.Increment(ref _dialogEvidenceSequence).ToString("D4") +
+                                "-" + SafeFile(stream) + "-" + hwnd.ToInt64().ToString("X") + ".png";
+                TryScreenshot(hwnd, Path.Combine(_dialogEvidenceRoot, screenshotRel.Replace('/', Path.DirectorySeparatorChar)));
+            }
+
+            var buttons = Native.IsWindow(hwnd)
+                ? UiAutomation.EnumerateChildren(hwnd)
+                    .Where(h => Native.GetClass(h).Contains("Button", StringComparison.OrdinalIgnoreCase))
+                    .Select(Native.GetText)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+                : Array.Empty<string>();
+
+            var record = new
+            {
+                timestamp = DateTimeOffset.Now.ToString("O"),
+                pid,
+                hwnd = "0x" + hwnd.ToInt64().ToString("X"),
+                className = Native.IsWindow(hwnd) ? Native.GetClass(hwnd) : "",
+                title = Native.IsWindow(hwnd) ? Native.GetText(hwnd) : "",
+                body = Native.IsWindow(hwnd) ? DialogText(hwnd) : "",
+                buttons,
+                action,
+                state,
+                screenshot = screenshotRel
+            };
+            var path = Path.Combine(_dialogEvidenceRoot, stream);
+            File.AppendAllText(path, JsonSerializer.Serialize(record, ResultJsonOptions()) + Environment.NewLine, Encoding.UTF8);
+        }
+        catch
+        {
+            // Dialog evidence must not hide the original GUI automation result.
+        }
+    }
+
+    private static void RecordOpenPopups(int pid, string state)
+    {
+        foreach (var popup in UiAutomation.TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32768"))
+            RecordDialogEvidence("popups.jsonl", pid, popup, "observed", state);
+    }
 
     private static ResultCheck RequiredPass(string name, string? message = null)
         => new() { Name = name, Status = "PASS", Required = true, Message = message };
@@ -837,18 +912,41 @@ internal static partial class Program
                 OperationId: NewOperationId(workDir, "profile.check"),
                 OperationStartedAt: DateTimeOffset.Now);
             var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+            var smart200Dll = FindSmart200Dll(editor);
+            var profilePath = Opt(args, "--profile");
+            var profileFacts = CollectProfileFacts(editor, smart200Dll);
             var checks = new List<ResultCheck>
             {
                 File.Exists(editor) ? RequiredPass("mcgs-editor-exists", editor) : RequiredFail("mcgs-editor-exists", editor),
                 RequiredPass("candidate-sha", Sha256(project))
             };
             var limitations = new List<string>();
+            if (smart200Dll == null)
+                checks.Add(RequiredUnknown("smart200-dll-found", "Smart200.dll was not found under the MCGS editor directory."));
+            else
+                checks.Add(RequiredPass("smart200-dll-found", smart200Dll));
+            if (profilePath == null)
+            {
+                limitations.Add("profile-baseline: no --profile baseline was supplied; captured local facts only");
+                checks.Add(new ResultCheck
+                {
+                    Name = "profile-baseline",
+                    Status = "WARNING",
+                    Required = false,
+                    Message = "No profile baseline was supplied."
+                });
+            }
+            else
+            {
+                checks.AddRange(CheckProfileBaseline(FullPath(profilePath), profileFacts));
+            }
             if (Has(args, "--allow-profile-drift"))
             {
                 checks.Add(RequiredUnknown("profile-drift", "--allow-profile-drift was used; candidate cannot be applied"));
                 limitations.Add("profile-drift allowed for diagnostics only");
             }
-            WriteFinalValidatorResult(context, "profile-check.json", "profile", "profile.check", checks, limitations);
+            WriteFinalValidatorResult(context, "profile-check.json", "profile", "profile.check", checks, limitations,
+                new Dictionary<string, object?> { ["profileFacts"] = profileFacts, ["profile"] = profilePath });
             Console.WriteLine("profile-check: " + Path.Combine(workDir, "profile-check.json"));
             return checks.Any(c => c.Required && c.Status != "PASS") ? 2 : 0;
         }
@@ -857,6 +955,111 @@ internal static partial class Program
             Console.Error.WriteLine("profile check failed: " + ex.Message);
             return 1;
         }
+    }
+
+    private static Dictionary<string, object?> CollectProfileFacts(string editor, string? smart200Dll)
+    {
+        var editorInfo = File.Exists(editor) ? PeInspector.ReadExports(editor) : null;
+        var smartInfo = smart200Dll != null && File.Exists(smart200Dll) ? PeInspector.ReadExports(smart200Dll) : null;
+        var dpi = 0f;
+        try
+        {
+            using var graphics = Graphics.FromHwnd(IntPtr.Zero);
+            dpi = graphics.DpiX;
+        }
+        catch { }
+        return new Dictionary<string, object?>
+        {
+            ["mcgsEditorPath"] = editor,
+            ["mcgsEditorSha256"] = File.Exists(editor) ? Sha256(editor) : null,
+            ["mcgsEditorPeFormat"] = editorInfo?.Bitness,
+            ["mcgsEditorMachine"] = editorInfo?.Machine,
+            ["smart200DllPath"] = smart200Dll,
+            ["smart200DllSha256"] = smart200Dll != null && File.Exists(smart200Dll) ? Sha256(smart200Dll) : null,
+            ["smart200PeFormat"] = smartInfo?.Bitness,
+            ["smart200Machine"] = smartInfo?.Machine,
+            ["mcgsctlProcessArchitecture"] = RuntimeInformation.ProcessArchitecture.ToString(),
+            ["osArchitecture"] = RuntimeInformation.OSArchitecture.ToString(),
+            ["osDescription"] = RuntimeInformation.OSDescription,
+            ["windowsVersion"] = Environment.OSVersion.VersionString,
+            ["dpiX"] = dpi
+        };
+    }
+
+    private static IEnumerable<ResultCheck> CheckProfileBaseline(string profilePath, Dictionary<string, object?> facts)
+    {
+        var checks = new List<ResultCheck>();
+        if (!File.Exists(profilePath))
+        {
+            checks.Add(RequiredUnknown("profile-baseline-file", "Profile baseline file not found: " + profilePath));
+            return checks;
+        }
+        using var doc = JsonDocument.Parse(File.ReadAllText(profilePath, Encoding.UTF8));
+        var root = doc.RootElement;
+        var expectedEditorSha = JsonNestedString(root, "mcgs", "mcgsSetExeSha256");
+        if (!string.IsNullOrWhiteSpace(expectedEditorSha))
+        {
+            var actual = facts.TryGetValue("mcgsEditorSha256", out var value) ? value?.ToString() : null;
+            checks.Add(string.Equals(expectedEditorSha, actual, StringComparison.OrdinalIgnoreCase)
+                ? RequiredPass("profile-mcgs-editor-sha")
+                : RequiredUnknown("profile-mcgs-editor-sha", "McgsSetE.exe SHA does not match profile baseline"));
+        }
+        var expectedDpi = JsonNestedInt(root, "mcgs", "expectedDpi");
+        if (expectedDpi.HasValue)
+        {
+            var actualDpi = facts.TryGetValue("dpiX", out var dpiValue) && float.TryParse(dpiValue?.ToString(), out var parsed)
+                ? parsed
+                : 0;
+            checks.Add(Math.Abs(actualDpi - expectedDpi.Value) < 1
+                ? RequiredPass("profile-dpi")
+                : RequiredUnknown("profile-dpi", $"DPI {actualDpi} does not match profile baseline {expectedDpi.Value}"));
+        }
+        if (root.TryGetProperty("drivers", out var drivers) &&
+            drivers.ValueKind == JsonValueKind.Object &&
+            drivers.TryGetProperty("Smart200.dll", out var smart200) &&
+            smart200.ValueKind == JsonValueKind.Object &&
+            smart200.TryGetProperty("sha256", out var smartShaProp))
+        {
+            var expectedSmartSha = smartShaProp.GetString();
+            var actualSmartSha = facts.TryGetValue("smart200DllSha256", out var smartValue) ? smartValue?.ToString() : null;
+            checks.Add(string.Equals(expectedSmartSha, actualSmartSha, StringComparison.OrdinalIgnoreCase)
+                ? RequiredPass("profile-smart200-sha")
+                : RequiredUnknown("profile-smart200-sha", "Smart200.dll SHA does not match profile baseline"));
+        }
+        if (checks.Count == 0) checks.Add(RequiredPass("profile-baseline-loaded", profilePath));
+        return checks;
+    }
+
+    private static string? FindSmart200Dll(string editor)
+    {
+        try
+        {
+            var root = Path.GetDirectoryName(editor);
+            if (root == null || !Directory.Exists(root)) return null;
+            return Directory.EnumerateFiles(root, "Smart200.dll", SearchOption.AllDirectories)
+                .OrderBy(path => path.Length)
+                .FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? JsonNestedString(JsonElement root, string objectName, string propertyName)
+        => root.TryGetProperty(objectName, out var obj) && obj.ValueKind == JsonValueKind.Object
+           && obj.TryGetProperty(propertyName, out var prop)
+            ? prop.GetString()
+            : null;
+
+    private static int? JsonNestedInt(JsonElement root, string objectName, string propertyName)
+    {
+        if (!root.TryGetProperty(objectName, out var obj) || obj.ValueKind != JsonValueKind.Object ||
+            !obj.TryGetProperty(propertyName, out var prop))
+            return null;
+        return prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var value)
+            ? value
+            : int.TryParse(prop.GetString(), out var parsed) ? parsed : null;
     }
 
     private static int WorkflowSafetyVerify(string[] args)
@@ -885,12 +1088,13 @@ internal static partial class Program
             var checks = new List<ResultCheck>();
             var limitations = new List<string>();
             var candidateFinal = Path.Combine(evidenceDir, "candidate-final", "mce");
+            MceSnapshot? finalSnapshot = null;
             if (!Directory.Exists(candidateFinal))
             {
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(candidateFinal)!);
-                    ExportMceSnapshot(project, candidateFinal);
+                    finalSnapshot = ExportMceSnapshot(project, candidateFinal);
                 }
                 catch (Exception ex)
                 {
@@ -899,6 +1103,7 @@ internal static partial class Program
             }
             else
             {
+                finalSnapshot = LoadMceSnapshot(candidateFinal);
                 checks.Add(RequiredPass("candidate-final-export", "candidate-final/mce exists"));
             }
 
@@ -910,9 +1115,13 @@ internal static partial class Program
             if (requiresAwl && string.IsNullOrWhiteSpace(awl))
                 checks.Add(RequiredUnknown("awl-required", "safety spec requires AWL but --awl was not provided"));
             else if (!string.IsNullOrWhiteSpace(awl))
+            {
                 checks.Add(File.Exists(FullPath(awl)) ? RequiredPass("awl-present", FullPath(awl)) : RequiredUnknown("awl-present", "AWL file not found"));
+                if (File.Exists(FullPath(awl)))
+                    checks.AddRange(SafetyAwlScan(specDoc.RootElement, File.ReadAllText(FullPath(awl), Encoding.UTF8)));
+            }
 
-            checks.AddRange(SafetySpecHeuristicChecks(specDoc.RootElement, evidenceDir));
+            checks.AddRange(SafetySpecHeuristicChecks(specDoc.RootElement, evidenceDir, finalSnapshot));
             if (checks.Count == 0) checks.Add(RequiredPass("safety-spec-loaded", spec));
             WriteFinalValidatorResult(context, "safety-result.json", "safety", "safety.verify", checks, limitations,
                 new Dictionary<string, object?> { ["spec"] = spec, ["evidenceDir"] = evidenceDir });
@@ -928,21 +1137,29 @@ internal static partial class Program
         }
     }
 
-    private static IEnumerable<ResultCheck> SafetySpecHeuristicChecks(JsonElement specRoot, string evidenceDir)
+    private static IEnumerable<ResultCheck> SafetySpecHeuristicChecks(JsonElement specRoot, string evidenceDir, MceSnapshot? finalSnapshot)
     {
         var checks = new List<ResultCheck>();
+        var dangerousOutputs = specRoot.TryGetProperty("dangerousOutputs", out var dangerous) &&
+                               dangerous.ValueKind == JsonValueKind.Array
+            ? dangerous.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (specRoot.TryGetProperty("plc", out var plc) &&
             plc.TryGetProperty("addressPlan", out var plan) &&
             plan.ValueKind == JsonValueKind.Array)
         {
             var seenAddresses = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var seenVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in plan.EnumerateArray())
             {
                 var address = JsonString(item, "address") ?? "";
                 var dataObject = JsonString(item, "dataObject") ?? "";
+                var direction = JsonString(item, "direction") ?? "";
                 var kind = JsonString(item, "kind") ?? "";
-                if (address.StartsWith("Q", StringComparison.OrdinalIgnoreCase) &&
-                    dataObject.StartsWith("HMI", StringComparison.OrdinalIgnoreCase))
+                var controlVariable = IsHmiControlVariable(dataObject, direction, kind);
+                if ((address.StartsWith("Q", StringComparison.OrdinalIgnoreCase) || dangerousOutputs.Contains(address)) &&
+                    controlVariable)
                     checks.Add(RequiredFail("dangerous-output-direct-map:" + dataObject,
                         dataObject + " is mapped directly to dangerous Q output " + address));
                 if (!string.IsNullOrWhiteSpace(address))
@@ -954,18 +1171,41 @@ internal static partial class Program
                     else
                         seenAddresses[address] = dataObject;
                 }
+                if (!string.IsNullOrWhiteSpace(dataObject) && !string.IsNullOrWhiteSpace(address))
+                {
+                    if (seenVariables.TryGetValue(dataObject, out var existingAddress) &&
+                        !existingAddress.Equals(address, StringComparison.OrdinalIgnoreCase))
+                        checks.Add(RequiredFail("duplicate-variable:" + dataObject,
+                            dataObject + " maps to both " + existingAddress + " and " + address));
+                    else
+                        seenVariables[dataObject] = address;
+                }
+                if (finalSnapshot != null && !string.IsNullOrWhiteSpace(dataObject) &&
+                    finalSnapshot.FindDataObjects(dataObject).Length == 0)
+                    checks.Add(RequiredUnknown("data-object-present:" + dataObject,
+                        dataObject + " was not found in candidate-final Data table"));
                 if (kind.Equals("momentary", StringComparison.OrdinalIgnoreCase))
                 {
                     var evidence = FindMomentaryEvidence(evidenceDir, dataObject);
                     if (evidence == "pass") checks.Add(RequiredPass("momentary-readback:" + dataObject));
-                    else checks.Add(RequiredUnknown("momentary-readback:" + dataObject,
-                        "No press/release readback evidence was found for " + dataObject));
+                    else if (WasVariableTouchedByWorkflow(evidenceDir, dataObject))
+                        checks.Add(RequiredFail("momentary-readback:" + dataObject,
+                            "New or modified momentary variable lacks press/release readback evidence: " + dataObject));
+                    else
+                        checks.Add(RequiredUnknown("momentary-readback:" + dataObject,
+                            "No press/release readback evidence was found for existing variable " + dataObject));
                 }
             }
         }
         if (checks.Count == 0) checks.Add(RequiredPass("safety-spec-heuristics", "No blocking heuristic findings"));
         return checks;
     }
+
+    private static bool IsHmiControlVariable(string dataObject, string direction, string kind)
+        => dataObject.StartsWith("HMI", StringComparison.OrdinalIgnoreCase) ||
+           direction.Equals("hmi_to_plc", StringComparison.OrdinalIgnoreCase) ||
+           kind.Equals("momentary", StringComparison.OrdinalIgnoreCase) ||
+           kind.Equals("control", StringComparison.OrdinalIgnoreCase);
 
     private static string FindMomentaryEvidence(string evidenceDir, string dataObject)
     {
@@ -981,6 +1221,19 @@ internal static partial class Program
                 return "pass";
         }
         return "missing";
+    }
+
+    private static bool WasVariableTouchedByWorkflow(string evidenceDir, string dataObject)
+    {
+        var results = Directory.Exists(WorkflowResultsDir(evidenceDir))
+            ? Directory.GetFiles(WorkflowResultsDir(evidenceDir), "*.json")
+            : Array.Empty<string>();
+        return results.Any(file =>
+        {
+            var text = File.ReadAllText(file, Encoding.UTF8);
+            return text.Contains(dataObject, StringComparison.OrdinalIgnoreCase) &&
+                   ContainsAny(text, "realtime-db.add", "window.button.add-momentary", "device.channel.map", "script.edit");
+        });
     }
 
     private static int Safety(string[] args)
@@ -1008,6 +1261,53 @@ internal static partial class Program
                 checks.Add(awlText.Contains(variable, StringComparison.OrdinalIgnoreCase)
                     ? RequiredPass("awl-heartbeat-reference:" + variable)
                     : RequiredUnknown("awl-heartbeat-reference:" + variable, "Heartbeat variable not found in AWL"));
+        }
+        if (specRoot.TryGetProperty("plc", out var plc) &&
+            plc.TryGetProperty("addressPlan", out var plan) &&
+            plan.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in plan.EnumerateArray())
+            {
+                var address = JsonString(item, "address") ?? "";
+                var dataObject = JsonString(item, "dataObject") ?? "";
+                var kind = JsonString(item, "kind") ?? "";
+                if (!string.IsNullOrWhiteSpace(address))
+                    checks.Add(awlText.Contains(address, StringComparison.OrdinalIgnoreCase)
+                        ? RequiredPass("awl-address-reference:" + address)
+                        : RequiredUnknown("awl-address-reference:" + address, "PLC address not found in AWL"));
+                if (!string.IsNullOrWhiteSpace(dataObject))
+                    checks.Add(awlText.Contains(dataObject, StringComparison.OrdinalIgnoreCase)
+                        ? RequiredPass("awl-dataobject-reference:" + dataObject)
+                        : RequiredUnknown("awl-dataobject-reference:" + dataObject, "Data object not found in AWL"));
+                if (kind.Equals("momentary", StringComparison.OrdinalIgnoreCase) &&
+                    item.TryGetProperty("opposes", out var opposes) &&
+                    opposes.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var oppose in opposes.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => !string.IsNullOrWhiteSpace(x)))
+                    {
+                        var bothReferenced = awlText.Contains(dataObject, StringComparison.OrdinalIgnoreCase) &&
+                                             awlText.Contains(oppose, StringComparison.OrdinalIgnoreCase);
+                        checks.Add(bothReferenced
+                            ? RequiredPass("awl-opposition-reference:" + dataObject + ":" + oppose)
+                            : RequiredUnknown("awl-opposition-reference:" + dataObject + ":" + oppose,
+                                "Opposing momentary variables were not both found in AWL"));
+                    }
+                }
+            }
+        }
+        if (specRoot.TryGetProperty("dangerousOutputs", out var dangerousOutputs) &&
+            dangerousOutputs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var output in dangerousOutputs.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => !string.IsNullOrWhiteSpace(x)))
+            {
+                var directHmiLine = awlText.Replace("\r", "")
+                    .Split('\n')
+                    .Any(line => line.Contains(output, StringComparison.OrdinalIgnoreCase) &&
+                                 line.Contains("HMI", StringComparison.OrdinalIgnoreCase));
+                if (directHmiLine)
+                    checks.Add(RequiredFail("awl-dangerous-output-direct-hmi:" + output,
+                        output + " appears on the same AWL line as an HMI symbol"));
+            }
         }
         if (checks.Count == 0) checks.Add(RequiredPass("awl-scan-loaded"));
         return checks;

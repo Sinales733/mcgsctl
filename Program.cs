@@ -1073,6 +1073,7 @@ Commands:
         var projectOpt = Opt(args, "--project");
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", workflowName + "-" + Timestamp()));
         Directory.CreateDirectory(outDir);
+        SetDialogEvidenceRoot(outDir);
 
         WorkflowProjectContext? workflowProject = null;
         Process? process = null;
@@ -1196,9 +1197,11 @@ Commands:
         {
             var text = DialogText(dialog);
             if (!ContainsAny(text, "是否检查所有窗口", "用户程序", "表达式")) continue;
+            RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-ok", "project-check.prompt");
             ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是");
             Thread.Sleep(500);
         }
+        RecordOpenPopups(pid, "project-check.prompt");
     }
 
     private static ProjectCheckResult AnalyzeProjectCheck(int pid, HashSet<IntPtr> before,
@@ -1324,9 +1327,11 @@ Commands:
         {
             var text = DialogText(dialog);
             if (!ContainsAny(text, "检查", "错误", "警告", "成功", "完成")) continue;
+            RecordDialogEvidence("dialogs.jsonl", pid, dialog, "close", "project-check.close-result");
             ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "关闭", "关闭(&C)");
             Thread.Sleep(300);
         }
+        RecordOpenPopups(pid, "project-check.close-result");
     }
 
     private static void WriteWorkflowAuditEndIfNeeded(string outDir, WorkflowProjectContext? context, bool saved, bool success)
@@ -2096,6 +2101,8 @@ Commands:
             var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
                 "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
             var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, expression });
+            var indicatorReadbackVerified = ReopenVerifyStatusButtonIndicator(project, editor, label, expression,
+                windowIndex, x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -2109,18 +2116,23 @@ Commands:
                     labelFound,
                     expressionIncreased,
                     expressionFound,
-                    reopenVerified
+                    reopenVerified,
+                    indicatorReadbackVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            success = labelFound && expressionFound && reopenVerified;
+            success = labelFound && expressionFound && reopenVerified && indicatorReadbackVerified;
             WriteMutatingWorkflowResult(workflowProject, outDir, new[]
             {
                 labelFound ? RequiredPass("status-button-label-token", label) : RequiredFail("status-button-label-token", "Status-button label was not found."),
                 expressionFound ? RequiredPass("status-button-expression-token", expression) : RequiredFail("status-button-expression-token", "Visibility expression token was not found."),
                 reopenVerified ? RequiredPass("reopen-token-preserved") : RequiredFail("reopen-token-preserved", "Reopen token evidence did not match."),
-                RequiredUnknown("visibility-expression-readback", "Native GUI visibility expression readback is not implemented yet; status-button is not a native lamp.")
-            }, new[] { "visibility-expression-readback: status-button evidence only; native lamp is not implemented" });
+                indicatorReadbackVerified
+                    ? RequiredPass("status-button-property-readback", "label, visibility expression, no operation, and empty script verified")
+                    : RequiredUnknown("status-button-property-readback", "Status-button property readback failed or was incomplete.")
+            }, indicatorReadbackVerified
+                ? new[] { "indicator is a status-button, not a native lamp" }
+                : new[] { "status-button property readback incomplete; native lamp is not implemented" });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -2779,6 +2791,7 @@ Commands:
                 var text = DialogText(dialog);
                 if (ContainsAny(text, "存在同名的不同工程备份", "是否删除原备份"))
                 {
+                    RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "click-yes", "startup.backup-prompt");
                     ClickButtonByNormalizedText(dialog, mouse: true, "是(Y)", "是");
                     handled = true;
                     continue;
@@ -2786,14 +2799,20 @@ Commands:
 
                 if (title.Contains("选择数据源", StringComparison.OrdinalIgnoreCase))
                 {
+                    RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "click-cancel", "startup.odbc-prompt");
                     ClickButtonByNormalizedText(dialog, mouse: true, "取消");
                     handled = true;
+                    continue;
                 }
+
+                RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "unexpected", "startup");
+                throw new InvalidOperationException("Unexpected startup dialog: " + ShortDialogText(dialog));
             }
 
             if (!handled) break;
             Thread.Sleep(700);
         }
+        RecordOpenPopups(pid, "startup");
     }
 
     private static void HandleDeviceConfirmDialogs(int pid, IntPtr deviceDialog, TimeSpan timeout)
@@ -3054,6 +3073,97 @@ Commands:
         }
     }
 
+    private static bool ReopenVerifyStatusButtonIndicator(string project, string editor, string label, string expression,
+        int windowIndex, int x, int y, int width, int height, string outDir, TimeSpan timeout)
+    {
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window was not found during indicator readback.");
+
+            UiAutomation.SendCommand(main, 33955);
+            Thread.Sleep(700);
+            var userList = FindListViewByItemCount(main, 3);
+            UiAutomation.ListViewSelectIndex(userList, windowIndex);
+            Thread.Sleep(250);
+            if (!ClickButtonByNormalizedText(main, mouse: true, "\u52a8\u753b\u7ec4\u6001"))
+                throw new InvalidOperationException("animation edit button was not found during indicator readback.");
+            Thread.Sleep(1000);
+
+            var canvas = FindCanvas(main);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
+            UiAutomation.SendCommand(main, 32785);
+            var dialog = UiAutomation.WaitForWindow(process.Id, "\u6807\u51c6\u6309\u94ae\u6784\u4ef6\u5c5e\u6027\u8bbe\u7f6e", "#32770", TimeSpan.FromSeconds(8));
+            if (dialog == IntPtr.Zero) throw new TimeoutException("Button property dialog was not found during indicator readback.");
+            Thread.Sleep(300);
+
+            var tab = FindFirstChild(dialog, "SysTabControl32", null);
+            UiAutomation.TabSelectIndex(tab, 0, mouse: true);
+            Thread.Sleep(250);
+            var labelOk = UiAutomation.EnumerateChildren(dialog)
+                .Where(h => Native.GetClass(h).Contains("Edit", StringComparison.OrdinalIgnoreCase))
+                .Any(h => string.Equals(Native.GetText(h), label, StringComparison.Ordinal));
+
+            UiAutomation.TabSelectIndex(tab, 3, mouse: true);
+            Thread.Sleep(350);
+            var expressionText = Native.GetText(FindVisibilityExpressionEdit(dialog));
+            var expressionOk = string.Equals(expressionText, expression, StringComparison.Ordinal);
+
+            UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+            Thread.Sleep(300);
+            var dataOperation = FindButtonByNormalizedText(dialog, "\u6570\u636e\u5bf9\u8c61\u503c\u64cd\u4f5c");
+            var noOperation = dataOperation == IntPtr.Zero || UiAutomation.ButtonGetCheck(dataOperation) == 0;
+
+            UiAutomation.TabSelectIndex(tab, 2, mouse: true);
+            Thread.Sleep(300);
+            var scriptText = Native.GetText(FindLargestEdit(dialog));
+            var scriptEmpty = string.IsNullOrWhiteSpace(scriptText);
+
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-indicator-readback"));
+            File.WriteAllText(Path.Combine(outDir, "indicator-readback.json"),
+                JsonSerializer.Serialize(new
+                {
+                    label,
+                    expression,
+                    labelOk,
+                    expressionText,
+                    expressionOk,
+                    noOperation,
+                    scriptEmpty
+                }, JsonOptions()), Encoding.UTF8);
+
+            UiAutomation.CloseWindow(dialog);
+            Thread.Sleep(300);
+            CloseEditorProcess(process.Id, main, saveIntent: false);
+            process = null;
+            main = IntPtr.Zero;
+            return labelOk && expressionOk && noOperation && scriptEmpty;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "indicator-readback-error.txt"), ex.ToString(), Encoding.UTF8);
+            return false;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
     private sealed record MomentaryOperationReadback(
         string SubTab,
         string ExpectedOperation,
@@ -3280,9 +3390,16 @@ Commands:
             {
                 var text = DialogText(dialog);
                 if (IsUnknownObjectDialogText(text) || IsDialogErrorText(text))
+                {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "fail", "property.confirm");
                     throw new InvalidOperationException("Refusing to auto-confirm property dialog: " + ShortDialogText(dialog));
+                }
                 if (!IsBenignInfoDialogText(text))
+                {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "fail", "property.confirm");
                     throw new InvalidOperationException("Unexpected property dialog: " + ShortDialogText(dialog));
+                }
+                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-ok", "property.confirm");
                 ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是(&Y)", "是");
                 handled = true;
             }
@@ -3290,6 +3407,7 @@ Commands:
             if (!handled) break;
             Thread.Sleep(500);
         }
+        RecordOpenPopups(pid, "property.confirm");
     }
 
     private static void HandleScriptCheckDialogs(int pid, IntPtr scriptDialog, TimeSpan timeout)
@@ -3303,9 +3421,16 @@ Commands:
             {
                 var text = DialogText(dialog);
                 if (IsUnknownObjectDialogText(text) || IsDialogErrorText(text))
+                {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "fail", "script.check");
                     throw new InvalidOperationException("Script check failed or referenced unknown objects: " + ShortDialogText(dialog));
+                }
                 if (!IsBenignInfoDialogText(text))
+                {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "fail", "script.check");
                     throw new InvalidOperationException("Unexpected script check dialog: " + ShortDialogText(dialog));
+                }
+                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-ok", "script.check");
                 ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是(Y)", "是");
                 handled = true;
             }
@@ -3313,6 +3438,7 @@ Commands:
             if (!handled) break;
             Thread.Sleep(400);
         }
+        RecordOpenPopups(pid, "script.check");
     }
 
     private static void ConfirmScriptDialog(int pid, IntPtr scriptDialog, IntPtr ownerDialog, bool allowCreateDataObjects)
@@ -3338,6 +3464,9 @@ Commands:
             if (!allowCreateDataObjects && UiAutomation.TopWindowsForPid(pid).Any(h =>
                     h != scriptDialog && h != ownerDialog && Native.GetClass(h) == "#32770"))
             {
+                foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
+                             h != scriptDialog && h != ownerDialog && Native.GetClass(h) == "#32770"))
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "fail", "script.confirm");
                 throw new InvalidOperationException(
                     "Script confirmation opened a secondary MCGS dialog. Refusing to auto-confirm it without --allow-create-dataobjects.");
             }
@@ -3349,6 +3478,7 @@ Commands:
                 var text = DialogText(dialog);
                 if (ContainsAny(text, "未知对象", "是否增加此对象", "组态错误"))
                 {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-yes", "script.confirm-create-dataobject");
                     ClickButtonByNormalizedText(dialog, mouse: true, "是(Y)", "是", "确定", "确认");
                     handled = true;
                     continue;
@@ -3356,6 +3486,7 @@ Commands:
 
                 if (ContainsAny(text, "错误", "检查", "提示", "成功"))
                 {
+                    RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-ok", "script.confirm-info");
                     ClickButtonByNormalizedText(dialog, mouse: true, "确定", "确认", "是(Y)", "是");
                     handled = true;
                 }
@@ -3364,6 +3495,7 @@ Commands:
             if (!handled) break;
             Thread.Sleep(500);
         }
+        RecordOpenPopups(pid, "script.confirm");
     }
 
     private static void ConfigureMomentaryOperation(int pid, IntPtr dialog, string subTab, string comboText, string variable,
@@ -3798,6 +3930,7 @@ Commands:
 
     private static WorkflowProjectContext PrepareWorkflowProject(string[] args, string workflowName, string outDir)
     {
+        SetDialogEvidenceRoot(outDir);
         var sourceOpt = Opt(args, "--source");
         var projectOpt = Opt(args, "--project");
         if (!string.IsNullOrWhiteSpace(sourceOpt) && !string.IsNullOrWhiteSpace(projectOpt))

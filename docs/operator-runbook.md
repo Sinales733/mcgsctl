@@ -20,10 +20,14 @@ The candidate path is fixed:
 Final validators must run after the last mutating workflow:
 
 ```powershell
-tools\mcgsctl\mcgsctl.ps1 profile check --workdir .mcgsctl-work\e2e
+tools\mcgsctl\mcgsctl.ps1 profile check --workdir .mcgsctl-work\e2e --profile profiles\local-mcgs-7.7-smart200.json
 tools\mcgsctl\mcgsctl.ps1 workflow run project.check --project .mcgsctl-work\e2e\candidate.MCE --fail-on-warning
 tools\mcgsctl\mcgsctl.ps1 workflow run safety.verify --project .mcgsctl-work\e2e\candidate.MCE --spec safety-spec.json --evidence-dir .mcgsctl-work\e2e --awl FG2HMI.awl
 ```
+
+`profile-check.json` records editor SHA/bitness, mcgsctl bitness, OS/runtime facts, DPI, and Smart200 DLL SHA. Profile drift is `UNKNOWN` and blocks apply.
+
+`safety.verify` reads `candidate-final\mce` and the workflow evidence. It blocks direct dangerous `Q` mappings, duplicate Smart200 mappings, missing momentary press/release readback evidence, and missing required AWL evidence.
 
 ## 3. Summarize And Validate
 
@@ -38,6 +42,18 @@ Review:
 .mcgsctl-work\e2e\candidate-summary.md
 .mcgsctl-work\e2e\candidate-summary.json
 .mcgsctl-work\e2e\candidate-final\
+.mcgsctl-work\e2e\dialogs.jsonl
+.mcgsctl-work\e2e\popups.jsonl
+.mcgsctl-work\e2e\startup-dialogs.jsonl
+```
+
+Typical blocked reasons:
+
+```text
+profile-check.json status is UNKNOWN
+safety-result.json status is FAIL
+project-check/check-result.json is not later than the last mutating workflow
+candidate-summary.verdict is not apply-ready
 ```
 
 ## 4. Approve

@@ -51,6 +51,7 @@ Write-capable workflows use a common safety gate:
 - `audit-start.json` redacts `--text` script bodies by default and records only SHA256/length. Use `--audit-include-script-text` only for local debugging.
 - Write workflows export `mce-before`, `mce-after`, and, where applicable, `mce-reopen` evidence so PASS depends on a before/after delta instead of a global string contains check.
 - Unexpected property/script dialogs fail closed. Unknown script objects are not auto-created unless `--allow-create-dataobjects` is supplied.
+- GUI workflows record dialog evidence in `dialogs.jsonl`, `popups.jsonl`, and `startup-dialogs.jsonl`. Any automatically clicked dialog records title, body, buttons, action, and screenshot path.
 - `script.edit --allow-create-dataobjects` requires `--expected-new-dataobjects <name[,name...]>`; the saved Data-table delta must match exactly.
 - `device.channel.map --skip-reopen-verify` is disabled unless `--debug-allow-skip-reopen-verify` is also supplied.
 - `device.channel.map` refuses expected quick-connect variables that already exist unless `--allow-existing-variables` is supplied.
@@ -78,7 +79,7 @@ Write-capable workflows use a common safety gate:
 Use these commands after the last mutating workflow:
 
 ```powershell
-tools\mcgsctl\mcgsctl.ps1 profile check --workdir .mcgsctl-work\e2e
+tools\mcgsctl\mcgsctl.ps1 profile check --workdir .mcgsctl-work\e2e --profile profiles\local-mcgs-7.7-smart200.json
 tools\mcgsctl\mcgsctl.ps1 workflow run project.check --project .mcgsctl-work\e2e\candidate.MCE --fail-on-warning
 tools\mcgsctl\mcgsctl.ps1 workflow run safety.verify --project .mcgsctl-work\e2e\candidate.MCE --spec safety-spec.json --evidence-dir .mcgsctl-work\e2e --awl FG2HMI.awl
 tools\mcgsctl\mcgsctl.ps1 candidate summarize --workdir .mcgsctl-work\e2e
@@ -86,6 +87,19 @@ tools\mcgsctl\mcgsctl.ps1 candidate validate --workdir .mcgsctl-work\e2e
 ```
 
 `candidate summarize` verifies the mutation SHA chain, exports `candidate-final\mce`, writes an approval template, and marks the candidate `apply-ready` only when all required final validators are `PASS` and newer than the last mutation.
+
+`profile check` writes `profile-check.json` with the editor path/SHA, editor PE bitness, mcgsctl process bitness, Windows/runtime facts, DPI, and Smart200 DLL path/SHA when found. A profile mismatch is `UNKNOWN`, and `--allow-profile-drift` is diagnostics-only: the candidate remains blocked.
+
+`safety.verify` reads `candidate-final\mce`, `workflow-results`, `profile-check.json`, `project-check\check-result.json`, and `safety-spec.json`. It fails direct HMI/control mappings to dangerous `Q` outputs, duplicate Smart200 address/variable mappings, and newly changed momentary variables without press/release readback evidence. `requiresAwl=true` without `--awl`, or AWL evidence that cannot prove a required check, returns `UNKNOWN`.
+
+Common blocked summaries:
+
+```text
+blocked: profile-check.json status is UNKNOWN
+blocked: safety-result.json status is FAIL
+blocked: project-check/check-result.json is not later than the last mutating workflow
+blocked: mutation chain mismatch at workflow-results/0002-...
+```
 
 Formal apply is file-level replacement only:
 
@@ -130,8 +144,8 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `realtime-db.add`: adds one realtime database object through the GUI, rejects pre-existing names, saves, exports before/after/reopen snapshots, and verifies the added `Data` row plus base properties. Verified types are currently `switch` and `numeric`; `string`, `event`, and `group` fail until their type codes are profiled.
 - `window.button.add-momentary`: creates a standard button, configures press set-1 and release clear-0 operations through the MCGS variable picker, saves, reopens the working copy, reads the button property page, and verifies press/release operations plus empty script text.
 - `device.channel.map`: opens the Smart200 device editor, checks duplicate target channels, adds PLC channels, optionally quick-connects variables, saves, closes, reopens the working copy, and verifies the Smart200 channel table again.
-- `script.edit`: creates a standard button, opens the script editor, writes script text, refuses unknown objects unless an expected object whitelist is supplied, runs optional script check, saves, exports before/after/reopen snapshots, and verifies script tokens plus Data-table deltas.
-- `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, and verifies label/expression evidence.
+- `script.edit`: creates a standard button, opens the script editor, writes script text, refuses unknown objects unless an expected object whitelist is supplied, requires `--check` for production candidates, saves, exports before/after/reopen snapshots, and verifies script tokens plus Data-table deltas.
+- `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, reopens the property page, and verifies label/expression evidence plus no operation and empty script state. It is not a native lamp workflow.
 
 ## Verification Limits
 
