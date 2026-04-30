@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 internal static partial class Program
 {
@@ -69,12 +70,27 @@ internal static partial class Program
         public Dictionary<string, string> ResultSha256 { get; } = new(StringComparer.OrdinalIgnoreCase);
         public DateTimeOffset MaxRequiredFinishedAt { get; set; } = DateTimeOffset.MinValue;
         public DateTimeOffset LastMutationFinishedAt { get; set; } = DateTimeOffset.MinValue;
+        public DateTimeOffset SummaryGeneratedAt { get; set; } = DateTimeOffset.MinValue;
         public string CandidateFinalExport { get; init; } = "candidate-final/mce";
     }
+
+    private sealed record Smart200ChannelFact(
+        string ChannelText,
+        string ParsedAddress,
+        string Variable,
+        string Access,
+        int RowIndex,
+        string ResultPath);
 
     private static JsonSerializerOptions ResultJsonOptions() => new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private static JsonSerializerOptions JsonlOptions() => new()
+    {
+        WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
@@ -137,7 +153,7 @@ internal static partial class Program
                 screenshot = screenshotRel
             };
             var path = Path.Combine(_dialogEvidenceRoot, stream);
-            File.AppendAllText(path, JsonSerializer.Serialize(record, ResultJsonOptions()) + Environment.NewLine, Encoding.UTF8);
+            File.AppendAllText(path, JsonSerializer.Serialize(record, JsonlOptions()) + Environment.NewLine, Encoding.UTF8);
         }
         catch
         {
@@ -219,6 +235,11 @@ internal static partial class Program
 
     private static string? ValidateResultDocument(JsonElement root, string actualCandidateSha, bool finalCandidateRequired)
     {
+        if (!TryParseRequiredDate(root, "startedAt", out var startedAt, out var startedError))
+            return startedError;
+        if (!TryParseRequiredDate(root, "finishedAt", out var finishedAt, out var finishedError))
+            return finishedError;
+        if (finishedAt < startedAt) return "finishedAt is earlier than startedAt";
         var status = JsonString(root, "status") ?? "";
         if (!IsValidResultStatus(status)) return "invalid result.status: " + status;
         if (!root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
@@ -251,7 +272,8 @@ internal static partial class Program
         WorkflowProjectContext context,
         string outDir,
         IEnumerable<ResultCheck> checks,
-        IEnumerable<string>? limitations = null)
+        IEnumerable<string>? limitations = null,
+        Dictionary<string, object?>? extra = null)
     {
         var limitationList = (limitations ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         var checkList = checks.ToArray();
@@ -264,23 +286,27 @@ internal static partial class Program
         var resultPath = Path.Combine(resultDir, context.OperationId + ".json");
         if (File.Exists(resultPath)) throw new InvalidOperationException("Workflow result already exists: " + resultPath);
         var relPath = RelativeResultPath(workDir, resultPath);
-        var doc = new
+        var doc = new Dictionary<string, object?>
         {
-            schemaVersion = 1,
-            kind = "workflow",
-            operationId = context.OperationId,
-            workflow = context.WorkflowName,
-            mutatesCandidate = true,
-            status,
-            sourceSha256 = context.SourceSha256,
-            candidate = context.Project,
-            candidateSha256Before = context.ProjectSha256Before,
-            candidateSha256After = afterSha,
-            startedAt = context.OperationStartedAt.ToString("O"),
-            finishedAt = finishedAt.ToString("O"),
-            checks = checkList,
-            limitations = limitationList
+            ["schemaVersion"] = 1,
+            ["kind"] = "workflow",
+            ["operationId"] = context.OperationId,
+            ["workflow"] = context.WorkflowName,
+            ["mutatesCandidate"] = true,
+            ["status"] = status,
+            ["sourceSha256"] = context.SourceSha256,
+            ["candidate"] = context.Project,
+            ["candidateSha256Before"] = context.ProjectSha256Before,
+            ["candidateSha256After"] = afterSha,
+            ["startedAt"] = context.OperationStartedAt.ToString("O"),
+            ["finishedAt"] = finishedAt.ToString("O"),
+            ["checks"] = checkList,
+            ["limitations"] = limitationList
         };
+        if (extra != null)
+        {
+            foreach (var kv in extra) doc[kv.Key] = kv.Value;
+        }
         File.WriteAllText(resultPath, JsonSerializer.Serialize(doc, ResultJsonOptions()), Encoding.UTF8);
         AppendWorkflowIndex(workDir, new WorkflowIndexEntry
         {
@@ -453,6 +479,7 @@ internal static partial class Program
         var actualSha = Sha256(candidate);
         var source = JsonString(marker, "source") ?? "";
         var sourceSha = JsonString(marker, "sourceSha256") ?? "";
+        var generatedAt = DateTimeOffset.Now;
         var summary = new CandidateSummaryBuild
         {
             WorkDir = workDir,
@@ -460,7 +487,8 @@ internal static partial class Program
             Source = source,
             SourceSha256 = sourceSha,
             FinalCandidateSha256 = actualSha,
-            GeneratedAt = DateTimeOffset.Now.ToString("O")
+            GeneratedAt = generatedAt.ToString("O"),
+            SummaryGeneratedAt = generatedAt
         };
 
         var initialSha = JsonString(marker, "initialWorkingCopySha256") ??
@@ -522,8 +550,9 @@ internal static partial class Program
             if (!before.Equals(previousAfter, StringComparison.OrdinalIgnoreCase))
                 summary.BlockedReasons.Add("mutation chain mismatch before " + operationId);
             previousAfter = after;
-            var finishedAt = ParseDate(JsonString(root, "finishedAt"));
-            if (finishedAt > summary.LastMutationFinishedAt) summary.LastMutationFinishedAt = finishedAt;
+            var finishedAt = TryGetValidFinishedAt(root);
+            if (finishedAt.HasValue && finishedAt.Value > summary.LastMutationFinishedAt)
+                summary.LastMutationFinishedAt = finishedAt.Value;
             summary.MutationChain.Add(new Dictionary<string, object?>
             {
                 ["operationId"] = operationId,
@@ -540,8 +569,8 @@ internal static partial class Program
                 ShaPolicy = "chain"
             });
             summary.ResultSha256[entry.Path] = Sha256(resultPath);
-            var finished = ParseDate(JsonString(root, "finishedAt"));
-            if (finished > summary.MaxRequiredFinishedAt) summary.MaxRequiredFinishedAt = finished;
+            if (finishedAt.HasValue && finishedAt.Value > summary.MaxRequiredFinishedAt)
+                summary.MaxRequiredFinishedAt = finishedAt.Value;
         }
         if (index.Count > 0 && !previousAfter.Equals(actualSha, StringComparison.OrdinalIgnoreCase))
             summary.BlockedReasons.Add("last mutation SHA does not match actual candidate SHA");
@@ -558,18 +587,20 @@ internal static partial class Program
             }
             using var resultDoc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
             var root = resultDoc.RootElement;
-            var finalMutates = root.TryGetProperty("mutatesCandidate", out var finalMutatesProp) &&
-                               finalMutatesProp.ValueKind == JsonValueKind.True;
-            if (finalMutates)
+            if (!root.TryGetProperty("mutatesCandidate", out var finalMutatesProp))
+                summary.BlockedReasons.Add(rel + " missing mutatesCandidate");
+            else if (finalMutatesProp.ValueKind != JsonValueKind.False)
                 summary.BlockedReasons.Add(rel + " mutatesCandidate must be false");
             var problem = ValidateResultDocument(root, actualSha, finalCandidateRequired: true);
             if (problem != null) summary.BlockedReasons.Add(rel + ": " + problem);
             var status = JsonString(root, "status") ?? "";
             if (status != "PASS") summary.BlockedReasons.Add(rel + " status is " + status);
-            var finishedAt = ParseDate(JsonString(root, "finishedAt"));
-            if (summary.LastMutationFinishedAt != DateTimeOffset.MinValue && finishedAt <= summary.LastMutationFinishedAt)
+            var finishedAt = TryGetValidFinishedAt(root);
+            if (summary.LastMutationFinishedAt != DateTimeOffset.MinValue &&
+                (!finishedAt.HasValue || finishedAt.Value <= summary.LastMutationFinishedAt))
                 summary.BlockedReasons.Add(rel + " is not later than the last mutating workflow");
-            if (finishedAt > summary.MaxRequiredFinishedAt) summary.MaxRequiredFinishedAt = finishedAt;
+            if (finishedAt.HasValue && finishedAt.Value > summary.MaxRequiredFinishedAt)
+                summary.MaxRequiredFinishedAt = finishedAt.Value;
             summary.RequiredResults.Add(new ApprovalRequiredResult
             {
                 Kind = rel.StartsWith("profile", StringComparison.OrdinalIgnoreCase) ? "profile" :
@@ -607,7 +638,10 @@ internal static partial class Program
         var root = doc.RootElement;
         var verdict = JsonString(root, "verdict") ?? "";
         var finalSha = JsonString(root, "finalCandidateSha256") ?? "";
-        var generatedAt = ParseDate(JsonString(root, "generatedAt"));
+        if (!TryParseRequiredDate(root, "generatedAt", out var generatedAt, out var generatedError))
+            summary.BlockedReasons.Add("candidate-summary.json: " + generatedError);
+        else
+            summary.SummaryGeneratedAt = generatedAt;
         if (verdict != "apply-ready") summary.BlockedReasons.Add("candidate-summary.verdict is not apply-ready");
         if (!finalSha.Equals(summary.FinalCandidateSha256, StringComparison.OrdinalIgnoreCase))
             summary.BlockedReasons.Add("candidate-summary finalCandidateSha256 does not match actual candidate");
@@ -669,8 +703,46 @@ internal static partial class Program
             JsonSerializer.Serialize(approval, ResultJsonOptions()), Encoding.UTF8);
     }
 
-    private static DateTimeOffset ParseDate(string? value)
-        => DateTimeOffset.TryParse(value, out var parsed) ? parsed : DateTimeOffset.MinValue;
+    private static bool TryParseRequiredDate(JsonElement root, string property, out DateTimeOffset value, out string error)
+    {
+        value = default;
+        error = "";
+        var raw = JsonString(root, property);
+        if (string.IsNullOrWhiteSpace(raw) || !DateTimeOffset.TryParse(raw, out value))
+        {
+            error = "invalid or missing " + property;
+            return false;
+        }
+        return true;
+    }
+
+    private static DateTimeOffset? TryGetValidFinishedAt(JsonElement root)
+    {
+        if (!TryParseRequiredDate(root, "startedAt", out var startedAt, out _)) return null;
+        if (!TryParseRequiredDate(root, "finishedAt", out var finishedAt, out _)) return null;
+        return finishedAt >= startedAt ? finishedAt : null;
+    }
+
+    private static bool SamePathForApproval(string approvalPath, string summaryPath)
+    {
+        if (string.IsNullOrWhiteSpace(approvalPath) || string.IsNullOrWhiteSpace(summaryPath)) return false;
+        try
+        {
+            return Path.GetFullPath(approvalPath).Equals(Path.GetFullPath(summaryPath), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return approvalPath.Equals(summaryPath, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string ReadSha256Sidecar(string path)
+    {
+        if (!File.Exists(path)) return "";
+        var text = File.ReadAllText(path, Encoding.UTF8).Trim();
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return text.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+    }
 
     private static List<string> ValidateApproval(string approvalPath, CandidateSummaryBuild summary, bool forApply)
     {
@@ -683,9 +755,24 @@ internal static partial class Program
             op.Equals("template", StringComparison.OrdinalIgnoreCase) ||
             op.Equals("TODO", StringComparison.OrdinalIgnoreCase))
             problems.Add("approval.operator is not a real operator");
-        var approvedAt = ParseDate(JsonString(root, "approvedAt"));
-        if (approvedAt == DateTimeOffset.MinValue) problems.Add("approval.approvedAt is not a valid ISO-8601 timestamp");
-        if (approvedAt < summary.MaxRequiredFinishedAt) problems.Add("approval.approvedAt is older than required result finishedAt");
+        var approvedAtRaw = JsonString(root, "approvedAt");
+        if (string.IsNullOrWhiteSpace(approvedAtRaw) || !DateTimeOffset.TryParse(approvedAtRaw, out var approvedAt))
+        {
+            problems.Add("approval.approvedAt is not a valid ISO-8601 timestamp");
+        }
+        else
+        {
+            if (approvedAt < summary.MaxRequiredFinishedAt)
+                problems.Add("approval.approvedAt is older than required result finishedAt");
+            if (summary.SummaryGeneratedAt != DateTimeOffset.MinValue && approvedAt < summary.SummaryGeneratedAt)
+                problems.Add("approval.approvedAt is older than candidate-summary.generatedAt");
+        }
+        var approvalSource = JsonString(root, "source") ?? "";
+        if (!SamePathForApproval(approvalSource, summary.Source))
+            problems.Add("approval source path does not match candidate summary");
+        var approvalCandidate = JsonString(root, "candidate") ?? "";
+        if (!SamePathForApproval(approvalCandidate, summary.Candidate))
+            problems.Add("approval candidate path does not match candidate summary");
         var approvalCandidateSha = JsonString(root, "candidateSha256") ?? "";
         if (!approvalCandidateSha.Equals(summary.FinalCandidateSha256, StringComparison.OrdinalIgnoreCase))
             problems.Add("approval candidateSha256 does not match final candidate");
@@ -883,7 +970,7 @@ internal static partial class Program
 
     private static int Profile(string[] args)
     {
-        if (args.Length < 2) return Fail("Usage: mcgsctl profile check (--project <mce>|--workdir <runDir>) [--out <json>]");
+        if (args.Length < 2) return Fail("Usage: mcgsctl profile check (--project <mce>|--workdir <runDir>) --profile <profile.json> [--facts-only] [--out <json>]");
         if (!args[1].Equals("check", StringComparison.OrdinalIgnoreCase))
             return Fail("Unknown profile command: " + args[1]);
         try
@@ -927,14 +1014,14 @@ internal static partial class Program
                 checks.Add(RequiredPass("smart200-dll-found", smart200Dll));
             if (profilePath == null)
             {
-                limitations.Add("profile-baseline: no --profile baseline was supplied; captured local facts only");
-                checks.Add(new ResultCheck
-                {
-                    Name = "profile-baseline",
-                    Status = "WARNING",
-                    Required = false,
-                    Message = "No profile baseline was supplied."
-                });
+                var factsOnly = Has(args, "--facts-only");
+                limitations.Add(factsOnly
+                    ? "profile-baseline: --facts-only captures local facts for diagnostics; apply remains blocked"
+                    : "profile-baseline: no --profile baseline was supplied; profile lock cannot be proven");
+                checks.Add(RequiredUnknown("profile-baseline",
+                    factsOnly
+                        ? "--facts-only was used; profile facts are diagnostic only."
+                        : "No --profile baseline was supplied; profile lock cannot be proven."));
             }
             else
             {
@@ -1087,14 +1174,23 @@ internal static partial class Program
                 OperationStartedAt: DateTimeOffset.Now);
             var checks = new List<ResultCheck>();
             var limitations = new List<string>();
-            var candidateFinal = Path.Combine(evidenceDir, "candidate-final", "mce");
+            var currentCandidateSha = Sha256(project);
+            var candidateFinalRoot = Path.Combine(evidenceDir, "candidate-final");
+            var candidateFinal = Path.Combine(candidateFinalRoot, "mce");
+            var candidateFinalShaPath = Path.Combine(candidateFinalRoot, "candidate.sha256");
             MceSnapshot? finalSnapshot = null;
-            if (!Directory.Exists(candidateFinal))
+            var candidateFinalMatches = Directory.Exists(candidateFinal) &&
+                                        ReadSha256Sidecar(candidateFinalShaPath)
+                                            .Equals(currentCandidateSha, StringComparison.OrdinalIgnoreCase);
+            if (!candidateFinalMatches)
             {
                 try
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(candidateFinal)!);
+                    if (Directory.Exists(candidateFinal)) Directory.Delete(candidateFinal, recursive: true);
+                    Directory.CreateDirectory(candidateFinalRoot);
                     finalSnapshot = ExportMceSnapshot(project, candidateFinal);
+                    File.WriteAllText(candidateFinalShaPath, currentCandidateSha + "  candidate.MCE", Encoding.UTF8);
+                    checks.Add(RequiredPass("candidate-final-export", "candidate-final/mce refreshed for current candidate SHA"));
                 }
                 catch (Exception ex)
                 {
@@ -1104,7 +1200,7 @@ internal static partial class Program
             else
             {
                 finalSnapshot = LoadMceSnapshot(candidateFinal);
-                checks.Add(RequiredPass("candidate-final-export", "candidate-final/mce exists"));
+                checks.Add(RequiredPass("candidate-final-export", "candidate-final/mce matches current candidate SHA"));
             }
 
             using var specDoc = JsonDocument.Parse(File.ReadAllText(spec, Encoding.UTF8));
@@ -1140,6 +1236,7 @@ internal static partial class Program
     private static IEnumerable<ResultCheck> SafetySpecHeuristicChecks(JsonElement specRoot, string evidenceDir, MceSnapshot? finalSnapshot)
     {
         var checks = new List<ResultCheck>();
+        var smart200Facts = LoadSmart200ChannelFacts(evidenceDir, out var sawDeviceChannelResult, out var missingSmart200Facts);
         var dangerousOutputs = specRoot.TryGetProperty("dangerousOutputs", out var dangerous) &&
                                dangerous.ValueKind == JsonValueKind.Array
             ? dangerous.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => !string.IsNullOrWhiteSpace(x))
@@ -1149,6 +1246,12 @@ internal static partial class Program
             plc.TryGetProperty("addressPlan", out var plan) &&
             plan.ValueKind == JsonValueKind.Array)
         {
+            var plcType = JsonString(plc, "type") ?? "";
+            var requiresSmart200Evidence = plcType.Contains("Smart200", StringComparison.OrdinalIgnoreCase);
+            if (requiresSmart200Evidence)
+            {
+                checks.AddRange(Smart200ChannelEvidenceChecks(plan, smart200Facts, sawDeviceChannelResult, missingSmart200Facts));
+            }
             var seenAddresses = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var seenVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in plan.EnumerateArray())
@@ -1214,11 +1317,32 @@ internal static partial class Program
             : Array.Empty<string>();
         foreach (var file in results)
         {
-            var text = File.ReadAllText(file, Encoding.UTF8);
-            if (text.Contains(dataObject, StringComparison.OrdinalIgnoreCase) &&
-                text.Contains("momentary-press-release", StringComparison.OrdinalIgnoreCase) &&
-                text.Contains("\"status\": \"PASS\"", StringComparison.OrdinalIgnoreCase))
-                return "pass";
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("controlEvidence", out var evidence) ||
+                    evidence.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var item in evidence.EnumerateArray())
+                {
+                    var itemObject = JsonString(item, "dataObject") ?? "";
+                    if (!itemObject.Equals(dataObject, StringComparison.OrdinalIgnoreCase)) continue;
+                    var type = JsonString(item, "type") ?? "";
+                    var press = JsonString(item, "press") ?? "";
+                    var release = JsonString(item, "release") ?? "";
+                    var readback = JsonString(item, "readback") ?? "";
+                    if (type.Equals("momentary", StringComparison.OrdinalIgnoreCase) &&
+                        press.Equals("set1", StringComparison.OrdinalIgnoreCase) &&
+                        release.Equals("clear0", StringComparison.OrdinalIgnoreCase) &&
+                        readback.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                        return "pass";
+                }
+            }
+            catch
+            {
+                // Malformed workflow results are handled by candidate validation.
+            }
         }
         return "missing";
     }
@@ -1230,11 +1354,147 @@ internal static partial class Program
             : Array.Empty<string>();
         return results.Any(file =>
         {
-            var text = File.ReadAllText(file, Encoding.UTF8);
-            return text.Contains(dataObject, StringComparison.OrdinalIgnoreCase) &&
-                   ContainsAny(text, "realtime-db.add", "window.button.add-momentary", "device.channel.map", "script.edit");
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
+                var root = doc.RootElement;
+                return JsonArrayContainsString(root, "touchedDataObjects", dataObject) ||
+                       JsonArrayContainsString(root, "createdDataObjects", dataObject) ||
+                       JsonArrayContainsString(root, "modifiedDataObjects", dataObject) ||
+                       ControlEvidenceContainsDataObject(root, dataObject);
+            }
+            catch
+            {
+                return false;
+            }
         });
     }
+
+    private static IEnumerable<ResultCheck> Smart200ChannelEvidenceChecks(JsonElement addressPlan,
+        IReadOnlyList<Smart200ChannelFact> facts, bool sawDeviceChannelResult, bool missingFacts)
+    {
+        var checks = new List<ResultCheck>();
+        if (!sawDeviceChannelResult || missingFacts || facts.Count == 0)
+        {
+            checks.Add(RequiredUnknown("smart200-channel-evidence",
+                "Smart200 address plan requires structured device.channel.map smart200Channels evidence."));
+            return checks;
+        }
+
+        foreach (var group in facts.Where(f => !string.IsNullOrWhiteSpace(f.ParsedAddress))
+                     .GroupBy(f => NormalizePlcAddress(f.ParsedAddress), StringComparer.OrdinalIgnoreCase))
+        {
+            var variables = group.Select(f => f.Variable)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (variables.Length > 1)
+                checks.Add(RequiredFail("smart200-address-conflict:" + group.Key,
+                    group.Key + " maps to multiple variables: " + string.Join(", ", variables)));
+        }
+
+        foreach (var group in facts.Where(f => !string.IsNullOrWhiteSpace(f.Variable))
+                     .GroupBy(f => f.Variable, StringComparer.OrdinalIgnoreCase))
+        {
+            var addresses = group.Select(f => NormalizePlcAddress(f.ParsedAddress))
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (addresses.Length > 1)
+                checks.Add(RequiredFail("smart200-variable-conflict:" + group.Key,
+                    group.Key + " maps to multiple PLC addresses: " + string.Join(", ", addresses)));
+        }
+
+        foreach (var item in addressPlan.EnumerateArray())
+        {
+            var address = NormalizePlcAddress(JsonString(item, "address") ?? "");
+            var dataObject = JsonString(item, "dataObject") ?? "";
+            if (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(dataObject)) continue;
+            var addressFacts = facts.Where(f => NormalizePlcAddress(f.ParsedAddress).Equals(address, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (addressFacts.Length == 0)
+            {
+                checks.Add(RequiredFail("smart200-address-missing:" + address,
+                    "Smart200 channel evidence does not contain spec address " + address));
+                continue;
+            }
+            if (!addressFacts.Any(f => f.Variable.Equals(dataObject, StringComparison.OrdinalIgnoreCase)))
+            {
+                checks.Add(RequiredFail("smart200-address-variable-mismatch:" + address,
+                    "Spec maps " + address + " to " + dataObject + " but evidence maps it to " +
+                    string.Join(", ", addressFacts.Select(f => f.Variable).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase))));
+            }
+        }
+
+        if (checks.Count == 0)
+            checks.Add(RequiredPass("smart200-channel-evidence", "Structured Smart200 channel evidence matches safety spec."));
+        return checks;
+    }
+
+    private static IReadOnlyList<Smart200ChannelFact> LoadSmart200ChannelFacts(string evidenceDir,
+        out bool sawDeviceChannelResult, out bool missingFacts)
+    {
+        sawDeviceChannelResult = false;
+        missingFacts = false;
+        var facts = new List<Smart200ChannelFact>();
+        var index = Directory.Exists(evidenceDir) ? LoadWorkflowIndex(evidenceDir) : new List<WorkflowIndexEntry>();
+        foreach (var entry in index.Where(e => e.Workflow.Equals("device.channel.map", StringComparison.OrdinalIgnoreCase)))
+        {
+            sawDeviceChannelResult = true;
+            var path = Path.Combine(evidenceDir, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+            {
+                missingFacts = true;
+                continue;
+            }
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("smart200Channels", out var channels) ||
+                    channels.ValueKind != JsonValueKind.Array ||
+                    channels.GetArrayLength() == 0)
+                {
+                    missingFacts = true;
+                    continue;
+                }
+                foreach (var item in channels.EnumerateArray())
+                {
+                    facts.Add(new Smart200ChannelFact(
+                        JsonString(item, "channelText") ?? "",
+                        NormalizePlcAddress(JsonString(item, "parsedAddress") ?? ""),
+                        JsonString(item, "variable") ?? "",
+                        JsonString(item, "access") ?? "",
+                        item.TryGetProperty("rowIndex", out var rowIndex) && rowIndex.TryGetInt32(out var parsedIndex)
+                            ? parsedIndex
+                            : -1,
+                        entry.Path));
+                }
+            }
+            catch
+            {
+                missingFacts = true;
+            }
+        }
+        return facts;
+    }
+
+    private static bool JsonArrayContainsString(JsonElement root, string property, string expected)
+    {
+        if (!root.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array) return false;
+        return array.EnumerateArray().Any(item =>
+            item.ValueKind == JsonValueKind.String &&
+            (item.GetString() ?? "").Equals(expected, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool ControlEvidenceContainsDataObject(JsonElement root, string expected)
+    {
+        if (!root.TryGetProperty("controlEvidence", out var array) || array.ValueKind != JsonValueKind.Array) return false;
+        return array.EnumerateArray().Any(item =>
+            (JsonString(item, "dataObject") ?? "").Equals(expected, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizePlcAddress(string value)
+        => Regex.Replace(value ?? "", @"\s+", "").ToUpperInvariant();
 
     private static int Safety(string[] args)
     {

@@ -88,7 +88,9 @@ tools\mcgsctl\mcgsctl.ps1 candidate validate --workdir .mcgsctl-work\e2e
 
 `candidate summarize` verifies the mutation SHA chain, exports `candidate-final\mce`, writes an approval template, and marks the candidate `apply-ready` only when all required final validators are `PASS` and newer than the last mutation.
 
-`profile check` writes `profile-check.json` with the editor path/SHA, editor PE bitness, mcgsctl process bitness, Windows/runtime facts, DPI, and Smart200 DLL path/SHA when found. A profile mismatch is `UNKNOWN`, and `--allow-profile-drift` is diagnostics-only: the candidate remains blocked.
+`candidate-summary.json.resultSha256` records required result hashes but does not include the summary file's own hash. `approval.template.json.resultSha256` adds the `candidate-summary.json` hash, so approval locks both the summary and every required result file.
+
+`profile check` writes `profile-check.json` with the editor path/SHA, editor PE bitness, mcgsctl process bitness, Windows/runtime facts, DPI, and Smart200 DLL path/SHA when found. A `--profile` baseline is required for a publishable `PASS`; without it the result is `UNKNOWN`. A profile mismatch is `UNKNOWN`, and `--allow-profile-drift` is diagnostics-only: the candidate remains blocked.
 
 `safety.verify` reads `candidate-final\mce`, `workflow-results`, `profile-check.json`, `project-check\check-result.json`, and `safety-spec.json`. It fails direct HMI/control mappings to dangerous `Q` outputs, duplicate Smart200 address/variable mappings, and newly changed momentary variables without press/release readback evidence. `requiresAwl=true` without `--awl`, or AWL evidence that cannot prove a required check, returns `UNKNOWN`.
 

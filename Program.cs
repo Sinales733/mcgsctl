@@ -136,7 +136,7 @@ Commands:
   mcgsctl verify --project <mce> --spec <json>
   mcgsctl candidate summarize --workdir <runDir>
   mcgsctl candidate validate --workdir <runDir> [--approval <approval.json>]
-  mcgsctl profile check (--project <candidate.mce>|--workdir <runDir>) [--allow-profile-drift]
+  mcgsctl profile check (--project <candidate.mce>|--workdir <runDir>) --profile <profile.json> [--facts-only] [--allow-profile-drift]
   mcgsctl safety scan-awl --file <plc.awl> --spec <safety-spec.json>
   mcgsctl workflow run project.check (--source <mce>|--project <copy.mce>|--pid <pid>) [--workdir <dir>] [--out <dir>] [--allow-attached]
   mcgsctl workflow run project.check-save (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
@@ -1465,6 +1465,12 @@ Commands:
             {
                 found ? RequiredPass("data-object-delta", objectName) : RequiredFail("data-object-delta", "Data object delta or fields did not match."),
                 reopenVerified ? RequiredPass("reopen-readback", objectName) : RequiredFail("reopen-readback", "Reopened Data table did not match expected object fields.")
+            }, extra: new Dictionary<string, object?>
+            {
+                ["touchedDataObjects"] = new[] { objectName },
+                ["createdDataObjects"] = new[] { objectName },
+                ["modifiedDataObjects"] = Array.Empty<string>(),
+                ["controlEvidence"] = Array.Empty<object>()
             });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
@@ -1674,6 +1680,22 @@ Commands:
                     ? RequiredPass("momentary-press-release:" + variable, "press=set1, release=clear0")
                     : RequiredFail("momentary-press-release:" + variable, "Momentary press/release property readback failed."),
                 reopenVerified ? RequiredPass("reopen-readback", label) : RequiredFail("reopen-readback", "Reopen readback failed.")
+            }, extra: new Dictionary<string, object?>
+            {
+                ["touchedDataObjects"] = new[] { variable },
+                ["createdDataObjects"] = Array.Empty<string>(),
+                ["modifiedDataObjects"] = new[] { variable },
+                ["controlEvidence"] = new[]
+                {
+                    new
+                    {
+                        type = "momentary",
+                        dataObject = variable,
+                        press = "set1",
+                        release = "clear0",
+                        readback = propertyReadbackVerified ? "PASS" : "FAIL"
+                    }
+                }
             });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
@@ -1901,14 +1923,23 @@ Commands:
 
             saved = true;
             var reopenVerified = true;
+            DeviceChannelRow[] reopenRows = Array.Empty<DeviceChannelRow>();
             if (!skipReopenVerify)
             {
                 CloseEditorProcess(process.Id, main, saveIntent: true);
                 process = null;
                 main = IntPtr.Zero;
                 reopenVerified = ReopenVerifyDeviceChannelMap(project, editor, deviceText, expectedChannels,
-                    expectedVariables, outDir, timeout);
+                    expectedVariables, outDir, timeout, out reopenRows);
             }
+            else
+            {
+                reopenRows = targetRows;
+            }
+            var smart200Channels = BuildSmart200ChannelEvidence(
+                reopenRows.Length > 0 ? reopenRows : targetRows,
+                expectedChannels,
+                expectedVariables);
 
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
@@ -1939,7 +1970,8 @@ Commands:
                     dataObjectsDeltaVerified,
                     guiRowsVerified,
                     guiVariablesVerified,
-                    reopenVerified
+                    reopenVerified,
+                    smart200Channels
                 }, JsonOptions()),
                 Encoding.UTF8);
 
@@ -1953,6 +1985,13 @@ Commands:
                 guiRowsVerified ? RequiredPass("smart200-channel-rows") : RequiredFail("smart200-channel-rows", "Expected Smart200 rows were not visible in GUI table."),
                 dataObjectsDeltaVerified ? RequiredPass("quick-connect-data-objects") : RequiredFail("quick-connect-data-objects", "Quick-connect Data object delta did not match."),
                 reopenVerified ? RequiredPass("reopen-readback") : RequiredFail("reopen-readback", "Reopened Smart200 channel table did not match expected rows.")
+            }, extra: new Dictionary<string, object?>
+            {
+                ["smart200Channels"] = smart200Channels,
+                ["touchedDataObjects"] = expectedVariables,
+                ["createdDataObjects"] = expectedVariables,
+                ["modifiedDataObjects"] = Array.Empty<string>(),
+                ["controlEvidence"] = Array.Empty<object>()
             });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine(passed
@@ -2132,7 +2171,14 @@ Commands:
                     : RequiredUnknown("status-button-property-readback", "Status-button property readback failed or was incomplete.")
             }, indicatorReadbackVerified
                 ? new[] { "indicator is a status-button, not a native lamp" }
-                : new[] { "status-button property readback incomplete; native lamp is not implemented" });
+                : new[] { "status-button property readback incomplete; native lamp is not implemented" },
+                new Dictionary<string, object?>
+                {
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>()
+                });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -2364,6 +2410,12 @@ Commands:
                 scriptFound ? RequiredPass("script-token-delta") : RequiredFail("script-token-delta", "Expected script token was not found."),
                 newDataObjectsVerified ? RequiredPass("script-new-dataobjects-delta") : RequiredFail("script-new-dataobjects-delta", "New Data object delta did not match expected whitelist."),
                 reopenVerified ? RequiredPass("reopen-readback") : RequiredFail("reopen-readback", "Reopen token evidence did not match.")
+            }, extra: new Dictionary<string, object?>
+            {
+                ["touchedDataObjects"] = newDataObjects,
+                ["createdDataObjects"] = newDataObjects,
+                ["modifiedDataObjects"] = Array.Empty<string>(),
+                ["controlEvidence"] = Array.Empty<object>()
             });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
@@ -2651,6 +2703,51 @@ Commands:
         File.WriteAllText(file, JsonSerializer.Serialize(rows, JsonOptions()), Encoding.UTF8);
     }
 
+    private static object[] BuildSmart200ChannelEvidence(DeviceChannelRow[] rows, string[] expectedChannels,
+        string[] expectedVariables)
+    {
+        var selected = rows
+            .Where(row =>
+                expectedChannels.Any(expected =>
+                    row.Texts.Any(text => text.Equals(expected, StringComparison.OrdinalIgnoreCase) ||
+                                          text.Contains(expected, StringComparison.OrdinalIgnoreCase))) ||
+                expectedVariables.Any(expected =>
+                    row.Texts.Any(text => text.Equals(expected, StringComparison.OrdinalIgnoreCase))))
+            .GroupBy(RowSignature)
+            .Select(group => group.First())
+            .OrderBy(row => row.ListIndex)
+            .ToArray();
+
+        return selected.Select(row =>
+        {
+            var channelText = row.Channel;
+            return new
+            {
+                channelText,
+                parsedAddress = ParseSmart200ChannelAddress(channelText),
+                variable = row.Variable,
+                access = ParseSmart200ChannelAccess(channelText),
+                rowIndex = row.ListIndex
+            };
+        }).ToArray<object>();
+    }
+
+    private static string ParseSmart200ChannelAddress(string channelText)
+    {
+        var match = Regex.Match(channelText ?? "", @"([A-Za-z][A-Za-z0-9]*\d+(?:\.\d+)?)");
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : "";
+    }
+
+    private static string ParseSmart200ChannelAccess(string channelText)
+    {
+        var text = (channelText ?? "").Trim();
+        foreach (var prefix in new[] { "读写", "只读", "只写", "读", "写" })
+        {
+            if (text.StartsWith(prefix, StringComparison.Ordinal)) return prefix;
+        }
+        return "";
+    }
+
     private static string DeviceAreaToChannelType(string area)
         => area switch
         {
@@ -2913,8 +3010,10 @@ Commands:
     }
 
     private static bool ReopenVerifyDeviceChannelMap(string project, string editor, string deviceText,
-        string[] expectedChannels, string[] expectedVariables, string outDir, TimeSpan timeout)
+        string[] expectedChannels, string[] expectedVariables, string outDir, TimeSpan timeout,
+        out DeviceChannelRow[] reopenRows)
     {
+        reopenRows = Array.Empty<DeviceChannelRow>();
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         try
@@ -2934,6 +3033,7 @@ Commands:
             var deviceDialog = OpenDeviceEditor(process.Id, tree, deviceText, timeout);
             var list = FindDeviceChannelList(deviceDialog);
             var rows = ReadDeviceChannelRows(list);
+            reopenRows = rows;
             WriteDeviceRows(Path.Combine(outDir, "channels-reopen.json"), rows);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "05-reopen-verify"));
 

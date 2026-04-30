@@ -25,7 +25,7 @@ tools\mcgsctl\mcgsctl.ps1 workflow run project.check --project .mcgsctl-work\e2e
 tools\mcgsctl\mcgsctl.ps1 workflow run safety.verify --project .mcgsctl-work\e2e\candidate.MCE --spec safety-spec.json --evidence-dir .mcgsctl-work\e2e --awl FG2HMI.awl
 ```
 
-`profile-check.json` records editor SHA/bitness, mcgsctl bitness, OS/runtime facts, DPI, and Smart200 DLL SHA. Profile drift is `UNKNOWN` and blocks apply.
+`profile-check.json` records editor SHA/bitness, mcgsctl bitness, OS/runtime facts, DPI, and Smart200 DLL SHA. A `--profile` baseline is required for `PASS`; facts-only or drift results are `UNKNOWN` and block apply.
 
 `safety.verify` reads `candidate-final\mce` and the workflow evidence. It blocks direct dangerous `Q` mappings, duplicate Smart200 mappings, missing momentary press/release readback evidence, and missing required AWL evidence.
 
@@ -46,6 +46,8 @@ Review:
 .mcgsctl-work\e2e\popups.jsonl
 .mcgsctl-work\e2e\startup-dialogs.jsonl
 ```
+
+`candidate-summary.json.resultSha256` does not include the summary file's own SHA. The generated `approval.template.json` includes `candidate-summary.json` in `resultSha256`, and apply validates that hash.
 
 Typical blocked reasons:
 
