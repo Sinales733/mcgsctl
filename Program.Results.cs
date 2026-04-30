@@ -332,9 +332,18 @@ internal static partial class Program
     {
         if (context.WorkDir == null) return;
         var limitationList = (limitations ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
-        var checkList = checks.ToArray();
+        var checkList = checks.ToList();
+        var candidateShaRead = TrySha256(context.Project, out var candidateShaReadError);
+        var candidateShaSource = "actual";
+        var candidateSha = candidateShaRead;
+        if (string.IsNullOrWhiteSpace(candidateSha))
+        {
+            candidateShaSource = "fallback-before";
+            candidateSha = context.ProjectSha256Before;
+            checkList.Add(RequiredUnknown("candidate-sha-read",
+                candidateShaReadError ?? "candidate SHA could not be read while writing final validator result"));
+        }
         var status = ComputeResultStatus(checkList, limitationList);
-        var candidateSha = TrySha256(context.Project, out _) ?? context.ProjectSha256Before;
         var doc = new Dictionary<string, object?>
         {
             ["schemaVersion"] = 1,
@@ -346,9 +355,12 @@ internal static partial class Program
             ["sourceSha256"] = context.SourceSha256,
             ["candidate"] = context.Project,
             ["candidateSha256"] = candidateSha,
+            ["candidateShaRead"] = candidateShaRead != null ? "PASS" : "UNKNOWN",
+            ["candidateShaSource"] = candidateShaSource,
+            ["candidateShaReadError"] = candidateShaReadError,
             ["startedAt"] = context.OperationStartedAt.ToString("O"),
             ["finishedAt"] = DateTimeOffset.Now.ToString("O"),
-            ["checks"] = checkList,
+            ["checks"] = checkList.ToArray(),
             ["limitations"] = limitationList
         };
         if (extra != null)
