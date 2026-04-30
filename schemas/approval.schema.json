@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcgsctl candidate approval",
+  "type": "object",
+  "required": ["schemaVersion", "operator", "approvedAt", "sourceSha256", "candidateSha256", "requiredResults", "resultSha256"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "operator": { "type": "string" },
+    "approvedAt": { "type": "string", "format": "date-time" },
+    "source": { "type": "string" },
+    "sourceSha256": { "type": "string" },
+    "candidate": { "type": "string" },
+    "candidateSha256": { "type": "string" },
+    "requiredResults": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path", "requiredStatus", "shaPolicy"],
+        "properties": {
+          "kind": { "type": "string" },
+          "path": { "type": "string" },
+          "requiredStatus": { "const": "PASS" },
+          "shaPolicy": { "enum": ["chain", "finalCandidate"] }
+        }
+      }
+    },
+    "resultSha256": { "type": "object", "additionalProperties": { "type": "string" } },
+    "notes": { "type": "string" }
+  }
+}

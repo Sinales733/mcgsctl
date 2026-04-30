@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcgsctl safety spec",
+  "type": "object",
+  "required": ["schemaVersion"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": { "type": "string" },
+    "plcStaticVerification": {
+      "type": "object",
+      "properties": {
+        "requiresAwl": { "type": "boolean" },
+        "unknownBlocksApply": { "type": "boolean" }
+      }
+    },
+    "plc": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "addressPlan": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["address", "dataObject"],
+            "properties": {
+              "address": { "type": "string" },
+              "dataObject": { "type": "string" },
+              "direction": { "type": "string" },
+              "kind": { "type": "string" },
+              "axis": { "type": "string" },
+              "opposes": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "dangerousOutputs": { "type": "array", "items": { "type": "string" } },
+    "heartbeat": { "type": "object" }
+  }
+}

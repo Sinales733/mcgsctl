@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcgsctl candidate summary",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "verdict", "sourceSha256", "candidate", "finalCandidateSha256", "candidateFinalExport", "mutationChain", "blockedReasons", "requiredResults"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "verdict": { "enum": ["apply-ready", "blocked"] },
+    "source": { "type": "string" },
+    "sourceSha256": { "type": "string" },
+    "candidate": { "type": "string" },
+    "finalCandidateSha256": { "type": "string" },
+    "candidateFinalExport": { "type": "string" },
+    "mutationChain": { "type": "array" },
+    "blockedReasons": { "type": "array", "items": { "type": "string" } },
+    "requiredResults": { "type": "array" }
+  }
+}

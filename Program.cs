@@ -14,7 +14,7 @@ internal static partial class Program
     private const uint SaveCommandId = 57603;
     private const uint CheckCommandId = 32786;
     private const string ProcessName = "McgsSetE";
-    private const string ToolVersion = "0.3.0";
+    private const string ToolVersion = "0.4.0";
 
     [STAThread]
     public static int Main(string[] args)
@@ -76,6 +76,9 @@ internal static partial class Program
                 "mce" => Mce(args),
                 "verify" => Verify(args),
                 "workflow" => Workflow(args),
+                "candidate" => Candidate(args),
+                "profile" => Profile(args),
+                "safety" => Safety(args),
                 _ => Fail($"Unknown command: {args[0]}")
             };
         }
@@ -131,8 +134,15 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
+  mcgsctl candidate summarize --workdir <runDir>
+  mcgsctl candidate validate --workdir <runDir> [--approval <approval.json>]
+  mcgsctl profile check (--project <candidate.mce>|--workdir <runDir>) [--allow-profile-drift]
+  mcgsctl safety scan-awl --file <plc.awl> --spec <safety-spec.json>
   mcgsctl workflow run project.check (--source <mce>|--project <copy.mce>|--pid <pid>) [--workdir <dir>] [--out <dir>] [--allow-attached]
   mcgsctl workflow run project.check-save (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
+  mcgsctl workflow run project.apply-candidate --source <official.mce> --candidate <candidate.mce> --approval <approval.json>
+  mcgsctl workflow run project.rollback --rollback <rollbackDir> --target <official.mce>
+  mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run device.channel.map (--source <mce>|--project <copy.mce>) --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>]
@@ -994,6 +1004,21 @@ Commands:
             return WorkflowProjectCheck(args, saveAfterPass: true);
         }
 
+        if (name.Equals("project.apply-candidate", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowProjectApplyCandidate(args);
+        }
+
+        if (name.Equals("project.rollback", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowProjectRollback(args);
+        }
+
+        if (name.Equals("safety.verify", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowSafetyVerify(args);
+        }
+
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowAddMomentaryButton(args);
@@ -1091,6 +1116,9 @@ Commands:
                 failOnWarning, maxWarnings);
             if (!check.Passed)
             {
+                if (workflowProject != null)
+                    WriteFinalValidatorResult(workflowProject, "project-check/check-result.json", "project-check", "project.check",
+                        ProjectCheckChecks(check), extra: ProjectCheckExtra(check));
                 WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
                 Console.WriteLine("workflow evidence: " + outDir);
                 Console.WriteLine(check.Unknown
@@ -1110,6 +1138,9 @@ Commands:
             }
 
             success = true;
+            if (workflowProject != null)
+                WriteFinalValidatorResult(workflowProject, "project-check/check-result.json", "project-check", "project.check",
+                    ProjectCheckChecks(check), extra: ProjectCheckExtra(check));
             WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             var warningText = check.WarningCount > 0 ? $" with {check.WarningCount} warning(s)" : "";
@@ -1425,6 +1456,11 @@ Commands:
                 Encoding.UTF8);
 
             success = found && reopenVerified;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                found ? RequiredPass("data-object-delta", objectName) : RequiredFail("data-object-delta", "Data object delta or fields did not match."),
+                reopenVerified ? RequiredPass("reopen-readback", objectName) : RequiredFail("reopen-readback", "Reopened Data table did not match expected object fields.")
+            });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success ? "realtime db add verification: PASS" : "realtime db add verification: CHECK EVIDENCE");
@@ -1625,6 +1661,15 @@ Commands:
                 Encoding.UTF8);
 
             success = labelFound && variableFound && propertyReadbackVerified && reopenVerified;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                labelFound ? RequiredPass("button-label-token", label) : RequiredFail("button-label-token", "Button label was not found in MCE evidence."),
+                variableFound ? RequiredPass("button-variable-token", variable) : RequiredFail("button-variable-token", "Variable token was not found in MCE evidence."),
+                propertyReadbackVerified
+                    ? RequiredPass("momentary-press-release:" + variable, "press=set1, release=clear0")
+                    : RequiredFail("momentary-press-release:" + variable, "Momentary press/release property readback failed."),
+                reopenVerified ? RequiredPass("reopen-readback", label) : RequiredFail("reopen-readback", "Reopen readback failed.")
+            });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -1897,6 +1942,13 @@ Commands:
             var passed = guiRowsVerified && guiVariablesVerified && variableStringsFound && dataObjectsDeltaVerified &&
                          channelDeltaVerified && reopenVerified;
             success = passed;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                channelDeltaVerified ? RequiredPass("smart200-channel-row-delta") : RequiredFail("smart200-channel-row-delta", "Smart200 channel row delta did not match expected count."),
+                guiRowsVerified ? RequiredPass("smart200-channel-rows") : RequiredFail("smart200-channel-rows", "Expected Smart200 rows were not visible in GUI table."),
+                dataObjectsDeltaVerified ? RequiredPass("quick-connect-data-objects") : RequiredFail("quick-connect-data-objects", "Quick-connect Data object delta did not match."),
+                reopenVerified ? RequiredPass("reopen-readback") : RequiredFail("reopen-readback", "Reopened Smart200 channel table did not match expected rows.")
+            });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine(passed
                 ? "device channel map verification: PASS"
@@ -2062,6 +2114,13 @@ Commands:
                 Encoding.UTF8);
 
             success = labelFound && expressionFound && reopenVerified;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                labelFound ? RequiredPass("status-button-label-token", label) : RequiredFail("status-button-label-token", "Status-button label was not found."),
+                expressionFound ? RequiredPass("status-button-expression-token", expression) : RequiredFail("status-button-expression-token", "Visibility expression token was not found."),
+                reopenVerified ? RequiredPass("reopen-token-preserved") : RequiredFail("reopen-token-preserved", "Reopen token evidence did not match."),
+                RequiredUnknown("visibility-expression-readback", "Native GUI visibility expression readback is not implemented yet; status-button is not a native lamp.")
+            }, new[] { "visibility-expression-readback: status-button evidence only; native lamp is not implemented" });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -2285,7 +2344,15 @@ Commands:
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            success = labelFound && scriptFound && newDataObjectsVerified && reopenVerified;
+            success = labelFound && scriptFound && newDataObjectsVerified && reopenVerified && checkScript;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                checkScript ? RequiredPass("script-check-requested") : RequiredUnknown("script-check-requested", "script.edit requires --check for production candidates."),
+                labelFound ? RequiredPass("script-button-label-token", label) : RequiredFail("script-button-label-token", "Script button label was not found."),
+                scriptFound ? RequiredPass("script-token-delta") : RequiredFail("script-token-delta", "Expected script token was not found."),
+                newDataObjectsVerified ? RequiredPass("script-new-dataobjects-delta") : RequiredFail("script-new-dataobjects-delta", "New Data object delta did not match expected whitelist."),
+                reopenVerified ? RequiredPass("reopen-readback") : RequiredFail("reopen-readback", "Reopen token evidence did not match.")
+            });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             Console.WriteLine(success
@@ -3713,15 +3780,20 @@ Commands:
         string ProjectSha256Before,
         string? SourceSha256,
         bool CreatedCopy,
-        bool ProfilingCopy);
+        bool ProfilingCopy,
+        string WorkflowName,
+        string OperationId,
+        DateTimeOffset OperationStartedAt);
 
     private sealed record WorkflowWorkspaceMarker(
+        int SchemaVersion,
         string CreatedBy,
-        string Workflow,
         string Source,
         string SourceSha256,
         string WorkingCopy,
-        string WorkingCopySha256Before,
+        string InitialWorkingCopySha256,
+        string CurrentCandidateSha256,
+        string MutationResultsIndex,
         DateTimeOffset CreatedAt);
 
     private static WorkflowProjectContext PrepareWorkflowProject(string[] args, string workflowName, string outDir)
@@ -3740,10 +3812,16 @@ Commands:
             EnsureNoReparsePoint(Path.GetDirectoryName(workDir) ?? Environment.CurrentDirectory, "workdir parent");
             EnsureSourceCanBeCopied(source, Has(args, "--allow-copy-open-source"));
             var sourceShaBefore = Sha256(source);
+            if (Directory.Exists(workDir) && File.Exists(Path.Combine(workDir, CandidateFileName)))
+            {
+                if (!Has(args, "--replace-workdir"))
+                    throw new InvalidOperationException("Workdir already contains candidate.MCE. Continue with --project <workdir>\\candidate.MCE or pass --replace-workdir.");
+                EnsureReplaceWorkdirIsSafe(workDir);
+                Directory.Delete(workDir, recursive: true);
+            }
             Directory.CreateDirectory(workDir);
             EnsureNoReparsePoint(workDir, "workdir");
-            var copyName = Path.GetFileNameWithoutExtension(source) + "-" + SafeFile(workflowName) + "-" + Timestamp() + Path.GetExtension(source);
-            var project = Path.Combine(workDir, copyName);
+            var project = Path.Combine(workDir, CandidateFileName);
             File.Copy(source, project, overwrite: false);
             EnsureNoReparsePoint(project, "working copy");
             var sourceShaAfter = Sha256(source);
@@ -3761,10 +3839,19 @@ Commands:
             }
 
             var workspaceMarkerPath = Path.Combine(workDir, "mcgsctl-workspace.json");
-            var marker = new WorkflowWorkspaceMarker("mcgsctl", workflowName, source, sourceShaAfter, project, workingProjectSha, DateTimeOffset.Now);
+            var marker = new WorkflowWorkspaceMarker(
+                1,
+                "mcgsctl",
+                source,
+                sourceShaAfter,
+                project,
+                workingProjectSha,
+                workingProjectSha,
+                "workflow-results/index.json",
+                DateTimeOffset.Now);
             File.WriteAllText(workspaceMarkerPath, JsonSerializer.Serialize(marker, JsonOptions()), Encoding.UTF8);
             var context = new WorkflowProjectContext(project, source, workDir, workspaceMarkerPath, workingProjectSha, sourceShaAfter,
-                CreatedCopy: true, ProfilingCopy: false);
+                CreatedCopy: true, ProfilingCopy: false, workflowName, NewOperationId(workDir, workflowName), DateTimeOffset.Now);
             WriteWorkflowAuditStart(outDir, workflowName, context, args);
             return context;
         }
@@ -3778,9 +3865,19 @@ Commands:
         var underWork = IsPathUnder(existingProject, FullPath(".mcgsctl-work"));
         var underCodexTmp = IsPathUnder(existingProject, FullPath(".codex_tmp"));
         string? markerPath = null;
+        string? workDirFromMarker = null;
+        string? sourceFromMarker = null;
+        string? sourceSha = null;
         if (underWork)
         {
             markerPath = ValidateWorkflowWorkspaceMarker(existingProject);
+            workDirFromMarker = Path.GetDirectoryName(markerPath);
+            if (workDirFromMarker != null && File.Exists(markerPath))
+            {
+                using var markerDoc = JsonDocument.Parse(File.ReadAllText(markerPath, Encoding.UTF8));
+                sourceFromMarker = JsonString(markerDoc.RootElement, "source");
+                sourceSha = JsonString(markerDoc.RootElement, "sourceSha256");
+            }
         }
         else if (!underCodexTmp)
         {
@@ -3804,10 +3901,19 @@ Commands:
             }
         }
 
-        var directContext = new WorkflowProjectContext(existingProject, null, null, markerPath, projectSha, null,
-            CreatedCopy: false, ProfilingCopy: underCodexTmp);
+        var directContext = new WorkflowProjectContext(existingProject, sourceFromMarker, workDirFromMarker, markerPath, projectSha, sourceSha,
+            CreatedCopy: false, ProfilingCopy: underCodexTmp, workflowName,
+            NewOperationId(workDirFromMarker ?? outDir, workflowName), DateTimeOffset.Now);
         WriteWorkflowAuditStart(outDir, workflowName, directContext, args);
         return directContext;
+    }
+
+    private static void EnsureReplaceWorkdirIsSafe(string workDir)
+    {
+        var full = Path.GetFullPath(workDir);
+        if (!IsPathUnder(full, FullPath(".mcgsctl-work")) && !IsPathUnder(full, FullPath(".codex_tmp")))
+            throw new InvalidOperationException("--replace-workdir is only allowed under .mcgsctl-work or .codex_tmp.");
+        EnsureNoReparsePoint(full, "replace workdir");
     }
 
     private static bool IsWorkflowCopyProject(string project)
@@ -3815,13 +3921,9 @@ Commands:
 
     private static string ValidateWorkflowWorkspaceMarker(string project)
     {
-        var workRoot = Path.GetFullPath(".mcgsctl-work");
         var directory = Path.GetDirectoryName(Path.GetFullPath(project)) ??
                         throw new InvalidOperationException("Project directory was not found.");
-        while (IsPathUnder(directory, workRoot) || string.Equals(
-                   Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                   Path.GetFullPath(workRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                   StringComparison.OrdinalIgnoreCase))
+        while (true)
         {
             var markerPath = Path.Combine(directory, "mcgsctl-workspace.json");
             if (File.Exists(markerPath))
@@ -3845,7 +3947,7 @@ Commands:
             directory = parent.FullName;
         }
 
-        throw new InvalidOperationException("Projects under .mcgsctl-work require a matching mcgsctl-workspace.json marker.");
+        throw new InvalidOperationException("Project requires a matching mcgsctl-workspace.json marker.");
     }
 
     private static void EnsureSourceCanBeCopied(string source, bool allowOpenSource)

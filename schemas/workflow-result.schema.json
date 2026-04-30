@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcgsctl workflow or validator result",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "operationId", "mutatesCandidate", "status", "candidate", "startedAt", "finishedAt", "checks", "limitations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "type": "string" },
+    "operationId": { "type": "string" },
+    "workflow": { "type": "string" },
+    "mutatesCandidate": { "type": "boolean" },
+    "status": { "enum": ["PASS", "FAIL", "UNKNOWN"] },
+    "sourceSha256": { "type": ["string", "null"] },
+    "candidate": { "type": "string" },
+    "candidateSha256Before": { "type": "string" },
+    "candidateSha256After": { "type": "string" },
+    "candidateSha256": { "type": "string" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "required"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_REQUESTED", "WARNING"] },
+          "required": { "type": "boolean" },
+          "message": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mutatesCandidate": { "const": true } } },
+      "then": { "required": ["candidateSha256Before", "candidateSha256After"] }
+    },
+    {
+      "if": { "properties": { "mutatesCandidate": { "const": false } } },
+      "then": { "required": ["candidateSha256"] }
+    }
+  ]
+}

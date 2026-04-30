@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcgsctl MCGS profile",
+  "type": "object",
+  "required": ["schemaVersion", "mcgs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mcgs": {
+      "type": "object",
+      "properties": {
+        "processName": { "type": "string" },
+        "mainTitleContains": { "type": "string" },
+        "language": { "type": "string" },
+        "mcgsSetExeSha256": { "type": "string" },
+        "expectedDpi": { "type": "integer" }
+      }
+    },
+    "drivers": { "type": "object" },
+    "dialogs": { "type": "object" }
+  }
+}

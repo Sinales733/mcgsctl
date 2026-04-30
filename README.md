@@ -1,4 +1,4 @@
-﻿# mcgsctl
+# mcgsctl
 
 `mcgsctl` is a local CLI helper for the MCGS embedded editor used by the FG2 HMI project.
 
@@ -10,27 +10,27 @@ Design rules:
 
 ## Quick Start
 
-From this repository root:
+From the FG2 repository root:
 
 ```powershell
-.\\mcgsctl.ps1 doctor --project FG2_HMI.MCE
-.\\mcgsctl.ps1 --version
-.\\mcgsctl.ps1 mce export --project FG2_HMI.MCE --out .mcgsctl-runs\export
-.\\mcgsctl.ps1 snapshot --project FG2_HMI.MCE --out .mcgsctl-runs\snapshot
-.\\mcgsctl.ps1 workflow run project.check --source FG2_HMI.MCE --fail-on-warning
-.\\mcgsctl.ps1 open --project FG2_HMI.MCE
-.\\mcgsctl.ps1 menus
-.\\mcgsctl.ps1 command --id 57603 --send
+tools\mcgsctl\mcgsctl.ps1 doctor --project FG2_HMI.MCE
+tools\mcgsctl\mcgsctl.ps1 --version
+tools\mcgsctl\mcgsctl.ps1 mce export --project FG2_HMI.MCE --out .mcgsctl-runs\export
+tools\mcgsctl\mcgsctl.ps1 snapshot --project FG2_HMI.MCE --out .mcgsctl-runs\snapshot
+tools\mcgsctl\mcgsctl.ps1 workflow run project.check --source FG2_HMI.MCE --fail-on-warning
+tools\mcgsctl\mcgsctl.ps1 open --project FG2_HMI.MCE
+tools\mcgsctl\mcgsctl.ps1 menus
+tools\mcgsctl\mcgsctl.ps1 command --id 57603 --send
 ```
 
 Write workflows should normally use `--source`:
 
 ```powershell
-.\\mcgsctl.ps1 workflow run realtime-db.add --source FG2_HMI.MCE --name HMI_UP --type switch --initial 0
-.\\mcgsctl.ps1 workflow run window.button.add-momentary --source FG2_HMI.MCE --text HMI_UP --variable HMI_UP --x 610 --y 320
-.\\mcgsctl.ps1 workflow run device.channel.map --source FG2_HMI.MCE --area V --address 603 --count 4 --data-type-index 0 --connect-base HMI_PTZ
-.\\mcgsctl.ps1 workflow run script.edit --source FG2_HMI.MCE --text "TEST_FLAG=1" --button-text SCRIPT_TEST --verify-token TEST_FLAG --check
-.\\mcgsctl.ps1 workflow run window.indicator.add --source FG2_HMI.MCE --text LIMIT_ON --expression LIMIT_EXPR
+tools\mcgsctl\mcgsctl.ps1 workflow run realtime-db.add --source FG2_HMI.MCE --workdir .mcgsctl-work\e2e --name HMI_UP --type switch --initial 0
+tools\mcgsctl\mcgsctl.ps1 workflow run window.button.add-momentary --project .mcgsctl-work\e2e\candidate.MCE --text HMI_UP --variable HMI_UP --x 610 --y 320
+tools\mcgsctl\mcgsctl.ps1 workflow run device.channel.map --source FG2_HMI.MCE --area V --address 603 --count 4 --data-type-index 0 --connect-base HMI_PTZ
+tools\mcgsctl\mcgsctl.ps1 workflow run script.edit --source FG2_HMI.MCE --text "TEST_FLAG=1" --button-text SCRIPT_TEST --verify-token TEST_FLAG --check
+tools\mcgsctl\mcgsctl.ps1 workflow run window.indicator.add --source FG2_HMI.MCE --text LIMIT_ON --expression LIMIT_EXPR
 ```
 
 `mcgsctl.cmd` provides the same interface for `cmd.exe`.
@@ -39,9 +39,11 @@ Write workflows should normally use `--source`:
 
 Write-capable workflows use a common safety gate:
 
-- Prefer `--source <official.mce>`. The tool copies the source into `.mcgsctl-work/<workflow>-<timestamp>/` and writes only that working copy.
+- Prefer `--source <official.mce> --workdir <runDir>`. The tool copies the source to `<runDir>\candidate.MCE` and writes only that working copy.
+- If `<runDir>\candidate.MCE` already exists, continue chained edits with `--project <runDir>\candidate.MCE`. Reusing `--source` for the same workdir fails unless `--replace-workdir` is explicit.
 - Before copying, `--source` refuses Access lock files (`.ldb` / `.laccdb`), requires exclusive read access, checks source SHA before and after copy, and requires the working-copy SHA to match.
-- Each `.mcgsctl-work` run writes `mcgsctl-workspace.json`; `--project <copy.mce>` under `.mcgsctl-work` must match that marker.
+- Each `.mcgsctl-work` run writes chain-aware `mcgsctl-workspace.json`; `--project <copy.mce>` under `.mcgsctl-work` must match that marker.
+- Successful mutating workflows append `workflow-results\<operationId>.json`, update `workflow-results\index.json`, and update `currentCandidateSha256` in the workspace marker.
 - `--project <copy.mce>` under `.codex_tmp` remains available for profiling evidence and is marked as a profiling copy in audit output.
 - Direct writes to any other `.MCE` require both `--allow-original` and `--expected-project-sha256 <sha256>`.
 - Source, workdir, and project paths containing junctions, symlinks, or other reparse points are rejected by default.
@@ -55,24 +57,70 @@ Write-capable workflows use a common safety gate:
 - `device.channel.map` refuses target Smart200 channels that already exist unless `--allow-existing-channels` is supplied, and fails if the same PLC address is mapped to a different expected variable.
 - `project.check-save --pid <pid>` requires `--allow-attached` because it can save an already-open editor instance.
 
+## Candidate Release Flow
+
+`mcgsctl` treats a release candidate as a directory, not just one `.MCE` file:
+
+```text
+.mcgsctl-work\<run>\
+  candidate.MCE
+  mcgsctl-workspace.json
+  workflow-results\
+  profile-check.json
+  project-check\check-result.json
+  safety-result.json
+  candidate-final\
+  candidate-summary.json
+  candidate-summary.md
+  approval.template.json
+```
+
+Use these commands after the last mutating workflow:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 profile check --workdir .mcgsctl-work\e2e
+tools\mcgsctl\mcgsctl.ps1 workflow run project.check --project .mcgsctl-work\e2e\candidate.MCE --fail-on-warning
+tools\mcgsctl\mcgsctl.ps1 workflow run safety.verify --project .mcgsctl-work\e2e\candidate.MCE --spec safety-spec.json --evidence-dir .mcgsctl-work\e2e --awl FG2HMI.awl
+tools\mcgsctl\mcgsctl.ps1 candidate summarize --workdir .mcgsctl-work\e2e
+tools\mcgsctl\mcgsctl.ps1 candidate validate --workdir .mcgsctl-work\e2e
+```
+
+`candidate summarize` verifies the mutation SHA chain, exports `candidate-final\mce`, writes an approval template, and marks the candidate `apply-ready` only when all required final validators are `PASS` and newer than the last mutation.
+
+Formal apply is file-level replacement only:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 workflow run project.apply-candidate --source FG2_HMI.MCE --candidate .mcgsctl-work\e2e\candidate.MCE --approval .mcgsctl-work\e2e\approval.json
+```
+
+Apply refuses `UNKNOWN`, missing results, result SHA mismatches, old final validators, official Access lock files, and candidate/official path equality. It creates a rollback package before `File.Replace`.
+
+Rollback:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 workflow run project.rollback --rollback <rollbackDir> --target FG2_HMI.MCE
+```
+
+Rollback requires the current official SHA to match the applied candidate SHA unless `--expected-current-sha256 <sha>` is supplied.
+
 ## Diagnostics
 
 The tool includes low-level Win32/MFC diagnostics used to profile old MCGS dialogs:
 
 ```powershell
-.\\mcgsctl.ps1 windows
-.\\mcgsctl.ps1 children --pid <pid> --class Button
-.\\mcgsctl.ps1 find --pid <pid> --class SysTreeView32 --index 0
-.\\mcgsctl.ps1 treeview --hwnd 0x123456 --caret
-.\\mcgsctl.ps1 treeview --hwnd 0x123456 --notify-selchanged-text Smart200 --send
-.\\mcgsctl.ps1 toolbar --hwnd 0x123456
-.\\mcgsctl.ps1 listview --hwnd 0x123456 --double-text Smart200 --mouse
-.\\mcgsctl.ps1 popup --pid <pid> --open-hwnd 0x123456 --x 20 --y 20 --choose-id 32785 --exact --mouse
-.\\mcgsctl.ps1 capture --out .mcgsctl-runs\capture
-.\\mcgsctl.ps1 modules --pid <pid> --filter Smart200
-.\\mcgsctl.ps1 wndproc --hwnd 0x123456
-.\\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\Siemens\Smart200\Smart200.dll --filter SvrEdit
-.\\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter internal
+tools\mcgsctl\mcgsctl.ps1 windows
+tools\mcgsctl\mcgsctl.ps1 children --pid <pid> --class Button
+tools\mcgsctl\mcgsctl.ps1 find --pid <pid> --class SysTreeView32 --index 0
+tools\mcgsctl\mcgsctl.ps1 treeview --hwnd 0x123456 --caret
+tools\mcgsctl\mcgsctl.ps1 treeview --hwnd 0x123456 --notify-selchanged-text Smart200 --send
+tools\mcgsctl\mcgsctl.ps1 toolbar --hwnd 0x123456
+tools\mcgsctl\mcgsctl.ps1 listview --hwnd 0x123456 --double-text Smart200 --mouse
+tools\mcgsctl\mcgsctl.ps1 popup --pid <pid> --open-hwnd 0x123456 --x 20 --y 20 --choose-id 32785 --exact --mouse
+tools\mcgsctl\mcgsctl.ps1 capture --out .mcgsctl-runs\capture
+tools\mcgsctl\mcgsctl.ps1 modules --pid <pid> --filter Smart200
+tools\mcgsctl\mcgsctl.ps1 wndproc --hwnd 0x123456
+tools\mcgsctl\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\Siemens\Smart200\Smart200.dll --filter SvrEdit
+tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter internal
 ```
 
 ## Implemented Workflows
@@ -87,17 +135,24 @@ The tool includes low-level Win32/MFC diagnostics used to profile old MCGS dialo
 
 ## Verification Limits
 
-`blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Indicator and script workflows still rely on MCE delta plus reopen export for some properties, so production edits still need evidence review.
+`blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Indicator status buttons are not native MCGS lamp objects. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
 
 ## Release Build
 
 Development entrypoints use `dotnet run`. For a fixed release build:
 
 ```powershell
-.\\publish.ps1
+tools\mcgsctl\publish.ps1
 ```
 
-The release is written to `dist\\win-x64\\` with `mcgsctl.exe`, `mcgsctl.exe.sha256`, `SHA256SUMS.txt`, `version.json`, and dependency notes. Because this is a framework-dependent .NET build, `SHA256SUMS.txt` includes the assembly DLL hash as the code-bearing artifact.
+The release writes both:
+
+```text
+tools\mcgsctl\dist\win-x86\
+tools\mcgsctl\dist\win-x64\
+```
+
+Both include `docs`, `profiles`, `schemas`, `java`, `lib`, dependency notes, third-party notices, and hash manifests. Because these are framework-dependent .NET builds, the matching .NET 7 Windows Desktop Runtime must be installed for the selected architecture. Prefer `win-x86` for MCGS 7.7 when the x86 runtime is installed because old MFC/common-control remote structures are more reliable when the automation process bitness matches the 32-bit editor.
 
 ## Known Limits
 
