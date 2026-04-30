@@ -1852,7 +1852,7 @@ Commands:
             : BuildExpectedChannelTexts(access, area, address, count, dataTypeIndex);
         var expectedVariables = string.IsNullOrWhiteSpace(connectBase)
             ? Array.Empty<string>()
-            : Enumerable.Range(0, count).Select(i => connectBase + i.ToString("00")).ToArray();
+            : BuildExpectedQuickConnectVariables(connectBase, count);
         var allowExistingVariables = Has(args, "--allow-existing-variables");
         var allowExistingChannels = Has(args, "--allow-existing-channels");
 
@@ -2453,6 +2453,17 @@ Commands:
             var newDataObjectsVerified = allowCreateDataObjects
                 ? newDataObjects.SequenceEqual(expectedNewDataObjectsSorted, StringComparer.Ordinal)
                 : newDataObjects.Length == 0;
+            var touchedDataObjects = verifyTokens
+                .Concat(newDataObjects)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            var modifiedDataObjects = verifyTokens
+                .Where(name => beforeDataNames.Contains(name))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
             saved = true;
             CloseEditorProcess(process.Id, main, saveIntent: true);
             process = null;
@@ -2479,7 +2490,10 @@ Commands:
                     tokenDeltas,
                     labelFound,
                     scriptFound,
-                    reopenVerified
+                    reopenVerified,
+                    touchedDataObjects,
+                    createdDataObjects = newDataObjects,
+                    modifiedDataObjects
                 }, JsonOptions()),
                 Encoding.UTF8);
 
@@ -2493,9 +2507,9 @@ Commands:
                 reopenVerified ? RequiredPass("reopen-readback") : RequiredFail("reopen-readback", "Reopen token evidence did not match.")
             }, extra: new Dictionary<string, object?>
             {
-                ["touchedDataObjects"] = newDataObjects,
+                ["touchedDataObjects"] = touchedDataObjects,
                 ["createdDataObjects"] = newDataObjects,
-                ["modifiedDataObjects"] = Array.Empty<string>(),
+                ["modifiedDataObjects"] = modifiedDataObjects,
                 ["controlEvidence"] = Array.Empty<object>()
             });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
@@ -2859,6 +2873,15 @@ Commands:
         }
 
         return Array.Empty<string>();
+    }
+
+    private static string[] BuildExpectedQuickConnectVariables(string connectBase, int count)
+    {
+        if (count <= 0) return Array.Empty<string>();
+        if (count == 1) return new[] { connectBase };
+        return Enumerable.Range(0, count)
+            .Select(i => connectBase + i.ToString("00"))
+            .ToArray();
     }
 
     private static bool ClickButtonByNormalizedText(IntPtr root, bool mouse, params string[] labels)
