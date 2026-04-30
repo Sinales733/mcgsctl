@@ -334,7 +334,7 @@ internal static partial class Program
         var limitationList = (limitations ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         var checkList = checks.ToArray();
         var status = ComputeResultStatus(checkList, limitationList);
-        var candidateSha = Sha256(context.Project);
+        var candidateSha = TrySha256(context.Project, out _) ?? context.ProjectSha256Before;
         var doc = new Dictionary<string, object?>
         {
             ["schemaVersion"] = 1,
@@ -387,16 +387,16 @@ internal static partial class Program
         var root = doc.RootElement;
         var map = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["schemaVersion"] = JsonInt(root, "schemaVersion") ?? 1,
-            ["createdBy"] = JsonString(root, "createdBy") ?? "mcgsctl",
-            ["source"] = JsonString(root, "source") ?? "",
-            ["sourceSha256"] = JsonString(root, "sourceSha256") ?? "",
-            ["workingCopy"] = JsonString(root, "workingCopy") ?? "",
-            ["initialWorkingCopySha256"] = JsonString(root, "initialWorkingCopySha256") ??
-                                           JsonString(root, "workingCopySha256Before") ?? "",
+            ["schemaVersion"] = JsonInt(root, "schemaVersion") ?? JsonInt(root, "SchemaVersion") ?? 1,
+            ["createdBy"] = JsonMarkerString(root, "createdBy") ?? "mcgsctl",
+            ["source"] = JsonMarkerString(root, "source") ?? "",
+            ["sourceSha256"] = JsonMarkerString(root, "sourceSha256") ?? "",
+            ["workingCopy"] = JsonMarkerString(root, "workingCopy") ?? "",
+            ["initialWorkingCopySha256"] = JsonMarkerString(root, "initialWorkingCopySha256") ??
+                                           JsonMarkerString(root, "workingCopySha256Before") ?? "",
             ["currentCandidateSha256"] = currentSha,
-            ["mutationResultsIndex"] = JsonString(root, "mutationResultsIndex") ?? "workflow-results/index.json",
-            ["createdAt"] = JsonString(root, "createdAt") ?? DateTimeOffset.Now.ToString("O")
+            ["mutationResultsIndex"] = JsonMarkerString(root, "mutationResultsIndex") ?? "workflow-results/index.json",
+            ["createdAt"] = JsonMarkerString(root, "createdAt") ?? DateTimeOffset.Now.ToString("O")
         };
         File.WriteAllText(markerPath, JsonSerializer.Serialize(map, ResultJsonOptions()), Encoding.UTF8);
     }
@@ -474,11 +474,11 @@ internal static partial class Program
         if (!File.Exists(markerPath)) throw new FileNotFoundException("Missing workspace marker: " + markerPath);
         using var markerDoc = JsonDocument.Parse(File.ReadAllText(markerPath, Encoding.UTF8));
         var marker = markerDoc.RootElement;
-        var candidate = FullPath(JsonString(marker, "workingCopy") ?? Path.Combine(workDir, CandidateFileName));
+        var candidate = FullPath(JsonMarkerString(marker, "workingCopy") ?? Path.Combine(workDir, CandidateFileName));
         if (!File.Exists(candidate)) throw new FileNotFoundException("Missing candidate: " + candidate);
         var actualSha = Sha256(candidate);
-        var source = JsonString(marker, "source") ?? "";
-        var sourceSha = JsonString(marker, "sourceSha256") ?? "";
+        var source = JsonMarkerString(marker, "source") ?? "";
+        var sourceSha = JsonMarkerString(marker, "sourceSha256") ?? "";
         var generatedAt = DateTimeOffset.Now;
         var summary = new CandidateSummaryBuild
         {
@@ -491,9 +491,9 @@ internal static partial class Program
             SummaryGeneratedAt = generatedAt
         };
 
-        var initialSha = JsonString(marker, "initialWorkingCopySha256") ??
-                         JsonString(marker, "workingCopySha256Before") ?? "";
-        var markerCurrent = JsonString(marker, "currentCandidateSha256") ?? initialSha;
+        var initialSha = JsonMarkerString(marker, "initialWorkingCopySha256") ??
+                         JsonMarkerString(marker, "workingCopySha256Before") ?? "";
+        var markerCurrent = JsonMarkerString(marker, "currentCandidateSha256") ?? initialSha;
         if (!actualSha.Equals(markerCurrent, StringComparison.OrdinalIgnoreCase))
             summary.BlockedReasons.Add("marker.currentCandidateSha256 does not match actual candidate SHA");
 
@@ -742,6 +742,15 @@ internal static partial class Program
         var text = File.ReadAllText(path, Encoding.UTF8).Trim();
         if (string.IsNullOrWhiteSpace(text)) return "";
         return text.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+    }
+
+    private static string? JsonMarkerString(JsonElement root, string camelName)
+    {
+        var exact = JsonString(root, camelName);
+        if (exact != null) return exact;
+        if (string.IsNullOrEmpty(camelName)) return null;
+        var pascalName = char.ToUpperInvariant(camelName[0]) + camelName[1..];
+        return JsonString(root, pascalName);
     }
 
     private static List<string> ValidateApproval(string approvalPath, CandidateSummaryBuild summary, bool forApply)

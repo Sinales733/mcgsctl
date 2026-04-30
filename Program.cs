@@ -1079,6 +1079,9 @@ Commands:
         Process? process = null;
         IntPtr hwnd = IntPtr.Zero;
         string? project = null;
+        string? checkProject = null;
+        bool checkedTemporaryCopy = false;
+        string? checkedProjectSha256Before = null;
         var saved = false;
         var success = false;
 
@@ -1097,8 +1100,14 @@ Commands:
 
                 workflowProject = PrepareWorkflowProject(args, workflowName, outDir);
                 project = workflowProject.Project;
+                checkProject = project;
+                if (!saveAfterPass)
+                {
+                    checkProject = CreateProjectCheckCopy(workflowProject, outDir, out checkedProjectSha256Before);
+                    checkedTemporaryCopy = true;
+                }
                 var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-                process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+                process = Process.Start(new ProcessStartInfo(editor, Quote(checkProject))
                 {
                     UseShellExecute = true,
                     WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
@@ -1115,11 +1124,24 @@ Commands:
             var maxWarnings = OptInt(args, "--max-warnings");
             var check = RunProjectCheck(pid, hwnd, outDir, TimeSpan.FromSeconds(ParseInt(args, "--check-timeout", 8)),
                 failOnWarning, maxWarnings);
+            if (checkedTemporaryCopy && process != null && !process.HasExited)
+            {
+                CloseEditorProcess(process.Id, hwnd, saveIntent: false);
+                try { process.WaitForExit(5000); } catch { }
+                process = null;
+                hwnd = IntPtr.Zero;
+            }
+
+            var finalChecks = ProjectCheckChecks(check).ToList();
+            var finalExtra = ProjectCheckExtra(check);
+            AddProjectCheckCopyEvidence(workflowProject, checkedTemporaryCopy, checkProject,
+                checkedProjectSha256Before, finalChecks, finalExtra);
+
             if (!check.Passed)
             {
                 if (workflowProject != null)
                     WriteFinalValidatorResult(workflowProject, "project-check/check-result.json", "project-check", "project.check",
-                        ProjectCheckChecks(check), extra: ProjectCheckExtra(check));
+                        finalChecks, extra: finalExtra);
                 WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
                 Console.WriteLine("workflow evidence: " + outDir);
                 Console.WriteLine(check.Unknown
@@ -1141,7 +1163,7 @@ Commands:
             success = true;
             if (workflowProject != null)
                 WriteFinalValidatorResult(workflowProject, "project-check/check-result.json", "project-check", "project.check",
-                    ProjectCheckChecks(check), extra: ProjectCheckExtra(check));
+                    finalChecks, extra: finalExtra);
             WriteWorkflowAuditEndIfNeeded(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
             var warningText = check.WarningCount > 0 ? $" with {check.WarningCount} warning(s)" : "";
@@ -1165,6 +1187,59 @@ Commands:
             {
                 try { CloseEditorProcess(process.Id, hwnd, saveAfterPass && saved); } catch { }
             }
+        }
+    }
+
+    private static string CreateProjectCheckCopy(WorkflowProjectContext context, string outDir, out string copySha256)
+    {
+        var copyDir = Path.Combine(outDir, "project-check-copy");
+        Directory.CreateDirectory(copyDir);
+        var copy = Path.Combine(copyDir, "candidate-check.MCE");
+        File.Copy(context.Project, copy, overwrite: true);
+        copySha256 = Sha256(copy);
+        if (!copySha256.Equals(context.ProjectSha256Before, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Project check copy SHA256 does not match candidate SHA256 before check.");
+        File.WriteAllText(Path.Combine(copyDir, "candidate-check.sha256"),
+            copySha256 + "  candidate-check.MCE" + Environment.NewLine, Encoding.UTF8);
+        return copy;
+    }
+
+    private static void AddProjectCheckCopyEvidence(
+        WorkflowProjectContext? context,
+        bool checkedTemporaryCopy,
+        string? checkProject,
+        string? checkedProjectSha256Before,
+        List<ResultCheck> checks,
+        Dictionary<string, object?> extra)
+    {
+        if (!checkedTemporaryCopy || context == null || string.IsNullOrWhiteSpace(checkProject)) return;
+
+        var checkedProjectSha256After = TrySha256(checkProject, out var checkedProjectSha256AfterError);
+        var candidateSha256After = TrySha256(context.Project, out var candidateSha256AfterError);
+        extra["checkedTemporaryCopy"] = true;
+        extra["checkedProject"] = checkProject;
+        extra["checkedProjectSha256Before"] = checkedProjectSha256Before;
+        extra["checkedProjectSha256After"] = checkedProjectSha256After;
+        extra["checkedProjectSha256AfterError"] = checkedProjectSha256AfterError;
+        extra["candidateSha256DuringCheck"] = candidateSha256After;
+        extra["candidateSha256DuringCheckError"] = candidateSha256AfterError;
+
+        if (string.IsNullOrWhiteSpace(candidateSha256After))
+        {
+            checks.Add(RequiredUnknown("candidate-unchanged-during-project-check",
+                candidateSha256AfterError ?? "candidate SHA could not be read after project.check"));
+            return;
+        }
+
+        if (candidateSha256After.Equals(context.ProjectSha256Before, StringComparison.OrdinalIgnoreCase))
+        {
+            checks.Add(RequiredPass("candidate-unchanged-during-project-check",
+                "project.check ran against a temporary copy; candidate SHA was unchanged"));
+        }
+        else
+        {
+            checks.Add(RequiredFail("candidate-unchanged-during-project-check",
+                "candidate SHA changed during project.check final validation"));
         }
     }
 
@@ -1375,6 +1450,9 @@ Commands:
             });
             if (process == null) return Fail("Failed to open editor.");
             main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
 
             UiAutomation.SendCommand(main, 33957);
             Thread.Sleep(800);
@@ -1593,6 +1671,9 @@ Commands:
             });
             if (process == null) return Fail("Failed to open editor.");
             main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
 
             UiAutomation.SendCommand(main, 33955);
             Thread.Sleep(700);
@@ -2879,10 +2960,22 @@ Commands:
     private static void HandleStartupDialogs(int pid, TimeSpan timeout)
     {
         var until = DateTime.UtcNow + timeout;
+        var quietSince = DateTime.UtcNow;
         while (DateTime.UtcNow < until)
         {
             var handled = false;
-            foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32770"))
+            var dialogs = UiAutomation.TopWindowsForPid(pid)
+                .Where(h => Native.GetClass(h) == "#32770")
+                .ToArray();
+            if (dialogs.Length == 0)
+            {
+                if (DateTime.UtcNow - quietSince >= TimeSpan.FromMilliseconds(1200)) break;
+                Thread.Sleep(250);
+                continue;
+            }
+
+            quietSince = DateTime.UtcNow;
+            foreach (var dialog in dialogs)
             {
                 var title = Native.GetText(dialog);
                 var text = DialogText(dialog);
@@ -2908,6 +3001,7 @@ Commands:
 
             if (!handled) break;
             Thread.Sleep(700);
+            quietSince = DateTime.UtcNow;
         }
         RecordOpenPopups(pid, "startup");
     }
@@ -4108,8 +4202,8 @@ Commands:
             if (workDirFromMarker != null && File.Exists(markerPath))
             {
                 using var markerDoc = JsonDocument.Parse(File.ReadAllText(markerPath, Encoding.UTF8));
-                sourceFromMarker = JsonString(markerDoc.RootElement, "source");
-                sourceSha = JsonString(markerDoc.RootElement, "sourceSha256");
+                sourceFromMarker = JsonMarkerString(markerDoc.RootElement, "source");
+                sourceSha = JsonMarkerString(markerDoc.RootElement, "sourceSha256");
             }
         }
         else if (!underCodexTmp)
