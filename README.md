@@ -94,6 +94,18 @@ tools\mcgsctl\mcgsctl.ps1 candidate validate --workdir .mcgsctl-work\e2e
 
 `safety.verify` reads `candidate-final\mce`, `workflow-results`, `profile-check.json`, `project-check\check-result.json`, and `safety-spec.json`. It fails direct HMI/control mappings to dangerous `Q` outputs, duplicate Smart200 address/variable mappings, and newly changed momentary variables without press/release readback evidence. `requiresAwl=true` without `--awl`, or AWL evidence that cannot prove a required check, returns `UNKNOWN`.
 
+## Layout Preview And Apply
+
+The layout layer generates a simple, reviewable HMI control area from JSON. It does not write `.MCE` blobs directly.
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 layout validate --layout layouts\ptz-basic.json --safety safety-spec.json
+tools\mcgsctl\mcgsctl.ps1 layout preview --layout layouts\ptz-basic.json --out .mcgsctl-runs\layout-preview --safety safety-spec.json
+tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json
+```
+
+`layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` currently creates GUI-supported `momentary-button` and `status-button` objects by reusing the existing proven GUI workflows; `section-title` and `static-label` are preview evidence only until native/static text insertion is profiled. See `docs/layout-spec.md`.
+
 Common blocked summaries:
 
 ```text
@@ -148,10 +160,15 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `device.channel.map`: opens the Smart200 device editor, checks duplicate target channels, adds PLC channels, optionally quick-connects variables, saves, closes, reopens the working copy, and verifies the Smart200 channel table again.
 - `script.edit`: creates a standard button, opens the script editor, writes script text, refuses unknown objects unless an expected object whitelist is supplied, requires `--check` for production candidates, saves, exports before/after/reopen snapshots, and verifies script tokens plus Data-table deltas.
 - `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, reopens the property page, and verifies label/expression evidence plus no operation and empty script state. It is not a native lamp workflow.
+- `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
+- `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
+- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`) to a candidate by chaining the existing readback-verified GUI workflows.
 
 ## Verification Limits
 
 `blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Indicator status buttons are not native MCGS lamp objects. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
+
+Layout preview proves planned geometry and operator-readable structure only. A layout candidate is not release-ready until the underlying GUI workflow results, profile check, project.check, safety.verify, candidate summarize, and candidate validate all pass.
 
 ## Release Build
 

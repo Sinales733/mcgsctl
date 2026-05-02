@@ -75,6 +75,7 @@ internal static partial class Program
                 "snapshot" => Snapshot(args),
                 "mce" => Mce(args),
                 "verify" => Verify(args),
+                "layout" => Layout(args),
                 "workflow" => Workflow(args),
                 "candidate" => Candidate(args),
                 "profile" => Profile(args),
@@ -134,6 +135,9 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
+  mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--out <file-or-dir>]
+  mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>]
+  mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir>
   mcgsctl candidate summarize --workdir <runDir>
   mcgsctl candidate validate --workdir <runDir> [--approval <approval.json>]
   mcgsctl profile check (--project <candidate.mce>|--workdir <runDir>) --profile <profile.json> [--facts-only] [--allow-profile-drift]
@@ -143,6 +147,7 @@ Commands:
   mcgsctl workflow run project.apply-candidate --source <official.mce> --candidate <candidate.mce> --approval <approval.json>
   mcgsctl workflow run project.rollback --rollback <rollbackDir> --target <official.mce>
   mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
+  mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run device.channel.map (--source <mce>|--project <copy.mce>) --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>]
@@ -1017,6 +1022,11 @@ Commands:
         if (name.Equals("safety.verify", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowSafetyVerify(args);
+        }
+
+        if (name.Equals("window.layout.apply", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowLayoutApply(args);
         }
 
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
@@ -3495,7 +3505,7 @@ Commands:
             {
                 if (!Native.GetClass(h).Equals("Afx:400000:100b:0:6:0", StringComparison.OrdinalIgnoreCase)) return false;
                 var r = UiAutomation.GetWindowRect(h);
-                return r.Left > 0 && r.Width > 500;
+                return r.Width > 500 && r.Height > 250;
             });
         if (canvas == IntPtr.Zero) throw new InvalidOperationException("Animation canvas was not found.");
         return canvas;
