@@ -2136,6 +2136,7 @@ Commands:
         var width = ParseInt(args, "--width", 150);
         var height = ParseInt(args, "--height", 50);
         var invisibleWhenNonzero = Has(args, "--invisible-when-nonzero");
+        var syntheticLabel = Has(args, "--synthetic-label");
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "indicator-add-" + Timestamp()));
         Directory.CreateDirectory(outDir);
         var workflowProject = PrepareWorkflowProject(args, "window.indicator.add", outDir);
@@ -2230,7 +2231,8 @@ Commands:
             main = IntPtr.Zero;
             var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
                 "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
-            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, expression });
+            var reopenTokens = syntheticLabel ? new[] { label } : new[] { label, expression };
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, reopenTokens);
             var indicatorReadbackVerified = ReopenVerifyStatusButtonIndicator(project, editor, label, expression,
                 windowIndex, x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
             File.WriteAllText(Path.Combine(outDir, "result.json"),
@@ -2239,10 +2241,12 @@ Commands:
                     project,
                     label,
                     expression,
+                    syntheticLabel,
                     invisibleWhenNonzero,
                     windowIndex,
                     rectangle = new { x, y, width, height },
                     tokenDeltas,
+                    reopenTokens,
                     labelFound,
                     expressionIncreased,
                     expressionFound,
@@ -2261,7 +2265,9 @@ Commands:
                     ? RequiredPass("status-button-property-readback", "label, visibility expression, no operation, and empty script verified")
                     : RequiredUnknown("status-button-property-readback", "Status-button property readback failed or was incomplete.")
             }, indicatorReadbackVerified
-                ? new[] { "indicator is a status-button, not a native lamp" }
+                ? syntheticLabel
+                    ? new[] { "synthesized label is rendered as a status-button with constant visibility, not native static text" }
+                    : new[] { "indicator is a status-button, not a native lamp" }
                 : new[] { "status-button property readback incomplete; native lamp is not implemented" },
                 new Dictionary<string, object?>
                 {

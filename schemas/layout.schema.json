@@ -68,6 +68,7 @@
             "text": { "type": "string", "minLength": 1 },
             "variable": { "type": "string" },
             "expression": { "type": "string" },
+            "renderAs": { "type": "string", "enum": ["status-button", "preview-only"] },
             "windowIndex": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": true
@@ -83,6 +84,7 @@
           "properties": {
             "id": { "type": "string", "minLength": 1 },
             "title": { "type": "string", "minLength": 1 },
+            "titleRenderAs": { "type": "string", "enum": ["status-button", "preview-only"] },
             "layout": { "type": "string", "enum": ["direction-pad", "row"] },
             "controls": {
               "type": "array",

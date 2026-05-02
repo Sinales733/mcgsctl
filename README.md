@@ -104,7 +104,7 @@ tools\mcgsctl\mcgsctl.ps1 layout preview --layout layouts\ptz-basic.json --out .
 tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json
 ```
 
-`layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` currently creates GUI-supported `momentary-button` and `status-button` objects by reusing the existing proven GUI workflows; `section-title` and `static-label` are preview evidence only until native/static text insertion is profiled. See `docs/layout-spec.md`.
+`layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` creates GUI-supported `momentary-button` and `status-button` objects by reusing the existing proven GUI workflows. `section-title` and `static-label` are rendered as synthesized status-button labels by default, with no operation, empty script, and a constant visibility expression read back through the same verified property path. They are not native static text. See `docs/layout-spec.md`.
 
 Common blocked summaries:
 
@@ -162,7 +162,7 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, reopens the property page, and verifies label/expression evidence plus no operation and empty script state. It is not a native lamp workflow.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
-- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`) to a candidate by chaining the existing readback-verified GUI workflows.
+- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, and synthesized status-button labels for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows.
 
 ## Verification Limits
 

@@ -17,7 +17,22 @@ internal static partial class Program
         public int Width { get; set; }
         public int Height { get; set; }
         public string Source { get; set; } = "";
-        public bool GuiSupported => Kind is "momentary-button" or "status-button";
+        public string? RenderAs { get; set; }
+        public bool IsSyntheticText => Kind is "section-title" or "static-label";
+        public string GuiKind
+        {
+            get
+            {
+                if (Kind is "momentary-button" or "status-button") return Kind;
+                if (IsSyntheticText && !string.Equals(RenderAs, "preview-only", StringComparison.OrdinalIgnoreCase))
+                    return "status-button";
+                return Kind;
+            }
+        }
+        public string EffectiveExpression => GuiKind == "status-button"
+            ? (Expression ?? (IsSyntheticText ? "1" : ""))
+            : "";
+        public bool GuiSupported => GuiKind is "momentary-button" or "status-button";
     }
 
     private sealed class LayoutValidationResult
@@ -137,7 +152,7 @@ internal static partial class Program
             {
                 var objectDir = Path.Combine(outDir, "objects", SafeFile(obj.Id));
                 Directory.CreateDirectory(objectDir);
-                if (obj.Kind == "momentary-button")
+                if (obj.GuiKind == "momentary-button")
                 {
                     var ok = ReopenVerifyMomentaryButton(readbackProject, editor, obj.Text, obj.Variable ?? "", obj.WindowIndex,
                         obj.X, obj.Y, obj.Width, obj.Height, objectDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)),
@@ -152,9 +167,9 @@ internal static partial class Program
                         ["evidenceDir"] = objectDir
                     });
                 }
-                else if (obj.Kind == "status-button")
+                else if (obj.GuiKind == "status-button")
                 {
-                    var ok = ReopenVerifyStatusButtonIndicator(readbackProject, editor, obj.Text, obj.Expression ?? "",
+                    var ok = ReopenVerifyStatusButtonIndicator(readbackProject, editor, obj.Text, obj.EffectiveExpression,
                         obj.WindowIndex, obj.X, obj.Y, obj.Width, obj.Height, objectDir,
                         TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
                     objectResults.Add(new Dictionary<string, object?>
@@ -231,7 +246,7 @@ internal static partial class Program
 
             var guiObjects = validation.Objects.Where(o => o.GuiSupported).ToArray();
             if (guiObjects.Length == 0)
-                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button.");
+                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button, section-title/static-label rendered as status-button.");
 
             var source = Opt(args, "--source");
             var project = Opt(args, "--project");
@@ -252,7 +267,7 @@ internal static partial class Program
                 var childOut = Path.Combine(outDir, "objects", $"{i + 1:D2}-{SafeFile(obj.Id)}");
                 Directory.CreateDirectory(childOut);
                 var childArgs = BuildLayoutChildWorkflowArgs(args, obj, childOut, source, workDir, currentProject);
-                var exitCode = obj.Kind == "momentary-button"
+                var exitCode = obj.GuiKind == "momentary-button"
                     ? WorkflowAddMomentaryButton(childArgs)
                     : WorkflowWindowIndicatorAdd(childArgs);
                 if (exitCode == 0 && currentProject == null && !string.IsNullOrWhiteSpace(workDir))
@@ -261,6 +276,7 @@ internal static partial class Program
                 {
                     ["id"] = obj.Id,
                     ["kind"] = obj.Kind,
+                    ["guiKind"] = obj.GuiKind,
                     ["exitCode"] = exitCode,
                     ["outDir"] = childOut
                 });
@@ -288,6 +304,7 @@ internal static partial class Program
                     previewDir,
                     project = currentProject,
                     previewOnlyObjects = validation.Objects.Where(o => !o.GuiSupported).Select(o => new { o.Id, o.Kind, o.Text }).ToArray(),
+                    syntheticTextObjects = validation.Objects.Where(o => o.IsSyntheticText && o.GuiSupported).Select(o => new { o.Id, o.Kind, o.Text, o.RenderAs, guiKind = o.GuiKind, expression = o.EffectiveExpression }).ToArray(),
                     objects = childResults
                 }, ResultJsonOptions()), Encoding.UTF8);
             Console.WriteLine("layout apply evidence: " + outDir);
@@ -314,7 +331,7 @@ internal static partial class Program
         {
             "workflow",
             "run",
-            obj.Kind == "momentary-button" ? "window.button.add-momentary" : "window.indicator.add"
+            obj.GuiKind == "momentary-button" ? "window.button.add-momentary" : "window.indicator.add"
         };
         if (!string.IsNullOrWhiteSpace(source))
         {
@@ -332,7 +349,7 @@ internal static partial class Program
         args.Add(outDir);
         args.Add("--text");
         args.Add(obj.Text);
-        if (obj.Kind == "momentary-button")
+        if (obj.GuiKind == "momentary-button")
         {
             args.Add("--variable");
             args.Add(obj.Variable ?? "");
@@ -340,7 +357,9 @@ internal static partial class Program
         else
         {
             args.Add("--expression");
-            args.Add(obj.Expression ?? "");
+            args.Add(obj.EffectiveExpression);
+            if (obj.IsSyntheticText)
+                args.Add("--synthetic-label");
         }
         args.Add("--window-index");
         args.Add(obj.WindowIndex.ToString());
@@ -444,6 +463,7 @@ internal static partial class Program
                 Text = JsonString(obj, "text") ?? "",
                 Variable = JsonString(obj, "variable"),
                 Expression = JsonString(obj, "expression"),
+                RenderAs = JsonString(obj, "renderAs"),
                 WindowIndex = LayoutJsonInt(obj, "windowIndex") ?? defaultWindowIndex,
                 X = LayoutJsonInt(obj, "x") ?? 0,
                 Y = LayoutJsonInt(obj, "y") ?? 0,
@@ -473,6 +493,7 @@ internal static partial class Program
                     Id = sectionId + "-title",
                     Kind = "section-title",
                     Text = title,
+                    RenderAs = JsonString(section, "titleRenderAs") ?? JsonString(section, "renderAs"),
                     WindowIndex = windowIndex,
                     X = x + style.Grid,
                     Y = y + style.Grid,
@@ -497,6 +518,7 @@ internal static partial class Program
                     Text = JsonString(control, "text") ?? "",
                     Variable = JsonString(control, "variable"),
                     Expression = JsonString(control, "expression"),
+                    RenderAs = JsonString(control, "renderAs"),
                     WindowIndex = windowIndex,
                     X = rect.X,
                     Y = rect.Y,
@@ -512,7 +534,7 @@ internal static partial class Program
             for (var i = 0; i < indicators.Length; i++)
             {
                 var indicator = indicators[i];
-                var rect = RectForSectionItem(section, indicator, i, indicators.Length, "status-button", style, isIndicator: true);
+                var rect = RectForSectionIndicator(section, indicator, i, controls.Length, style);
                 yield return new LayoutObjectPlan
                 {
                     Id = JsonString(indicator, "id") ?? $"{sectionId}-indicator-{i + 1}",
@@ -520,6 +542,7 @@ internal static partial class Program
                     Text = JsonString(indicator, "text") ?? "",
                     Variable = JsonString(indicator, "variable"),
                     Expression = JsonString(indicator, "expression"),
+                    RenderAs = JsonString(indicator, "renderAs"),
                     WindowIndex = windowIndex,
                     X = rect.X,
                     Y = rect.Y,
@@ -596,6 +619,61 @@ internal static partial class Program
         };
     }
 
+    private static LayoutObjectPlan RectForSectionIndicator(
+        JsonElement section,
+        JsonElement item,
+        int index,
+        int controlCount,
+        LayoutStyle style)
+    {
+        if (LayoutJsonInt(item, "x").HasValue && LayoutJsonInt(item, "y").HasValue)
+        {
+            return new LayoutObjectPlan
+            {
+                X = LayoutJsonInt(item, "x")!.Value,
+                Y = LayoutJsonInt(item, "y")!.Value,
+                Width = LayoutJsonInt(item, "width") ?? style.StatusWidth,
+                Height = LayoutJsonInt(item, "height") ?? style.StatusHeight
+            };
+        }
+
+        var x = LayoutJsonInt(section, "x") ?? 0;
+        var y = LayoutJsonInt(section, "y") ?? 0;
+        var width = LayoutJsonInt(section, "width") ?? 300;
+        var height = LayoutJsonInt(section, "height") ?? 220;
+        var layout = JsonString(section, "layout") ?? "row";
+        var itemWidth = style.StatusWidth;
+        var itemHeight = style.StatusHeight;
+        var safeTop = y + style.TitleHeight + style.Grid * 2;
+
+        if (layout.Equals("direction-pad", StringComparison.OrdinalIgnoreCase))
+        {
+            return new LayoutObjectPlan
+            {
+                X = x + Math.Max(style.Grid, width - itemWidth - style.Grid),
+                Y = safeTop + index * (itemHeight + style.Grid),
+                Width = itemWidth,
+                Height = itemHeight
+            };
+        }
+
+        var maxPerRow = Math.Max(1, (width - style.Grid) / Math.Max(1, style.ButtonWidth + style.Grid));
+        var controlRows = Math.Max(1, (int)Math.Ceiling(Math.Max(1, controlCount) / (double)maxPerRow));
+        var candidateY = safeTop + controlRows * (style.ButtonHeight + style.Grid);
+        var bottomY = y + Math.Max(style.TitleHeight + style.Grid * 2, height - itemHeight - style.Grid);
+        var indicatorY = Math.Min(candidateY, bottomY);
+        var indicatorMaxPerRow = Math.Max(1, (width - style.Grid) / Math.Max(1, itemWidth + style.Grid));
+        var col = index % indicatorMaxPerRow;
+        var row = index / indicatorMaxPerRow;
+        return new LayoutObjectPlan
+        {
+            X = x + style.Grid + col * (itemWidth + style.Grid),
+            Y = indicatorY + row * (itemHeight + style.Grid),
+            Width = itemWidth,
+            Height = itemHeight
+        };
+    }
+
     private static int DefaultLayoutWidth(string kind, LayoutStyle style)
         => kind switch
         {
@@ -628,6 +706,12 @@ internal static partial class Program
             if (string.IsNullOrWhiteSpace(obj.Id)) result.BlockedReasons.Add("object missing id");
             else if (!ids.Add(obj.Id)) result.BlockedReasons.Add("duplicate object id: " + obj.Id);
             if (!supported.Contains(obj.Kind)) result.BlockedReasons.Add($"{obj.Id}: unsupported kind {obj.Kind}");
+            if (!string.IsNullOrWhiteSpace(obj.RenderAs) &&
+                !obj.RenderAs.Equals("status-button", StringComparison.OrdinalIgnoreCase) &&
+                !obj.RenderAs.Equals("preview-only", StringComparison.OrdinalIgnoreCase))
+                result.BlockedReasons.Add($"{obj.Id}: unsupported renderAs {obj.RenderAs}");
+            if (!obj.IsSyntheticText && !string.IsNullOrWhiteSpace(obj.RenderAs))
+                result.BlockedReasons.Add($"{obj.Id}: renderAs is only supported for section-title/static-label");
             if (string.IsNullOrWhiteSpace(obj.Text)) result.BlockedReasons.Add($"{obj.Id}: text is required");
             if (obj.Width <= 0 || obj.Height <= 0) result.BlockedReasons.Add($"{obj.Id}: width/height must be positive");
             if (obj.X < 0 || obj.Y < 0 || obj.X + obj.Width > result.CanvasWidth || obj.Y + obj.Height > result.CanvasHeight)
@@ -641,6 +725,8 @@ internal static partial class Program
             {
                 if (string.IsNullOrWhiteSpace(obj.Expression)) result.BlockedReasons.Add($"{obj.Id}: expression is required");
             }
+            if (obj.IsSyntheticText && obj.GuiKind == "status-button" && string.IsNullOrWhiteSpace(obj.EffectiveExpression))
+                result.BlockedReasons.Add($"{obj.Id}: synthetic text expression is required");
         }
 
         var interactive = result.Objects.Where(o => o.GuiSupported).ToArray();
@@ -656,8 +742,10 @@ internal static partial class Program
         if (safetyPath != null)
             ValidateLayoutAgainstSafety(result, safetyPath);
 
+        if (result.Objects.Any(o => o.IsSyntheticText && o.GuiSupported))
+            result.Warnings.Add("section-title/static-label are rendered as verified status-button labels with constant visibility, not native static text");
         if (result.Objects.Any(o => !o.GuiSupported))
-            result.Warnings.Add("section-title/static-label are preview evidence only in current GUI apply implementation");
+            result.Warnings.Add("some layout objects are preview evidence only in current GUI apply implementation");
     }
 
     private static bool LooksLikeDataObjectName(string name)
@@ -775,9 +863,9 @@ internal static partial class Program
             var stroke = obj.GuiSupported ? "#333333" : "#777777";
             sb.AppendLine($"""<rect x="{obj.X}" y="{obj.Y}" width="{obj.Width}" height="{obj.Height}" rx="2" ry="2" fill="{fill}" stroke="{stroke}" stroke-width="1"/>""");
             sb.AppendLine($"""<text x="{obj.X + 6}" y="{obj.Y + Math.Max(16, obj.Height / 2 + 5)}" font-family="SimSun, Arial" font-size="14" fill="#111111">{EscapeXml(obj.Text)}</text>""");
-            var binding = obj.Variable ?? obj.Expression;
+            var binding = obj.Variable ?? (!string.IsNullOrWhiteSpace(obj.EffectiveExpression) ? obj.EffectiveExpression : obj.Expression);
             if (!string.IsNullOrWhiteSpace(binding))
-                sb.AppendLine($"""<title>{EscapeXml(obj.Id + " " + obj.Kind + " " + binding)}</title>""");
+                sb.AppendLine($"""<title>{EscapeXml(obj.Id + " " + obj.Kind + " gui=" + obj.GuiKind + " " + binding)}</title>""");
         }
         if (result.BlockedReasons.Count > 0)
         {

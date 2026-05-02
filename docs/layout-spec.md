@@ -17,23 +17,26 @@ tools\mcgsctl\mcgsctl.ps1 layout readback --project .mcgsctl-work\layout-gui-smo
 
 ## Supported Object Kinds
 
-First GUI-supported set:
+GUI-supported set:
 
 ```text
 momentary-button
 status-button
+section-title   -> synthesized status-button label
+static-label    -> synthesized status-button label
 ```
 
-Preview-only kinds:
+`section-title` and `static-label` default to `renderAs: "status-button"`. This deliberately reuses the existing status-button GUI workflow because it has property readback for label text, visibility expression, no operation, and empty script. The synthesized text object uses a constant visibility expression of `1` unless an explicit `expression` is provided.
+
+Preview-only mode is still available:
 
 ```text
-section-title
-static-label
+{ "kind": "static-label", "renderAs": "preview-only", ... }
 ```
 
-The preview-only kinds appear in `preview.svg` / `preview.html` and validation output, but the current GUI apply implementation does not create native text objects for them. Do not treat preview-only labels as MCGS readback evidence.
+Preview-only objects appear in `preview.svg` / `preview.html` and validation output, but are not MCGS readback evidence.
 
-`status-button` remains a standard-button style indicator, not a native MCGS lamp.
+`status-button` and synthesized labels remain standard-button style objects, not native MCGS lamps or native static text.
 
 ## Minimal Example
 
@@ -56,6 +59,7 @@ The preview-only kinds appear in `preview.svg` / `preview.html` and validation o
       "y": 280,
       "width": 360,
       "height": 260,
+      "titleRenderAs": "status-button",
       "layout": "direction-pad",
       "controls": [
         { "kind": "momentary-button", "id": "ptz-up", "text": "UP", "variable": "PTZ_CMD00", "position": "up" },
@@ -72,6 +76,8 @@ The preview-only kinds appear in `preview.svg` / `preview.html` and validation o
 ```
 
 If `--safety` is provided, every `momentary-button.variable` must exist in the safety spec `plc.addressPlan`, and direct mappings to dangerous `Q` outputs are blocked before any GUI write.
+
+Section indicators are auto-planned in the upper safe area after the controls instead of pinned to the bottom of the section. MCGS animation windows are self-drawn and lower canvas coordinates are less reliable for property-page readback on the default editor profile. Explicit `x` / `y` on an indicator still overrides this planner.
 
 ## Evidence
 

@@ -113,6 +113,67 @@ public sealed class LayoutTests : IDisposable
         Assert.Contains("maps directly to dangerous output", result.Stdout);
     }
 
+    [Fact]
+    public void SectionTitleIsRenderedAsVerifiedStatusButtonByDefault()
+    {
+        var layout = WriteLayout("synthetic-title", SectionLayout());
+        var previewDir = Path.Combine(_root, "synthetic-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"section-title\"", previewJson);
+        Assert.Contains("\"guiKind\": \"status-button\"", previewJson);
+        Assert.Contains("constant visibility", previewJson);
+    }
+
+    [Fact]
+    public void PreviewOnlyStaticLabelDoesNotBecomeGuiSupported()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "note",
+            ["kind"] = "static-label",
+            ["text"] = "Preview only",
+            ["renderAs"] = "preview-only",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 24
+        });
+        var layout = WriteLayout("preview-only-label", json);
+
+        var result = TestCli.Run("layout", "validate", "--layout", layout);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("preview evidence only", result.Stdout);
+    }
+
+    [Fact]
+    public void UnsupportedRenderAsIsBlocked()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "bad-label",
+            ["kind"] = "static-label",
+            ["text"] = "Bad",
+            ["renderAs"] = "native-text",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 24
+        });
+        var layout = WriteLayout("bad-render-as", json);
+
+        var result = TestCli.Run("layout", "validate", "--layout", layout);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("unsupported renderAs native-text", result.Stdout);
+    }
+
     private string WriteLayout(string name, JsonObject json)
     {
         Directory.CreateDirectory(_root);
@@ -187,6 +248,53 @@ public sealed class LayoutTests : IDisposable
                     ["y"] = 120,
                     ["width"] = 110,
                     ["height"] = 32
+                }
+            }
+        };
+
+    private static JsonObject SectionLayout()
+        => new()
+        {
+            ["schemaVersion"] = 1,
+            ["windowIndex"] = 0,
+            ["canvas"] = new JsonObject
+            {
+                ["width"] = 640,
+                ["height"] = 480,
+                ["grid"] = 10
+            },
+            ["sections"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["id"] = "ptz",
+                    ["title"] = "PTZ",
+                    ["x"] = 80,
+                    ["y"] = 80,
+                    ["width"] = 360,
+                    ["height"] = 220,
+                    ["layout"] = "direction-pad",
+                    ["controls"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["id"] = "jog-up",
+                            ["kind"] = "momentary-button",
+                            ["text"] = "UP",
+                            ["variable"] = "MCGSCTL_SW",
+                            ["position"] = "up"
+                        }
+                    },
+                    ["indicators"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["id"] = "ready",
+                            ["kind"] = "status-button",
+                            ["text"] = "READY",
+                            ["expression"] = "MCGSCTL_SW"
+                        }
+                    }
                 }
             }
         };
