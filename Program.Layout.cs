@@ -17,6 +17,7 @@ internal static partial class Program
         public int Width { get; set; }
         public int Height { get; set; }
         public string Source { get; set; } = "";
+        public string PlacementSource { get; set; } = "layout";
         public string? RenderAs { get; set; }
         public bool IsSyntheticText => Kind is "section-title" or "static-label";
         public string GuiKind
@@ -47,10 +48,28 @@ internal static partial class Program
         public int CanvasWidth { get; set; }
         public int CanvasHeight { get; set; }
         public int ReadabilityScore { get; set; }
+        public string PlacementSource { get; set; } = "layout";
+        public LayoutPlacementPlan? PlacementPlan { get; set; }
         public List<ResultCheck> Checks { get; } = new();
         public List<string> BlockedReasons { get; } = new();
+        public List<string> UnknownReasons { get; } = new();
         public List<string> Warnings { get; } = new();
         public List<LayoutObjectPlan> Objects { get; } = new();
+    }
+
+    private sealed class LayoutPlacementPlan
+    {
+        public string Status { get; set; } = "NOT_REQUESTED";
+        public string PlacementSource { get; set; } = "layout";
+        public string? CanvasObjects { get; set; }
+        public string ObjectProvider { get; set; } = "none";
+        public bool ReliableGeometry { get; set; }
+        public int Margin { get; set; }
+        public object? PlannedBounds { get; set; }
+        public object? Offset { get; set; }
+        public List<CanvasOccupiedRect> OccupiedRectangles { get; } = new();
+        public List<string> BlockedReasons { get; } = new();
+        public List<string> UnknownReasons { get; } = new();
     }
 
     private sealed class LayoutStyle
@@ -84,7 +103,7 @@ internal static partial class Program
         {
             var layout = FullPath(RequiredLayoutPath(args));
             var safety = OptionalFullPath(Opt(args, "--safety"));
-            var result = BuildLayoutValidation(layout, safety);
+            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
             WriteJson(result);
             WriteLayoutValidationOutput(args, result, null);
             return result.Status == "PASS" ? 0 : 2;
@@ -104,7 +123,7 @@ internal static partial class Program
             var safety = OptionalFullPath(Opt(args, "--safety"));
             var outDir = FullPath(Required(args, "--out"));
             Directory.CreateDirectory(outDir);
-            var result = BuildLayoutValidation(layout, safety);
+            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
             WriteLayoutPreviewFiles(result, outDir);
             Console.WriteLine("layout preview: " + outDir);
             return result.Status == "PASS" ? 0 : 2;
@@ -125,7 +144,7 @@ internal static partial class Program
             var outDir = FullPath(Required(args, "--out"));
             Directory.CreateDirectory(outDir);
             var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-            var validation = BuildLayoutValidation(layout, safetyPath: null);
+            var validation = BuildLayoutValidation(layout, safetyPath: null, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
             if (validation.Status != "PASS")
             {
                 File.WriteAllText(Path.Combine(outDir, "layout-readback.json"),
@@ -267,12 +286,23 @@ internal static partial class Program
         {
             var layout = FullPath(RequiredLayoutPath(args));
             var safety = OptionalFullPath(Opt(args, "--safety"));
-            var validation = BuildLayoutValidation(layout, safety);
+            var validation = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
             var previewDir = Path.Combine(outDir, "layout-preview");
             WriteLayoutPreviewFiles(validation, previewDir);
             if (validation.Status != "PASS")
             {
-                Console.Error.WriteLine("layout apply blocked by validation: " + string.Join("; ", validation.BlockedReasons));
+                File.WriteAllText(Path.Combine(outDir, "layout-apply-result.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        status = validation.Status,
+                        layout,
+                        previewDir,
+                        validation.BlockedReasons,
+                        validation.UnknownReasons,
+                        validation.PlacementPlan
+                    }, ResultJsonOptions()), Encoding.UTF8);
+                Console.Error.WriteLine("layout apply blocked by validation: " +
+                                        string.Join("; ", validation.BlockedReasons.Concat(validation.UnknownReasons)));
                 return 2;
             }
 
@@ -340,6 +370,8 @@ internal static partial class Program
                     layoutSha256 = Sha256(layout),
                     previewDir,
                     project = currentProject,
+                    placementSource = validation.PlacementSource,
+                    placementPlan = validation.PlacementPlan,
                     previewOnlyObjects = validation.Objects.Where(o => !o.GuiSupported).Select(o => new { o.Id, o.Kind, o.Text }).ToArray(),
                     syntheticTextObjects = validation.Objects.Where(o => o.IsSyntheticText && o.GuiSupported).Select(o => new { o.Id, o.Kind, o.Text, o.RenderAs, guiKind = o.GuiKind, expression = o.EffectiveExpression }).ToArray(),
                     objects = childResults
@@ -446,7 +478,11 @@ internal static partial class Program
         File.WriteAllText(full, JsonSerializer.Serialize(result, ResultJsonOptions()), Encoding.UTF8);
     }
 
-    private static LayoutValidationResult BuildLayoutValidation(string layoutPath, string? safetyPath)
+    private static LayoutValidationResult BuildLayoutValidation(
+        string layoutPath,
+        string? safetyPath,
+        string? canvasObjectsPath = null,
+        string? placementModeOverride = null)
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutPath, Encoding.UTF8));
         var root = doc.RootElement;
@@ -467,14 +503,183 @@ internal static partial class Program
 
         result.Objects.AddRange(ReadDirectLayoutObjects(root, style, windowIndex));
         result.Objects.AddRange(ReadSectionLayoutObjects(root, style, windowIndex));
+        var placementMode = placementModeOverride ?? ReadPlacementMode(root);
+        if (placementMode.Equals("internal-occupancy", StringComparison.OrdinalIgnoreCase))
+            ApplyInternalOccupancyPlacement(result, canvasObjectsPath, style);
+        else if (!placementMode.Equals("explicit", StringComparison.OrdinalIgnoreCase) &&
+                 !placementMode.Equals("layout", StringComparison.OrdinalIgnoreCase))
+            result.BlockedReasons.Add("unsupported placement mode: " + placementMode);
         ValidateLayoutObjects(result, safetyPath);
         result.ReadabilityScore = ComputeReadabilityScore(result);
-        result.Status = result.BlockedReasons.Count > 0 ? "FAIL" : "PASS";
+        result.Status = result.BlockedReasons.Count > 0 ? "FAIL" : result.UnknownReasons.Count > 0 ? "UNKNOWN" : "PASS";
         result.Verdict = result.Status == "PASS" ? "readable" : "blocked";
         result.Checks.Add(result.Status == "PASS"
             ? RequiredPass("layout-validate", "layout is geometrically and semantically valid")
-            : RequiredFail("layout-validate", string.Join("; ", result.BlockedReasons)));
+            : result.Status == "UNKNOWN"
+                ? RequiredUnknown("layout-validate", string.Join("; ", result.UnknownReasons))
+                : RequiredFail("layout-validate", string.Join("; ", result.BlockedReasons)));
         return result;
+    }
+
+    private static string ReadPlacementMode(JsonElement root)
+    {
+        if (root.TryGetProperty("placement", out var placement) && placement.ValueKind == JsonValueKind.Object)
+            return JsonString(placement, "mode") ?? "explicit";
+        return "explicit";
+    }
+
+    private static void ApplyInternalOccupancyPlacement(LayoutValidationResult result, string? canvasObjectsPath, LayoutStyle style)
+    {
+        result.PlacementSource = "internal-occupancy";
+        var plan = new LayoutPlacementPlan
+        {
+            Status = "UNKNOWN",
+            PlacementSource = "internal-occupancy",
+            CanvasObjects = canvasObjectsPath,
+            Margin = Math.Max(4, style.Grid)
+        };
+        result.PlacementPlan = plan;
+
+        if (string.IsNullOrWhiteSpace(canvasObjectsPath))
+        {
+            plan.UnknownReasons.Add("internal occupancy placement requires --canvas-objects <canvas-objects.json>");
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
+        if (!File.Exists(canvasObjectsPath))
+        {
+            plan.UnknownReasons.Add("canvas object map not found: " + canvasObjectsPath);
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
+
+        var map = LoadCanvasObjectMap(canvasObjectsPath);
+        plan.ObjectProvider = map.ObjectProvider;
+        plan.ReliableGeometry = map.ReliableGeometry;
+        plan.OccupiedRectangles.AddRange(map.OccupiedRectangles);
+        if (!map.ReliableGeometry || !map.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            var reason = "canvas object map is not reliable for internal occupancy placement";
+            if (map.BlockedReasons.Count > 0) reason += ": " + string.Join("; ", map.BlockedReasons);
+            plan.UnknownReasons.Add(reason);
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
+
+        var guiObjects = result.Objects.Where(o => o.GuiSupported).ToArray();
+        if (guiObjects.Length == 0)
+        {
+            plan.Status = "NOT_REQUESTED";
+            return;
+        }
+
+        var minX = guiObjects.Min(o => o.X);
+        var minY = guiObjects.Min(o => o.Y);
+        var maxX = guiObjects.Max(o => o.X + o.Width);
+        var maxY = guiObjects.Max(o => o.Y + o.Height);
+        var groupWidth = Math.Max(1, maxX - minX);
+        var groupHeight = Math.Max(1, maxY - minY);
+        var margin = plan.Margin;
+        var inflated = map.OccupiedRectangles
+            .Select(r => new CanvasOccupiedRect
+            {
+                Id = r.Id,
+                Kind = r.Kind,
+                Text = r.Text,
+                X = Math.Max(0, r.X - margin),
+                Y = Math.Max(0, r.Y - margin),
+                Width = r.Width + margin * 2,
+                Height = r.Height + margin * 2,
+                Source = r.Source,
+                Confidence = r.Confidence
+            })
+            .ToArray();
+        var grid = Math.Max(1, style.Grid);
+        for (var y = grid; y <= result.CanvasHeight - groupHeight - grid; y += grid)
+        {
+            for (var x = grid; x <= result.CanvasWidth - groupWidth - grid; x += grid)
+            {
+                var candidate = new CanvasOccupiedRect { X = x, Y = y, Width = groupWidth, Height = groupHeight };
+                if (inflated.Any(r => RectsOverlap(candidate, r))) continue;
+                var dx = x - minX;
+                var dy = y - minY;
+                foreach (var obj in guiObjects)
+                {
+                    obj.X += dx;
+                    obj.Y += dy;
+                    obj.PlacementSource = "internal-occupancy";
+                }
+                plan.Status = "PASS";
+                plan.PlannedBounds = new { x, y, width = groupWidth, height = groupHeight };
+                plan.Offset = new { x = dx, y = dy };
+                return;
+            }
+        }
+
+        plan.BlockedReasons.Add("no free rectangle large enough for layout after applying canvas occupancy");
+        result.BlockedReasons.AddRange(plan.BlockedReasons);
+    }
+
+    private static bool RectsOverlap(CanvasOccupiedRect a, CanvasOccupiedRect b)
+        => a.X < b.X + b.Width && a.X + a.Width > b.X &&
+           a.Y < b.Y + b.Height && a.Y + a.Height > b.Y;
+
+    private static CanvasObjectMap LoadCanvasObjectMap(string path)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        var root = doc.RootElement;
+        var map = new CanvasObjectMap
+        {
+            Status = JsonStringAny(root, "Status", "status") ?? "UNKNOWN",
+            ObjectProvider = JsonStringAny(root, "ObjectProvider", "objectProvider") ?? "none",
+            ReliableGeometry = JsonBoolAny(root, "ReliableGeometry", "reliableGeometry") ?? false
+        };
+        foreach (var reason in JsonStringArrayAny(root, "BlockedReasons", "blockedReasons"))
+            map.BlockedReasons.Add(reason);
+
+        var rects = JsonArrayAny(root, "OccupiedRectangles", "occupiedRectangles");
+        if (rects.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in rects.EnumerateArray())
+                if (TryReadCanvasOccupiedRect(item, out var rect)) map.OccupiedRectangles.Add(rect);
+        }
+        var objects = JsonArrayAny(root, "Objects", "objects");
+        if (objects.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in objects.EnumerateArray())
+            {
+                if (item.TryGetProperty("Rect", out var rectEl) || item.TryGetProperty("rect", out rectEl))
+                {
+                    if (TryReadCanvasOccupiedRect(rectEl, out var rect))
+                    {
+                        rect.Id = JsonStringAny(item, "Id", "id") ?? rect.Id;
+                        rect.Kind = JsonStringAny(item, "Kind", "kind") ?? rect.Kind;
+                        rect.Text = JsonStringAny(item, "Text", "text") ?? rect.Text;
+                        rect.Source = JsonStringAny(item, "Source", "source") ?? rect.Source;
+                        rect.Confidence = JsonStringAny(item, "Confidence", "confidence") ?? rect.Confidence;
+                        map.OccupiedRectangles.Add(rect);
+                    }
+                }
+            }
+        }
+        return map;
+    }
+
+    private static bool TryReadCanvasOccupiedRect(JsonElement item, out CanvasOccupiedRect rect)
+    {
+        rect = new CanvasOccupiedRect
+        {
+            Id = JsonStringAny(item, "Id", "id") ?? "",
+            Kind = JsonStringAny(item, "Kind", "kind") ?? "",
+            Text = JsonStringAny(item, "Text", "text") ?? "",
+            X = LayoutJsonIntAny(item, "X", "x") ?? 0,
+            Y = LayoutJsonIntAny(item, "Y", "y") ?? 0,
+            Width = LayoutJsonIntAny(item, "Width", "width") ?? 0,
+            Height = LayoutJsonIntAny(item, "Height", "height") ?? 0,
+            Source = JsonStringAny(item, "Source", "source") ?? "",
+            Confidence = JsonStringAny(item, "Confidence", "confidence") ?? "unknown"
+        };
+        return rect.Width > 0 && rect.Height > 0;
     }
 
     private static LayoutStyle ReadLayoutStyle(JsonElement root)
@@ -872,6 +1077,58 @@ internal static partial class Program
         return int.TryParse(JsonString(element, name), out var parsed) ? parsed : null;
     }
 
+    private static int? LayoutJsonIntAny(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = LayoutJsonInt(element, name);
+            if (value.HasValue) return value;
+        }
+        return null;
+    }
+
+    private static string? JsonStringAny(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = JsonString(element, name);
+            if (!string.IsNullOrWhiteSpace(value)) return value;
+        }
+        return null;
+    }
+
+    private static bool? JsonBoolAny(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var prop)) continue;
+            if (prop.ValueKind == JsonValueKind.True) return true;
+            if (prop.ValueKind == JsonValueKind.False) return false;
+            if (bool.TryParse(JsonString(element, name), out var parsed)) return parsed;
+        }
+        return null;
+    }
+
+    private static JsonElement JsonArrayAny(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Array) return prop;
+        }
+        return default;
+    }
+
+    private static IEnumerable<string> JsonStringArrayAny(JsonElement element, params string[] names)
+    {
+        var array = JsonArrayAny(element, names);
+        if (array.ValueKind != JsonValueKind.Array) yield break;
+        foreach (var item in array.EnumerateArray())
+        {
+            var value = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(value)) yield return value!;
+        }
+    }
+
     private static void WriteLayoutPreviewFiles(LayoutValidationResult result, string outDir)
     {
         Directory.CreateDirectory(outDir);
@@ -886,15 +1143,25 @@ internal static partial class Program
                 result.CanvasWidth,
                 result.CanvasHeight,
                 result.Objects,
+                result.PlacementSource,
+                result.PlacementPlan,
                 result.BlockedReasons,
+                result.UnknownReasons,
                 result.Warnings
             }, ResultJsonOptions()), Encoding.UTF8);
+        if (result.PlacementPlan != null)
+        {
+            File.WriteAllText(Path.Combine(outDir, "layout-plan.json"),
+                JsonSerializer.Serialize(result.PlacementPlan, ResultJsonOptions()), Encoding.UTF8);
+        }
         var svg = BuildLayoutSvg(result);
         File.WriteAllText(Path.Combine(outDir, "preview.svg"), svg, Encoding.UTF8);
+        if (result.PlacementPlan != null)
+            File.WriteAllText(Path.Combine(outDir, "preview-overlay.svg"), svg, Encoding.UTF8);
         File.WriteAllText(Path.Combine(outDir, "preview.html"),
             "<!doctype html><html><head><meta charset=\"utf-8\"><title>mcgsctl layout preview</title></head><body>" +
             svg +
-            "<pre>" + EscapeHtml(JsonSerializer.Serialize(new { result.Status, result.BlockedReasons, result.Warnings }, ResultJsonOptions())) + "</pre>" +
+            "<pre>" + EscapeHtml(JsonSerializer.Serialize(new { result.Status, result.BlockedReasons, result.UnknownReasons, result.Warnings, result.PlacementPlan }, ResultJsonOptions())) + "</pre>" +
             "</body></html>", Encoding.UTF8);
     }
 
@@ -903,6 +1170,15 @@ internal static partial class Program
         var sb = new StringBuilder();
         sb.AppendLine($"""<svg xmlns="http://www.w3.org/2000/svg" width="{result.CanvasWidth}" height="{result.CanvasHeight}" viewBox="0 0 {result.CanvasWidth} {result.CanvasHeight}">""");
         sb.AppendLine("""<rect x="0" y="0" width="100%" height="100%" fill="#eeeeee"/>""");
+        if (result.PlacementPlan != null)
+        {
+            foreach (var occupied in result.PlacementPlan.OccupiedRectangles)
+            {
+                sb.AppendLine($"""<rect x="{occupied.X}" y="{occupied.Y}" width="{occupied.Width}" height="{occupied.Height}" fill="#c23b22" fill-opacity="0.18" stroke="#8a1f11" stroke-width="1" stroke-dasharray="4 3"/>""");
+                if (!string.IsNullOrWhiteSpace(occupied.Id))
+                    sb.AppendLine($"""<text x="{occupied.X + 4}" y="{occupied.Y + 14}" font-family="Arial" font-size="11" fill="#8a1f11">{EscapeXml(occupied.Id)}</text>""");
+            }
+        }
         foreach (var obj in result.Objects)
         {
             var fill = obj.Kind switch
@@ -920,11 +1196,12 @@ internal static partial class Program
             sb.AppendLine($"""<text x="{obj.X + 6}" y="{obj.Y + Math.Max(16, obj.Height / 2 + 5)}" font-family="SimSun, Arial" font-size="14" fill="#111111">{EscapeXml(obj.Text)}</text>""");
             var binding = obj.Variable ?? (!string.IsNullOrWhiteSpace(obj.EffectiveExpression) ? obj.EffectiveExpression : obj.Expression);
             if (!string.IsNullOrWhiteSpace(binding))
-                sb.AppendLine($"""<title>{EscapeXml(obj.Id + " " + obj.Kind + " gui=" + obj.GuiKind + " " + binding)}</title>""");
+                sb.AppendLine($"""<title>{EscapeXml(obj.Id + " " + obj.Kind + " gui=" + obj.GuiKind + " " + binding + " placement=" + obj.PlacementSource)}</title>""");
         }
-        if (result.BlockedReasons.Count > 0)
+        if (result.BlockedReasons.Count > 0 || result.UnknownReasons.Count > 0)
         {
-            sb.AppendLine("""<text x="10" y="22" font-family="Arial" font-size="16" fill="#b00020">BLOCKED</text>""");
+            var label = result.Status == "UNKNOWN" ? "UNKNOWN" : "BLOCKED";
+            sb.AppendLine($"""<text x="10" y="22" font-family="Arial" font-size="16" fill="#b00020">{label}</text>""");
         }
         sb.AppendLine("</svg>");
         return sb.ToString();

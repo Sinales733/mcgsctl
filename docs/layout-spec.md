@@ -9,6 +9,7 @@ It does not patch `.MCE` private blobs. `workflow run window.layout.apply` uses 
 ```powershell
 tools\mcgsctl\mcgsctl.ps1 layout validate --layout layouts\ptz-basic.json --safety safety-spec.json
 tools\mcgsctl\mcgsctl.ps1 layout preview --layout layouts\ptz-basic.json --out .mcgsctl-runs\layout-preview --safety safety-spec.json
+tools\mcgsctl\mcgsctl.ps1 canvas inspect --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-inspect
 tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json
 tools\mcgsctl\mcgsctl.ps1 layout readback --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --layout layouts\ptz-basic.json --out .mcgsctl-runs\layout-readback
 ```
@@ -89,6 +90,76 @@ If `--safety` is provided, every `momentary-button.variable` must exist in the s
 
 Section indicators are auto-planned in the upper safe area after the controls instead of pinned to the bottom of the section. MCGS animation windows are self-drawn and lower canvas coordinates are less reliable for property-page readback on the default editor profile. Explicit `x` / `y` on an indicator still overrides this planner.
 
+## Internal Occupancy Placement
+
+Screenshots are evidence only. They are not used as the primary source for automatic placement.
+
+Automatic placement requires a reliable internal canvas object map:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 canvas inspect `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --out .mcgsctl-runs\canvas-inspect
+
+tools\mcgsctl\mcgsctl.ps1 layout preview `
+  --layout layouts\ptz-basic.json `
+  --out .mcgsctl-runs\layout-preview-auto `
+  --placement internal-occupancy `
+  --canvas-objects .mcgsctl-runs\canvas-inspect\canvas-objects.json
+```
+
+`canvas inspect` opens a temporary copy of the candidate, enters animation configuration, finds the MCGS canvas HWND, and probes:
+
+```text
+UIA / CUIAutomation
+MSAA / IAccessible
+WM_GETOBJECT
+OBJID_NATIVEOM
+```
+
+It writes:
+
+```text
+canvas-inspect.json
+canvas-objects.json
+main-window.png
+window-tree.txt
+```
+
+If no internal channel exposes reliable child object rectangles, `canvas-objects.json` has:
+
+```json
+{
+  "Status": "UNKNOWN",
+  "ObjectProvider": "none",
+  "ReliableGeometry": false
+}
+```
+
+In that state, `layout preview --placement internal-occupancy` and `window.layout.apply --placement internal-occupancy` return blocked/UNKNOWN instead of silently falling back to screenshot guessing. Explicit coordinate layouts can still be applied, but their `placementSource` remains `layout` or `explicit`, not `internal-occupancy`.
+
+When the map is reliable, `layout preview` writes:
+
+```text
+layout-plan.json
+preview-overlay.svg
+```
+
+`layout-plan.json` records the occupied rectangles, chosen free rectangle, and offset applied to the planned objects. `preview-overlay.svg` draws occupied rectangles under the planned layout for human review.
+
+Additional probes:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-context
+tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
+tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
+tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
+```
+
+These commands are read-only with respect to the real candidate because they operate on temporary copies. Clipboard probing records format names, sizes, and hashes only; it does not store raw proprietary object payloads.
+
+`toolbar-probe` records `ToolbarWindow32` command IDs for command-discovery evidence without clicking them. `mce-geometry-probe` exports the candidate read-only and scans only likely HMI object blobs for class and rectangle candidates; it reports `evidenceStatus=PASS` when the evidence file is valid, but the object map remains `UNKNOWN` until a trusted decoder can prove high-confidence rectangles.
+
 ## Evidence
 
 `layout preview` writes:
@@ -98,6 +169,8 @@ preview.svg
 preview.html
 preview.json
 validate.json
+layout-plan.json        # only when internal occupancy placement is requested
+preview-overlay.svg     # only when internal occupancy placement is requested
 ```
 
 `window.layout.apply` writes:

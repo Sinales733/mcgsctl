@@ -228,6 +228,55 @@ public sealed class LayoutTests : IDisposable
         Assert.Contains("unsupported renderAs native-text", result.Stdout);
     }
 
+    [Fact]
+    public void InternalOccupancyWithoutCanvasObjectsIsUnknown()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
+        var layout = WriteLayout("internal-no-map", json);
+
+        var result = TestCli.Run("layout", "validate", "--layout", layout);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("\"Status\": \"UNKNOWN\"", result.Stdout);
+        Assert.Contains("internal occupancy placement requires", result.Stdout);
+    }
+
+    [Fact]
+    public void InternalOccupancyWithReliableCanvasMapWritesPlanAndOverlay()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
+        var layout = WriteLayout("internal-map", json);
+        var map = WriteCanvasObjects("internal-map", reliable: true);
+        var previewDir = Path.Combine(_root, "internal-map-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(File.Exists(Path.Combine(previewDir, "layout-plan.json")));
+        Assert.True(File.Exists(Path.Combine(previewDir, "preview-overlay.svg")));
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"placementSource\": \"internal-occupancy\"", previewJson);
+        Assert.Contains("\"status\": \"PASS\"", previewJson);
+        Assert.DoesNotContain("\"x\": 120", previewJson);
+    }
+
+    [Fact]
+    public void InternalOccupancyWithUnreliableCanvasMapIsUnknown()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
+        var layout = WriteLayout("internal-unreliable", json);
+        var map = WriteCanvasObjects("internal-unreliable", reliable: false);
+
+        var result = TestCli.Run("layout", "validate", "--layout", layout, "--canvas-objects", map);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("\"Status\": \"UNKNOWN\"", result.Stdout);
+        Assert.Contains("canvas object map is not reliable", result.Stdout);
+    }
+
     private string WriteLayout(string name, JsonObject json)
     {
         Directory.CreateDirectory(_root);
@@ -263,6 +312,36 @@ public sealed class LayoutTests : IDisposable
                 }
             },
             ["dangerousOutputs"] = dangerous ? new JsonArray(address) : new JsonArray()
+        };
+        File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+        return path;
+    }
+
+    private string WriteCanvasObjects(string name, bool reliable)
+    {
+        var path = Path.Combine(_root, name + ".canvas-objects.json");
+        var json = new JsonObject
+        {
+            ["SchemaVersion"] = 1,
+            ["Status"] = reliable ? "PASS" : "UNKNOWN",
+            ["ObjectProvider"] = reliable ? "uia" : "none",
+            ["ReliableGeometry"] = reliable,
+            ["BlockedReasons"] = reliable ? new JsonArray() : new JsonArray("no object provider"),
+            ["OccupiedRectangles"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["Id"] = "existing-panel",
+                    ["Kind"] = "existing",
+                    ["Text"] = "Existing",
+                    ["X"] = 0,
+                    ["Y"] = 0,
+                    ["Width"] = 430,
+                    ["Height"] = 210,
+                    ["Source"] = "test",
+                    ["Confidence"] = "high"
+                }
+            }
         };
         File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
         return path;

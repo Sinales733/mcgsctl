@@ -6,6 +6,7 @@ import com.healthmarketscience.jackcess.Table;
 
 import java.io.File;
 import java.io.Writer;
+import java.security.MessageDigest;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -43,6 +44,7 @@ public final class MceExport {
       writeSchema(db, outDir.resolve("schema.json"));
       writeDataRows(db, outDir.resolve("data.json"));
       writeBlobStrings(db, outDir.resolve("blob_strings.json"));
+      writeBlobGeometry(db, outDir.resolve("blob_geometry.json"));
     }
   }
 
@@ -145,6 +147,160 @@ public final class MceExport {
       w.write("\n]\n");
     }
   }
+
+  private static void writeBlobGeometry(Database db, Path file) throws Exception {
+    try (Writer w = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+      w.write("[\n");
+      int entryIndex = 0;
+      for (String tableName : db.getTableNames()) {
+        Table table = db.getTable(tableName);
+        for (Row row : table) {
+          String rowKey = firstCell(row);
+          String rowLabel = firstString(row);
+          for (Column c : table.getColumns()) {
+            Object value = row.get(c.getName());
+            if (!(value instanceof byte[] bytes)) continue;
+            List<ClassOccurrence> classes = findClassOccurrences(bytes);
+            if (classes.isEmpty()) continue;
+            List<RectCandidate> rects = findRectCandidates(bytes);
+            if (!isLikelyCanvasObjectBlob(tableName, c.getName())) continue;
+            if (entryIndex++ > 0) w.write(",\n");
+            w.write(indent(1) + "{\n");
+            prop(w, "table", tableName, true, 2);
+            prop(w, "column", c.getName(), true, 2);
+            prop(w, "rowKey", rowKey, true, 2);
+            prop(w, "rowLabelLength", rowLabel.length(), true, 2);
+            prop(w, "rowLabelSha256", sha256Hex(rowLabel.getBytes(StandardCharsets.UTF_8)), true, 2);
+            prop(w, "bytes", bytes.length, true, 2);
+            prop(w, "sha256", sha256Hex(bytes), true, 2);
+            w.write(indent(2) + "\"classOccurrences\": [");
+            for (int i = 0; i < classes.size(); i++) {
+              if (i > 0) w.write(", ");
+              ClassOccurrence cls = classes.get(i);
+              w.write("{");
+              inlineProp(w, "offset", hex(cls.offset), true);
+              inlineProp(w, "className", cls.className, false);
+              w.write("}");
+            }
+            w.write("],\n");
+            w.write(indent(2) + "\"candidateRectangles\": [");
+            for (int i = 0; i < rects.size(); i++) {
+              if (i > 0) w.write(", ");
+              RectCandidate r = rects.get(i);
+              w.write("{");
+              inlineProp(w, "offset", hex(r.offset), true);
+              inlineProp(w, "encoding", r.encoding, true);
+              inlineProp(w, "pattern", r.pattern, true);
+              inlineProp(w, "x", r.x, true);
+              inlineProp(w, "y", r.y, true);
+              inlineProp(w, "width", r.width, true);
+              inlineProp(w, "height", r.height, false);
+              w.write("}");
+            }
+            w.write("]\n");
+            w.write(indent(1) + "}");
+          }
+        }
+      }
+      w.write("\n]\n");
+    }
+  }
+
+  private static boolean isLikelyCanvasObjectBlob(String tableName, String columnName) {
+    if (!"lbObjects".equalsIgnoreCase(columnName)) return false;
+    return "WndUser".equalsIgnoreCase(tableName) || "WndDevice".equalsIgnoreCase(tableName);
+  }
+
+  private static List<ClassOccurrence> findClassOccurrences(byte[] bytes) {
+    List<ClassOccurrence> found = new ArrayList<>();
+    byte[] prefix = "CDraw".getBytes(StandardCharsets.US_ASCII);
+    for (int i = 0; i + prefix.length < bytes.length && found.size() < 200; i++) {
+      boolean match = true;
+      for (int j = 0; j < prefix.length; j++) {
+        if (bytes[i + j] != prefix[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (!match) continue;
+      int end = i;
+      while (end < bytes.length && isAsciiNameByte(bytes[end])) end++;
+      if (end > i) {
+        found.add(new ClassOccurrence(i, new String(bytes, i, end - i, StandardCharsets.US_ASCII)));
+        i = end;
+      }
+    }
+    return found;
+  }
+
+  private static boolean isAsciiNameByte(byte value) {
+    int b = value & 0xFF;
+    return (b >= 'A' && b <= 'Z')
+        || (b >= 'a' && b <= 'z')
+        || (b >= '0' && b <= '9')
+        || b == '_';
+  }
+
+  private static List<RectCandidate> findRectCandidates(byte[] bytes) {
+    List<RectCandidate> found = new ArrayList<>();
+    Set<String> seen = new LinkedHashSet<>();
+    for (int offset = 0; offset + 16 <= bytes.length && found.size() < 250; offset += 4) {
+      int a = int32(bytes, offset);
+      int b = int32(bytes, offset + 4);
+      int c = int32(bytes, offset + 8);
+      int d = int32(bytes, offset + 12);
+      addRectCandidate(found, seen, offset, "int32", "xywh", a, b, c, d);
+      addRectCandidate(found, seen, offset, "int32", "ltrb", a, b, c - a, d - b);
+    }
+    for (int offset = 0; offset + 8 <= bytes.length && found.size() < 250; offset += 2) {
+      int a = int16(bytes, offset);
+      int b = int16(bytes, offset + 2);
+      int c = int16(bytes, offset + 4);
+      int d = int16(bytes, offset + 6);
+      addRectCandidate(found, seen, offset, "int16", "xywh", a, b, c, d);
+      addRectCandidate(found, seen, offset, "int16", "ltrb", a, b, c - a, d - b);
+    }
+    return found;
+  }
+
+  private static void addRectCandidate(List<RectCandidate> found, Set<String> seen, int offset,
+                                       String encoding, String pattern, int x, int y, int width, int height) {
+    if (width < 8 || height < 8) return;
+    if (width > 2200 || height > 1800) return;
+    if (x < -200 || y < -200 || x > 2200 || y > 1800) return;
+    if (x + width > 2400 || y + height > 2000) return;
+    String key = x + ":" + y + ":" + width + ":" + height;
+    if (!seen.add(key)) return;
+    found.add(new RectCandidate(offset, encoding, pattern, x, y, width, height));
+  }
+
+  private static int int16(byte[] bytes, int offset) {
+    int value = (bytes[offset] & 0xFF) | (bytes[offset + 1] << 8);
+    return (short) value;
+  }
+
+  private static int int32(byte[] bytes, int offset) {
+    return (bytes[offset] & 0xFF)
+        | ((bytes[offset + 1] & 0xFF) << 8)
+        | ((bytes[offset + 2] & 0xFF) << 16)
+        | (bytes[offset + 3] << 24);
+  }
+
+  private static String sha256Hex(byte[] bytes) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    byte[] hash = digest.digest(bytes);
+    StringBuilder sb = new StringBuilder(hash.length * 2);
+    for (byte b : hash) sb.append(String.format("%02x", b & 0xFF));
+    return sb.toString();
+  }
+
+  private static String hex(int value) {
+    return "0x" + Integer.toHexString(value).toUpperCase();
+  }
+
+  private record ClassOccurrence(int offset, String className) {}
+
+  private record RectCandidate(int offset, String encoding, String pattern, int x, int y, int width, int height) {}
 
   private static void writeValue(Writer w, Object value) throws Exception {
     if (value == null) {

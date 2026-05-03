@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -80,6 +81,7 @@ internal static partial class Program
                 "snapshot" => Snapshot(args),
                 "mce" => Mce(args),
                 "verify" => Verify(args),
+                "canvas" => Canvas(args),
                 "layout" => Layout(args),
                 "workflow" => Workflow(args),
                 "candidate" => Candidate(args),
@@ -140,9 +142,14 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
-  mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--out <file-or-dir>]
-  mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>]
-  mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir>
+  mcgsctl canvas inspect --project <candidate.mce> --out <dir> [--window-index <n>]
+  mcgsctl canvas context-menu-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--x <n> --y <n>]
+  mcgsctl canvas clipboard-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--select-all]
+  mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>]
+  mcgsctl canvas mce-geometry-probe --project <candidate.mce> --out <dir>
+  mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy] [--out <file-or-dir>]
+  mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
+  mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir> [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl candidate summarize --workdir <runDir>
   mcgsctl candidate validate --workdir <runDir> [--approval <approval.json>]
   mcgsctl profile check (--project <candidate.mce>|--workdir <runDir>) --profile <profile.json> [--facts-only] [--allow-profile-drift]
@@ -152,7 +159,7 @@ Commands:
   mcgsctl workflow run project.apply-candidate --source <official.mce> --candidate <candidate.mce> --approval <approval.json>
   mcgsctl workflow run project.rollback --rollback <rollbackDir> --target <official.mce>
   mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
-  mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>]
+  mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.static-text.add (--source <mce>|--project <copy.mce>) --text <label> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run window.lamp.add-native (--source <mce>|--project <copy.mce>) --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
@@ -7132,6 +7139,7 @@ internal static class Native
 {
     public const uint WM_COMMAND = 0x0111;
     public const uint WM_NOTIFY = 0x004E;
+    public const uint WM_GETOBJECT = 0x003D;
     public const uint WM_CONTEXTMENU = 0x007B;
     public const uint WM_CLOSE = 0x0010;
     public const uint WM_GETTEXT = 0x000D;

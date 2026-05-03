@@ -108,6 +108,18 @@ tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE 
 
 `layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` creates GUI-supported `momentary-button`, `status-button`, `native-static-text`, and `native-lamp` objects by chaining the readback-verified GUI workflows. `section-title` and `static-label` now default to native static text; `renderAs: "status-button"` remains available as an explicit compatibility fallback. See `docs/layout-spec.md`.
 
+Automatic placement is opt-in and internal-evidence gated. First probe the MCGS animation canvas:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 canvas inspect --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-inspect
+tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-context
+tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
+tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
+tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
+```
+
+`canvas inspect` writes `canvas-inspect.json` and `canvas-objects.json` from UIA, MSAA/IAccessible, `WM_GETOBJECT`, and `OBJID_NATIVEOM` probes. If those internal channels do not expose reliable object geometry, `canvas-objects.json` is `UNKNOWN`. In that case `layout preview --placement internal-occupancy --canvas-objects ...` and `window.layout.apply --placement internal-occupancy --canvas-objects ...` stay blocked; the tool does not use screenshots as a hidden automatic layout source. Screenshots remain evidence only.
+
 Common blocked summaries:
 
 ```text
@@ -147,6 +159,11 @@ tools\mcgsctl\mcgsctl.ps1 toolbar --hwnd 0x123456
 tools\mcgsctl\mcgsctl.ps1 listview --hwnd 0x123456 --double-text Smart200 --mouse
 tools\mcgsctl\mcgsctl.ps1 popup --pid <pid> --open-hwnd 0x123456 --x 20 --y 20 --choose-id 32785 --exact --mouse
 tools\mcgsctl\mcgsctl.ps1 capture --out .mcgsctl-runs\capture
+tools\mcgsctl\mcgsctl.ps1 canvas inspect --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-inspect
+tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-context
+tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
+tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
+tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
 tools\mcgsctl\mcgsctl.ps1 modules --pid <pid> --filter Smart200
 tools\mcgsctl\mcgsctl.ps1 wndproc --hwnd 0x123456
 tools\mcgsctl\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\Siemens\Smart200\Smart200.dll --filter SvrEdit
@@ -164,9 +181,14 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, reopens the property page, and verifies label/expression evidence plus no operation and empty script state. It is not a native lamp workflow.
 - `window.static-text.add`: creates a native MCGS static text label through the animation toolbox, saves, exports before/after/reopen snapshots, reopens the native label property page, and verifies text readback.
 - `window.lamp.add-native`: creates a native MCGS animation display component through the animation toolbox, sets display text and display variable, saves, exports before/after/reopen snapshots, reopens the native property page, and verifies both fields. It is GUI evidence for an HMI indicator, not hardware acceptance.
+- `canvas inspect`: opens a temporary copy of the candidate, enters animation configuration, identifies the MCGS canvas HWND, probes UIA/MSAA/WM_GETOBJECT/OBJID_NATIVEOM, and writes `canvas-objects.json` with `ReliableGeometry=false` when the self-drawn canvas does not expose object rectangles.
+- `canvas context-menu-probe`: opens the animation canvas context menu on a temporary copy and records menu IDs/text for later command discovery.
+- `canvas clipboard-probe`: focuses the animation canvas on a temporary copy, optionally selects all, copies, and records clipboard format names, IDs, sizes, hashes, and heuristic geometry/class-record summaries without storing raw private object payloads; the previous clipboard is restored when possible.
+- `canvas toolbar-probe`: opens a temporary copy, enters animation configuration, enumerates visible toolbars and command IDs/text/rectangles for command discovery evidence without clicking them.
+- `canvas mce-geometry-probe`: exports the candidate read-only and scans private object blobs for class/string/geometry candidates. It is evidence only; unreliable inferred geometry remains `UNKNOWN` and cannot drive internal occupancy placement.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
-- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, `native-static-text`, `native-lamp`, and native static text defaults for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows.
+- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, `native-static-text`, `native-lamp`, and native static text defaults for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows. With `--placement internal-occupancy --canvas-objects <json>`, it uses occupied rectangles from the internal canvas object map and writes `layout-plan.json`; unreliable maps produce `UNKNOWN` instead of automatic placement.
 
 ## Verification Limits
 

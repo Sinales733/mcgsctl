@@ -29,6 +29,16 @@
       },
       "additionalProperties": true
     },
+    "placement": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["explicit", "internal-occupancy"]
+        }
+      },
+      "additionalProperties": true
+    },
     "objects": {
       "type": "array",
       "items": { "$ref": "#/$defs/object" }
