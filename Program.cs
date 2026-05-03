@@ -13,6 +13,11 @@ internal static partial class Program
 {
     private const uint SaveCommandId = 57603;
     private const uint CheckCommandId = 32786;
+    private const uint NativeStaticTextCommandId = 32907;
+    private const uint NativeLampCommandId = 32941;
+    private const string AnimationEditButtonText = "\u52a8\u753b\u7ec4\u6001";
+    private const string NativeStaticTextDialogTitle = "\u6807\u7b7e\u52a8\u753b\u7ec4\u6001\u5c5e\u6027\u8bbe\u7f6e";
+    private const string NativeLampDialogTitle = "\u52a8\u753b\u663e\u793a\u6784\u4ef6\u5c5e\u6027\u8bbe\u7f6e";
     private const string ProcessName = "McgsSetE";
     private const string ToolVersion = "0.4.0";
 
@@ -149,6 +154,8 @@ Commands:
   mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
   mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
+  mcgsctl workflow run window.static-text.add (--source <mce>|--project <copy.mce>) --text <label> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.lamp.add-native (--source <mce>|--project <copy.mce>) --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run device.channel.map (--source <mce>|--project <copy.mce>) --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>]
   mcgsctl workflow run script.edit (--source <mce>|--project <copy.mce>) (--text <script>|--file <txt>) [--event down|up] [--button-text <label>] [--verify-token <text>] [--allow-create-dataobjects]
@@ -1032,6 +1039,16 @@ Commands:
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowAddMomentaryButton(args);
+        }
+
+        if (name.Equals("window.static-text.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowNativeStaticTextAdd(args);
+        }
+
+        if (name.Equals("window.lamp.add-native", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowNativeLampAdd(args);
         }
 
         if (name.Equals("realtime-db.add", StringComparison.OrdinalIgnoreCase))
@@ -2303,6 +2320,284 @@ Commands:
         }
     }
 
+    private static int WorkflowNativeStaticTextAdd(string[] args)
+    {
+        var label = Required(args, "--text");
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 610);
+        var y = ParseInt(args, "--y", 320);
+        var width = ParseInt(args, "--width", 180);
+        var height = ParseInt(args, "--height", 40);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "native-static-text-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.static-text.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
+            if (beforeLabelCount > 0)
+                throw new InvalidOperationException("Native static text label already exists in MCE blobs before workflow: " + label);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "native static text");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, NativeStaticTextCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
+                NativeStaticTextDialogTitle, preferCommand: true);
+            ConfigureNativeStaticText(dialog, label);
+
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "configured-before-confirm"));
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "\u68c0\u67e5(&K)", "\u68c0\u67e5"))
+                throw new InvalidOperationException("Native static text property check button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            Thread.Sleep(300);
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "\u786e\u8ba4(&Y)", "\u786e\u8ba4"))
+                throw new InvalidOperationException("Native static text property confirm button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            WaitForWindowClosed(dialog, TimeSpan.FromSeconds(8));
+            Thread.Sleep(1000);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var tokenDeltas = BuildTokenDeltas(beforeSnapshot, afterSnapshot, new[] { label });
+            var labelDelta = tokenDeltas.First(delta => delta.Token == label);
+            var labelFound = labelDelta.Increased;
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label });
+            var propertyReadbackVerified = ReopenVerifyNativeStaticText(project, editor, label, windowIndex,
+                x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    label,
+                    commandId = NativeStaticTextCommandId,
+                    windowIndex,
+                    rectangle = new { x, y, width, height },
+                    tokenDeltas,
+                    labelFound,
+                    reopenVerified,
+                    propertyReadbackVerified
+                }, JsonOptions()), Encoding.UTF8);
+
+            success = labelFound && reopenVerified && propertyReadbackVerified;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                labelFound ? RequiredPass("native-static-text-token", label) : RequiredFail("native-static-text-token", "Native static text label was not found."),
+                reopenVerified ? RequiredPass("reopen-token-preserved") : RequiredFail("reopen-token-preserved", "Reopen token evidence did not match."),
+                propertyReadbackVerified
+                    ? RequiredPass("native-static-text-property-readback", "label text verified in native label property dialog")
+                    : RequiredUnknown("native-static-text-property-readback", "Native static text property readback failed or was incomplete.")
+            }, Array.Empty<string>(),
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new { kind = "native-static-text", text = label, rect = new { x, y, width, height }, readback = propertyReadbackVerified ? "PASS" : "UNKNOWN" }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>()
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success ? "native static text verification: PASS" : "native static text verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); }
+                catch { }
+            }
+        }
+    }
+
+    private static int WorkflowNativeLampAdd(string[] args)
+    {
+        var label = Required(args, "--text");
+        var expression = Required(args, "--expression");
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 610);
+        var y = ParseInt(args, "--y", 320);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 75);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "native-lamp-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.lamp.add-native", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
+            if (beforeLabelCount > 0)
+                throw new InvalidOperationException("Native lamp label already exists in MCE blobs before workflow: " + label);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "native lamp");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, NativeLampCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
+                NativeLampDialogTitle, preferCommand: false);
+            ConfigureNativeLamp(dialog, label, expression);
+
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "configured-before-confirm"));
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "\u68c0\u67e5(&K)", "\u68c0\u67e5"))
+                throw new InvalidOperationException("Native lamp property check button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            Thread.Sleep(300);
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, "\u786e\u8ba4(&Y)", "\u786e\u8ba4"))
+                throw new InvalidOperationException("Native lamp property confirm button was not found.");
+            HandlePropertyConfirmDialogs(process.Id, dialog, TimeSpan.FromSeconds(8));
+            WaitForWindowClosed(dialog, TimeSpan.FromSeconds(8));
+            Thread.Sleep(1000);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var tokenDeltas = BuildTokenDeltas(beforeSnapshot, afterSnapshot, new[] { label, expression });
+            var labelDelta = tokenDeltas.First(delta => delta.Token == label);
+            var expressionDelta = tokenDeltas.First(delta => delta.Token == expression);
+            var labelFound = labelDelta.Increased;
+            var expressionFound = expressionDelta.PresentAfter;
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var reopenSnapshot = ReopenProjectAndExportSnapshot(project, editor, outDir,
+                "reopen-verify", "mce-reopen", TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var reopenVerified = ReopenTokenCountsPreserved(afterSnapshot, reopenSnapshot, new[] { label, expression });
+            var propertyReadbackVerified = ReopenVerifyNativeLamp(project, editor, label, expression, windowIndex,
+                x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    label,
+                    expression,
+                    commandId = NativeLampCommandId,
+                    windowIndex,
+                    rectangle = new { x, y, width, height },
+                    tokenDeltas,
+                    labelFound,
+                    expressionFound,
+                    reopenVerified,
+                    propertyReadbackVerified
+                }, JsonOptions()), Encoding.UTF8);
+
+            success = labelFound && expressionFound && reopenVerified && propertyReadbackVerified;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                labelFound ? RequiredPass("native-lamp-label-token", label) : RequiredFail("native-lamp-label-token", "Native lamp label was not found."),
+                expressionFound ? RequiredPass("native-lamp-expression-token", expression) : RequiredFail("native-lamp-expression-token", "Native lamp display variable was not found."),
+                reopenVerified ? RequiredPass("reopen-token-preserved") : RequiredFail("reopen-token-preserved", "Reopen token evidence did not match."),
+                propertyReadbackVerified
+                    ? RequiredPass("native-lamp-property-readback", "display text and display variable verified in native animation display property dialog")
+                    : RequiredUnknown("native-lamp-property-readback", "Native lamp property readback failed or was incomplete.")
+            }, new[] { "native lamp is implemented as MCGS animation display component; hardware indication still requires human/site acceptance" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new { kind = "native-lamp", text = label, expression, rect = new { x, y, width, height }, readback = propertyReadbackVerified ? "PASS" : "UNKNOWN" }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>()
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success ? "native lamp verification: PASS" : "native lamp verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); }
+                catch { }
+            }
+        }
+    }
+
     private static int WorkflowScriptEdit(string[] args)
     {
         var script = Opt(args, "--text");
@@ -3396,6 +3691,285 @@ Commands:
             }
         }
     }
+
+    private static void OpenAnimationConfiguration(int pid, IntPtr main, int windowIndex, string context)
+    {
+        UiAutomation.SendCommand(main, 33955);
+        Thread.Sleep(700);
+        var userList = FindListViewByItemCount(main, 3);
+        UiAutomation.ListViewSelectIndex(userList, windowIndex);
+        Thread.Sleep(250);
+        if (!ClickButtonByNormalizedText(main, mouse: true, AnimationEditButtonText))
+            throw new InvalidOperationException("Animation configuration button was not found for " + context + ".");
+        Thread.Sleep(1000);
+        RecordOpenPopups(pid, "animation-config." + SafeFile(context));
+    }
+
+    private static IntPtr OpenCanvasObjectPropertyDialog(int pid, IntPtr main, IntPtr canvas,
+        int x, int y, int width, int height, string expectedTitle, bool preferCommand)
+    {
+        IntPtr TryExpected(TimeSpan timeout)
+            => WaitForTopWindow(pid,
+                h => Native.GetClass(h) == "#32770" &&
+                     Native.IsWindowVisible(h) &&
+                     Native.GetText(h).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase),
+                timeout);
+
+        void CloseWrongDialogs(string state)
+        {
+            foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
+                         Native.GetClass(h) == "#32770" &&
+                         Native.IsWindowVisible(h) &&
+                         !Native.GetText(h).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase)))
+            {
+                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "close-unexpected", state);
+                UiAutomation.CloseWindow(dialog);
+                Thread.Sleep(250);
+            }
+        }
+
+        var cx = x + width / 2;
+        var cy = y + height / 2;
+        UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: false, mouse: true);
+        Thread.Sleep(250);
+
+        if (preferCommand)
+        {
+            UiAutomation.SendCommand(main, 32785);
+            var byCommand = TryExpected(TimeSpan.FromSeconds(3));
+            if (byCommand != IntPtr.Zero) return byCommand;
+            CloseWrongDialogs("object-property.command");
+        }
+
+        UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: true, mouse: true);
+        var byDoubleClick = TryExpected(TimeSpan.FromSeconds(4));
+        if (byDoubleClick != IntPtr.Zero) return byDoubleClick;
+        CloseWrongDialogs("object-property.double-click");
+
+        if (!preferCommand)
+        {
+            UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(250);
+            UiAutomation.SendCommand(main, 32785);
+            var byFallbackCommand = TryExpected(TimeSpan.FromSeconds(3));
+            if (byFallbackCommand != IntPtr.Zero) return byFallbackCommand;
+            CloseWrongDialogs("object-property.fallback-command");
+        }
+
+        throw new TimeoutException("Expected object property dialog was not found: " + expectedTitle);
+    }
+
+    private static void ConfigureNativeStaticText(IntPtr dialog, string label)
+    {
+        var tab = FindFirstChild(dialog, "SysTabControl32", null);
+        UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+        Thread.Sleep(350);
+        var edit = FindNativeStaticTextEdit(dialog);
+        SetTextAndVerify(edit, label, "native static text");
+    }
+
+    private static void ConfigureNativeLamp(IntPtr dialog, string label, string expression)
+    {
+        var tab = FindFirstChild(dialog, "SysTabControl32", null);
+
+        UiAutomation.TabSelectIndex(tab, 0, mouse: true);
+        Thread.Sleep(350);
+        var textEdit = FindNativeLampTextEdit(dialog);
+        SetTextAndVerify(textEdit, label, "native lamp display text");
+
+        UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+        Thread.Sleep(350);
+        var variableEdit = FindNativeLampDisplayVariableEdit(dialog);
+        SetTextAndVerify(variableEdit, expression, "native lamp display variable");
+    }
+
+    private static bool ReopenVerifyNativeStaticText(string project, string editor, string label,
+        int windowIndex, int x, int y, int width, int height, string outDir, TimeSpan timeout)
+    {
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window was not found during native static text readback.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "native static text readback");
+            var canvas = FindCanvas(main);
+            var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
+                NativeStaticTextDialogTitle, preferCommand: true);
+            var tab = FindFirstChild(dialog, "SysTabControl32", null);
+            UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+            Thread.Sleep(350);
+            var text = Native.GetText(FindNativeStaticTextEdit(dialog));
+            var labelOk = string.Equals(text, label, StringComparison.Ordinal);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-native-static-text-readback"));
+            File.WriteAllText(Path.Combine(outDir, "native-static-text-readback.json"),
+                JsonSerializer.Serialize(new { label, text, labelOk }, JsonOptions()), Encoding.UTF8);
+
+            UiAutomation.CloseWindow(dialog);
+            Thread.Sleep(300);
+            CloseEditorProcess(process.Id, main, saveIntent: false);
+            process = null;
+            main = IntPtr.Zero;
+            return labelOk;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "native-static-text-readback-error.txt"), ex.ToString(), Encoding.UTF8);
+            return false;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private static bool ReopenVerifyNativeLamp(string project, string editor, string label, string expression,
+        int windowIndex, int x, int y, int width, int height, string outDir, TimeSpan timeout)
+    {
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window was not found during native lamp readback.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "native lamp readback");
+            var canvas = FindCanvas(main);
+            var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
+                NativeLampDialogTitle, preferCommand: false);
+            var tab = FindFirstChild(dialog, "SysTabControl32", null);
+
+            UiAutomation.TabSelectIndex(tab, 0, mouse: true);
+            Thread.Sleep(350);
+            var text = Native.GetText(FindNativeLampTextEdit(dialog));
+            var labelOk = string.Equals(text, label, StringComparison.Ordinal);
+
+            UiAutomation.TabSelectIndex(tab, 1, mouse: true);
+            Thread.Sleep(350);
+            var variable = Native.GetText(FindNativeLampDisplayVariableEdit(dialog));
+            var variableOk = string.Equals(variable, expression, StringComparison.Ordinal);
+
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-native-lamp-readback"));
+            File.WriteAllText(Path.Combine(outDir, "native-lamp-readback.json"),
+                JsonSerializer.Serialize(new
+                {
+                    label,
+                    text,
+                    labelOk,
+                    expression,
+                    variable,
+                    variableOk
+                }, JsonOptions()), Encoding.UTF8);
+
+            UiAutomation.CloseWindow(dialog);
+            Thread.Sleep(300);
+            CloseEditorProcess(process.Id, main, saveIntent: false);
+            process = null;
+            main = IntPtr.Zero;
+            return labelOk && variableOk;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "native-lamp-readback-error.txt"), ex.ToString(), Encoding.UTF8);
+            return false;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private static void SetTextAndVerify(IntPtr edit, string value, string role)
+    {
+        UiAutomation.SetControlText(edit, value, paste: true);
+        Thread.Sleep(180);
+        if (!string.Equals(Native.GetText(edit), value, StringComparison.Ordinal))
+        {
+            PasteTextWithKeyboard(edit, value);
+            Thread.Sleep(180);
+        }
+        if (!string.Equals(Native.GetText(edit), value, StringComparison.Ordinal))
+            throw new InvalidOperationException(role + " edit readback did not match requested text.");
+    }
+
+    private static IntPtr FindNativeStaticTextEdit(IntPtr dialog)
+    {
+        var dialogRect = UiAutomation.GetWindowRect(dialog);
+        var edit = VisibleEdits(dialog)
+            .Where(e =>
+                e.Rect.Width >= 180 &&
+                e.Rect.Height >= 70 &&
+                e.Rect.Left > dialogRect.Left + 10 &&
+                e.Rect.Top > dialogRect.Top + 20 &&
+                e.Rect.Top < dialogRect.Top + 180)
+            .OrderByDescending(e => e.Rect.Width * e.Rect.Height)
+            .Select(e => e.Handle)
+            .FirstOrDefault();
+        if (edit == IntPtr.Zero) throw new InvalidOperationException("Native static text Edit was not found.");
+        return edit;
+    }
+
+    private static IntPtr FindNativeLampTextEdit(IntPtr dialog)
+    {
+        var dialogRect = UiAutomation.GetWindowRect(dialog);
+        var edit = VisibleEdits(dialog)
+            .Where(e =>
+                e.Rect.Width >= 200 &&
+                e.Rect.Height >= 50 &&
+                e.Rect.Top > dialogRect.Top + 180 &&
+                e.Rect.Top < dialogRect.Top + 360)
+            .OrderByDescending(e => e.Rect.Width * e.Rect.Height)
+            .Select(e => e.Handle)
+            .FirstOrDefault();
+        if (edit == IntPtr.Zero) throw new InvalidOperationException("Native lamp text Edit was not found.");
+        return edit;
+    }
+
+    private static IntPtr FindNativeLampDisplayVariableEdit(IntPtr dialog)
+    {
+        var dialogRect = UiAutomation.GetWindowRect(dialog);
+        var edit = VisibleEdits(dialog)
+            .Where(e =>
+                e.Rect.Width >= 70 &&
+                e.Rect.Width <= 180 &&
+                e.Rect.Height <= 35 &&
+                e.Rect.Left > dialogRect.Left + 150 &&
+                e.Rect.Top > dialogRect.Top + 40 &&
+                e.Rect.Top < dialogRect.Top + 140)
+            .OrderByDescending(e => e.Rect.Width)
+            .Select(e => e.Handle)
+            .FirstOrDefault();
+        if (edit == IntPtr.Zero) throw new InvalidOperationException("Native lamp display variable Edit was not found.");
+        return edit;
+    }
+
+    private static IEnumerable<(IntPtr Handle, Rect Rect)> VisibleEdits(IntPtr root)
+        => UiAutomation.EnumerateChildren(root)
+            .Where(h => Native.GetClass(h).Equals("Edit", StringComparison.OrdinalIgnoreCase) && Native.IsWindowVisible(h))
+            .Select(h => (Handle: h, Rect: UiAutomation.GetWindowRect(h)));
 
     private sealed record MomentaryOperationReadback(
         string SubTab,

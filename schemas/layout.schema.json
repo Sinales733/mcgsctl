@@ -63,12 +63,12 @@
             "id": { "type": "string", "minLength": 1 },
             "kind": {
               "type": "string",
-              "enum": ["section-title", "static-label", "momentary-button", "status-button"]
+              "enum": ["section-title", "static-label", "momentary-button", "status-button", "native-static-text", "native-lamp"]
             },
             "text": { "type": "string", "minLength": 1 },
             "variable": { "type": "string" },
             "expression": { "type": "string" },
-            "renderAs": { "type": "string", "enum": ["status-button", "preview-only"] },
+            "renderAs": { "type": "string", "enum": ["status-button", "native-static-text", "preview-only"] },
             "windowIndex": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": true
@@ -84,7 +84,7 @@
           "properties": {
             "id": { "type": "string", "minLength": 1 },
             "title": { "type": "string", "minLength": 1 },
-            "titleRenderAs": { "type": "string", "enum": ["status-button", "preview-only"] },
+            "titleRenderAs": { "type": "string", "enum": ["status-button", "native-static-text", "preview-only"] },
             "layout": { "type": "string", "enum": ["direction-pad", "row"] },
             "controls": {
               "type": "array",
@@ -120,7 +120,7 @@
       "required": ["id", "kind", "text", "expression"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "kind": { "type": "string", "enum": ["status-button"] },
+        "kind": { "type": "string", "enum": ["status-button", "native-lamp"] },
         "text": { "type": "string", "minLength": 1 },
         "expression": { "type": "string", "minLength": 1 },
         "x": { "type": "integer", "minimum": 0 },

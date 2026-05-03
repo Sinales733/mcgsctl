@@ -22,11 +22,21 @@ GUI-supported set:
 ```text
 momentary-button
 status-button
-section-title   -> synthesized status-button label
-static-label    -> synthesized status-button label
+native-static-text
+native-lamp
+section-title   -> native-static-text by default
+static-label    -> native-static-text by default
 ```
 
-`section-title` and `static-label` default to `renderAs: "status-button"`. This deliberately reuses the existing status-button GUI workflow because it has property readback for label text, visibility expression, no operation, and empty script. The synthesized text object uses a constant visibility expression of `1` unless an explicit `expression` is provided.
+`section-title` and `static-label` default to native MCGS static text. The workflow inserts the native label tool, writes the text in the label property dialog, saves, reopens, and verifies the text through property readback.
+
+The older compatibility fallback remains explicit:
+
+```text
+{ "kind": "static-label", "renderAs": "status-button", ... }
+```
+
+This fallback renders the label as a standard-button status object with a constant visibility expression of `1`; it is useful only when the native label dialog is unavailable in a profile.
 
 Preview-only mode is still available:
 
@@ -36,7 +46,7 @@ Preview-only mode is still available:
 
 Preview-only objects appear in `preview.svg` / `preview.html` and validation output, but are not MCGS readback evidence.
 
-`status-button` and synthesized labels remain standard-button style objects, not native MCGS lamps or native static text.
+`status-button` remains a standard-button style object, not a native MCGS lamp. Use `native-lamp` when a native MCGS animation display component is required. Native lamp evidence proves GUI property readback only; hardware indication and field acceptance remain outside mcgsctl.
 
 ## Minimal Example
 
@@ -59,7 +69,7 @@ Preview-only objects appear in `preview.svg` / `preview.html` and validation out
       "y": 280,
       "width": 360,
       "height": 260,
-      "titleRenderAs": "status-button",
+      "titleRenderAs": "native-static-text",
       "layout": "direction-pad",
       "controls": [
         { "kind": "momentary-button", "id": "ptz-up", "text": "UP", "variable": "PTZ_CMD00", "position": "up" },
@@ -68,7 +78,7 @@ Preview-only objects appear in `preview.svg` / `preview.html` and validation out
         { "kind": "momentary-button", "id": "ptz-right", "text": "RIGHT", "variable": "PTZ_CMD03", "position": "right" }
       ],
       "indicators": [
-        { "kind": "status-button", "id": "ptz-ready", "text": "READY", "expression": "PTZ_READY" }
+        { "kind": "native-lamp", "id": "ptz-ready", "text": "READY", "expression": "PTZ_READY" }
       ]
     }
   ]

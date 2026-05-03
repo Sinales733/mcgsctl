@@ -31,6 +31,8 @@ tools\mcgsctl\mcgsctl.ps1 workflow run window.button.add-momentary --project .mc
 tools\mcgsctl\mcgsctl.ps1 workflow run device.channel.map --source FG2_HMI.MCE --area V --address 603 --count 4 --data-type-index 0 --connect-base HMI_PTZ
 tools\mcgsctl\mcgsctl.ps1 workflow run script.edit --source FG2_HMI.MCE --text "TEST_FLAG=1" --button-text SCRIPT_TEST --verify-token TEST_FLAG --check
 tools\mcgsctl\mcgsctl.ps1 workflow run window.indicator.add --source FG2_HMI.MCE --text LIMIT_ON --expression LIMIT_EXPR
+tools\mcgsctl\mcgsctl.ps1 workflow run window.static-text.add --source FG2_HMI.MCE --workdir .mcgsctl-work\native-text --text SECTION_TITLE --x 560 --y 260 --width 220 --height 44
+tools\mcgsctl\mcgsctl.ps1 workflow run window.lamp.add-native --project .mcgsctl-work\native-text\candidate.MCE --text LAMP_STATE --expression LAMP_STATE_VAR --x 560 --y 330 --width 140 --height 80
 ```
 
 `mcgsctl.cmd` provides the same interface for `cmd.exe`.
@@ -104,7 +106,7 @@ tools\mcgsctl\mcgsctl.ps1 layout preview --layout layouts\ptz-basic.json --out .
 tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json
 ```
 
-`layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` creates GUI-supported `momentary-button` and `status-button` objects by reusing the existing proven GUI workflows. `section-title` and `static-label` are rendered as synthesized status-button labels by default, with no operation, empty script, and a constant visibility expression read back through the same verified property path. They are not native static text. See `docs/layout-spec.md`.
+`layout preview` writes `preview.svg`, `preview.html`, `preview.json`, and `validate.json` without opening MCGS. `window.layout.apply` creates GUI-supported `momentary-button`, `status-button`, `native-static-text`, and `native-lamp` objects by chaining the readback-verified GUI workflows. `section-title` and `static-label` now default to native static text; `renderAs: "status-button"` remains available as an explicit compatibility fallback. See `docs/layout-spec.md`.
 
 Common blocked summaries:
 
@@ -160,13 +162,15 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `device.channel.map`: opens the Smart200 device editor, checks duplicate target channels, adds PLC channels, optionally quick-connects variables, saves, closes, reopens the working copy, and verifies the Smart200 channel table again.
 - `script.edit`: creates a standard button, opens the script editor, writes script text, refuses unknown objects unless an expected object whitelist is supplied, requires `--check` for production candidates, saves, exports before/after/reopen snapshots, and verifies script tokens plus Data-table deltas.
 - `window.indicator.add`: creates a standard-button status indicator, configures its visibility expression, saves, exports before/after/reopen snapshots, reopens the property page, and verifies label/expression evidence plus no operation and empty script state. It is not a native lamp workflow.
+- `window.static-text.add`: creates a native MCGS static text label through the animation toolbox, saves, exports before/after/reopen snapshots, reopens the native label property page, and verifies text readback.
+- `window.lamp.add-native`: creates a native MCGS animation display component through the animation toolbox, sets display text and display variable, saves, exports before/after/reopen snapshots, reopens the native property page, and verifies both fields. It is GUI evidence for an HMI indicator, not hardware acceptance.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
-- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, and synthesized status-button labels for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows.
+- `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, `native-static-text`, `native-lamp`, and native static text defaults for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows.
 
 ## Verification Limits
 
-`blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Indicator status buttons are not native MCGS lamp objects. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
+`blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Native static text and native lamp workflows additionally reopen the native property dialogs and verify configured fields. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
 
 Layout preview proves planned geometry and operator-readable structure only. A layout candidate is not release-ready until the underlying GUI workflow results, profile check, project.check, safety.verify, candidate summarize, and candidate validate all pass.
 

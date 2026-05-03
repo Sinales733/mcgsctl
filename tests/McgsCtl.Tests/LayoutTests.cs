@@ -114,7 +114,7 @@ public sealed class LayoutTests : IDisposable
     }
 
     [Fact]
-    public void SectionTitleIsRenderedAsVerifiedStatusButtonByDefault()
+    public void SectionTitleUsesNativeStaticTextByDefault()
     {
         var layout = WriteLayout("synthetic-title", SectionLayout());
         var previewDir = Path.Combine(_root, "synthetic-preview");
@@ -124,8 +124,62 @@ public sealed class LayoutTests : IDisposable
         Assert.Equal(0, result.ExitCode);
         var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
         Assert.Contains("\"kind\": \"section-title\"", previewJson);
+        Assert.Contains("\"guiKind\": \"native-static-text\"", previewJson);
+        Assert.DoesNotContain("constant visibility", previewJson);
+    }
+
+    [Fact]
+    public void StaticLabelCanStillRenderAsStatusButtonFallback()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "fallback-label",
+            ["kind"] = "static-label",
+            ["text"] = "Fallback",
+            ["renderAs"] = "status-button",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 24
+        });
+        var layout = WriteLayout("fallback-label", json);
+        var previewDir = Path.Combine(_root, "fallback-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"id\": \"fallback-label\"", previewJson);
         Assert.Contains("\"guiKind\": \"status-button\"", previewJson);
         Assert.Contains("constant visibility", previewJson);
+    }
+
+    [Fact]
+    public void NativeLampLayoutPassesValidation()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "native-lamp",
+            ["kind"] = "native-lamp",
+            ["text"] = "LAMP",
+            ["expression"] = "MCGSCTL_SW",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 75
+        });
+        var layout = WriteLayout("native-lamp", json);
+        var previewDir = Path.Combine(_root, "native-lamp-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"native-lamp\"", previewJson);
+        Assert.Contains("\"guiKind\": \"native-lamp\"", previewJson);
+        Assert.Contains("animation display component", previewJson);
     }
 
     [Fact]

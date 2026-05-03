@@ -23,16 +23,18 @@ internal static partial class Program
         {
             get
             {
-                if (Kind is "momentary-button" or "status-button") return Kind;
-                if (IsSyntheticText && !string.Equals(RenderAs, "preview-only", StringComparison.OrdinalIgnoreCase))
+                if (Kind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp") return Kind;
+                if (IsSyntheticText && string.Equals(RenderAs, "status-button", StringComparison.OrdinalIgnoreCase))
                     return "status-button";
+                if (IsSyntheticText && !string.Equals(RenderAs, "preview-only", StringComparison.OrdinalIgnoreCase))
+                    return "native-static-text";
                 return Kind;
             }
         }
-        public string EffectiveExpression => GuiKind == "status-button"
+        public string EffectiveExpression => GuiKind is "status-button" or "native-lamp"
             ? (Expression ?? (IsSyntheticText ? "1" : ""))
             : "";
-        public bool GuiSupported => GuiKind is "momentary-button" or "status-button";
+        public bool GuiSupported => GuiKind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp";
     }
 
     private sealed class LayoutValidationResult
@@ -181,6 +183,36 @@ internal static partial class Program
                         ["evidenceDir"] = objectDir
                     });
                 }
+                else if (obj.GuiKind == "native-static-text")
+                {
+                    var ok = ReopenVerifyNativeStaticText(readbackProject, editor, obj.Text,
+                        obj.WindowIndex, obj.X, obj.Y, obj.Width, obj.Height, objectDir,
+                        TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+                    objectResults.Add(new Dictionary<string, object?>
+                    {
+                        ["id"] = obj.Id,
+                        ["kind"] = obj.Kind,
+                        ["guiKind"] = obj.GuiKind,
+                        ["status"] = ok ? "PASS" : "UNKNOWN",
+                        ["propertyReadback"] = ok ? "PASS" : "UNKNOWN",
+                        ["evidenceDir"] = objectDir
+                    });
+                }
+                else if (obj.GuiKind == "native-lamp")
+                {
+                    var ok = ReopenVerifyNativeLamp(readbackProject, editor, obj.Text, obj.EffectiveExpression,
+                        obj.WindowIndex, obj.X, obj.Y, obj.Width, obj.Height, objectDir,
+                        TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+                    objectResults.Add(new Dictionary<string, object?>
+                    {
+                        ["id"] = obj.Id,
+                        ["kind"] = obj.Kind,
+                        ["guiKind"] = obj.GuiKind,
+                        ["status"] = ok ? "PASS" : "UNKNOWN",
+                        ["propertyReadback"] = ok ? "PASS" : "UNKNOWN",
+                        ["evidenceDir"] = objectDir
+                    });
+                }
             }
 
             foreach (var obj in validation.Objects.Where(o => !o.GuiSupported))
@@ -246,7 +278,7 @@ internal static partial class Program
 
             var guiObjects = validation.Objects.Where(o => o.GuiSupported).ToArray();
             if (guiObjects.Length == 0)
-                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button, section-title/static-label rendered as status-button.");
+                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button, native-static-text, native-lamp.");
 
             var source = Opt(args, "--source");
             var project = Opt(args, "--project");
@@ -267,9 +299,14 @@ internal static partial class Program
                 var childOut = Path.Combine(outDir, "objects", $"{i + 1:D2}-{SafeFile(obj.Id)}");
                 Directory.CreateDirectory(childOut);
                 var childArgs = BuildLayoutChildWorkflowArgs(args, obj, childOut, source, workDir, currentProject);
-                var exitCode = obj.GuiKind == "momentary-button"
-                    ? WorkflowAddMomentaryButton(childArgs)
-                    : WorkflowWindowIndicatorAdd(childArgs);
+                var exitCode = obj.GuiKind switch
+                {
+                    "momentary-button" => WorkflowAddMomentaryButton(childArgs),
+                    "status-button" => WorkflowWindowIndicatorAdd(childArgs),
+                    "native-static-text" => WorkflowNativeStaticTextAdd(childArgs),
+                    "native-lamp" => WorkflowNativeLampAdd(childArgs),
+                    _ => 2
+                };
                 if (exitCode == 0 && currentProject == null && !string.IsNullOrWhiteSpace(workDir))
                     currentProject = FullPath(Path.Combine(workDir, CandidateFileName));
                 childResults.Add(new Dictionary<string, object?>
@@ -331,7 +368,14 @@ internal static partial class Program
         {
             "workflow",
             "run",
-            obj.GuiKind == "momentary-button" ? "window.button.add-momentary" : "window.indicator.add"
+            obj.GuiKind switch
+            {
+                "momentary-button" => "window.button.add-momentary",
+                "status-button" => "window.indicator.add",
+                "native-static-text" => "window.static-text.add",
+                "native-lamp" => "window.lamp.add-native",
+                _ => throw new ArgumentException("Unsupported layout GUI kind: " + obj.GuiKind)
+            }
         };
         if (!string.IsNullOrWhiteSpace(source))
         {
@@ -354,11 +398,11 @@ internal static partial class Program
             args.Add("--variable");
             args.Add(obj.Variable ?? "");
         }
-        else
+        else if (obj.GuiKind is "status-button" or "native-lamp")
         {
             args.Add("--expression");
             args.Add(obj.EffectiveExpression);
-            if (obj.IsSyntheticText)
+            if (obj.IsSyntheticText && obj.GuiKind == "status-button")
                 args.Add("--synthetic-label");
         }
         args.Add("--window-index");
@@ -628,12 +672,13 @@ internal static partial class Program
     {
         if (LayoutJsonInt(item, "x").HasValue && LayoutJsonInt(item, "y").HasValue)
         {
+            var explicitKind = JsonString(item, "kind") ?? "status-button";
             return new LayoutObjectPlan
             {
                 X = LayoutJsonInt(item, "x")!.Value,
                 Y = LayoutJsonInt(item, "y")!.Value,
-                Width = LayoutJsonInt(item, "width") ?? style.StatusWidth,
-                Height = LayoutJsonInt(item, "height") ?? style.StatusHeight
+                Width = LayoutJsonInt(item, "width") ?? DefaultLayoutWidth(explicitKind, style),
+                Height = LayoutJsonInt(item, "height") ?? DefaultLayoutHeight(explicitKind, style)
             };
         }
 
@@ -642,8 +687,9 @@ internal static partial class Program
         var width = LayoutJsonInt(section, "width") ?? 300;
         var height = LayoutJsonInt(section, "height") ?? 220;
         var layout = JsonString(section, "layout") ?? "row";
-        var itemWidth = style.StatusWidth;
-        var itemHeight = style.StatusHeight;
+        var kind = JsonString(item, "kind") ?? "status-button";
+        var itemWidth = DefaultLayoutWidth(kind, style);
+        var itemHeight = DefaultLayoutHeight(kind, style);
         var safeTop = y + style.TitleHeight + style.Grid * 2;
 
         if (layout.Equals("direction-pad", StringComparison.OrdinalIgnoreCase))
@@ -678,6 +724,8 @@ internal static partial class Program
         => kind switch
         {
             "status-button" => style.StatusWidth,
+            "native-lamp" => Math.Max(style.StatusWidth, 120),
+            "native-static-text" => 160,
             "section-title" or "static-label" => 160,
             _ => style.ButtonWidth
         };
@@ -686,6 +734,8 @@ internal static partial class Program
         => kind switch
         {
             "status-button" => style.StatusHeight,
+            "native-lamp" => Math.Max(style.StatusHeight, 75),
+            "native-static-text" => style.LabelHeight,
             "section-title" => style.TitleHeight,
             "static-label" => style.LabelHeight,
             _ => style.ButtonHeight
@@ -698,7 +748,7 @@ internal static partial class Program
 
         var supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "section-title", "static-label", "momentary-button", "status-button"
+            "section-title", "static-label", "momentary-button", "status-button", "native-static-text", "native-lamp"
         };
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var obj in result.Objects)
@@ -708,6 +758,7 @@ internal static partial class Program
             if (!supported.Contains(obj.Kind)) result.BlockedReasons.Add($"{obj.Id}: unsupported kind {obj.Kind}");
             if (!string.IsNullOrWhiteSpace(obj.RenderAs) &&
                 !obj.RenderAs.Equals("status-button", StringComparison.OrdinalIgnoreCase) &&
+                !obj.RenderAs.Equals("native-static-text", StringComparison.OrdinalIgnoreCase) &&
                 !obj.RenderAs.Equals("preview-only", StringComparison.OrdinalIgnoreCase))
                 result.BlockedReasons.Add($"{obj.Id}: unsupported renderAs {obj.RenderAs}");
             if (!obj.IsSyntheticText && !string.IsNullOrWhiteSpace(obj.RenderAs))
@@ -721,7 +772,7 @@ internal static partial class Program
                 if (string.IsNullOrWhiteSpace(obj.Variable)) result.BlockedReasons.Add($"{obj.Id}: variable is required");
                 else if (!LooksLikeDataObjectName(obj.Variable)) result.BlockedReasons.Add($"{obj.Id}: variable name is malformed");
             }
-            if (obj.Kind == "status-button")
+            if (obj.Kind is "status-button" or "native-lamp")
             {
                 if (string.IsNullOrWhiteSpace(obj.Expression)) result.BlockedReasons.Add($"{obj.Id}: expression is required");
             }
@@ -742,8 +793,10 @@ internal static partial class Program
         if (safetyPath != null)
             ValidateLayoutAgainstSafety(result, safetyPath);
 
-        if (result.Objects.Any(o => o.IsSyntheticText && o.GuiSupported))
+        if (result.Objects.Any(o => o.IsSyntheticText && o.GuiKind == "status-button"))
             result.Warnings.Add("section-title/static-label are rendered as verified status-button labels with constant visibility, not native static text");
+        if (result.Objects.Any(o => o.GuiKind == "native-lamp"))
+            result.Warnings.Add("native-lamp uses the MCGS animation display component and still requires human/site acceptance");
         if (result.Objects.Any(o => !o.GuiSupported))
             result.Warnings.Add("some layout objects are preview evidence only in current GUI apply implementation");
     }
@@ -856,6 +909,8 @@ internal static partial class Program
             {
                 "momentary-button" => "#f7f7f7",
                 "status-button" => "#ffffff",
+                "native-lamp" => "#eef7ee",
+                "native-static-text" => "#eeeeee",
                 "section-title" => "#dddddd",
                 "static-label" => "#eeeeee",
                 _ => "#ffdddd"
