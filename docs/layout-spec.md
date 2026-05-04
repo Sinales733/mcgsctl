@@ -97,18 +97,25 @@ Screenshots are evidence only. They are not used as the primary source for autom
 Automatic placement requires a reliable internal canvas object map:
 
 ```powershell
-tools\mcgsctl\mcgsctl.ps1 canvas inspect `
+tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe `
   --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
-  --out .mcgsctl-runs\canvas-inspect
+  --out .mcgsctl-runs\canvas-mce-object-map `
+  --row-key 2 `
+  --canvas-width 800 `
+  --canvas-height 480
 
 tools\mcgsctl\mcgsctl.ps1 layout preview `
   --layout layouts\ptz-basic.json `
   --out .mcgsctl-runs\layout-preview-auto `
   --placement internal-occupancy `
-  --canvas-objects .mcgsctl-runs\canvas-inspect\canvas-objects.json
+  --canvas-objects .mcgsctl-runs\canvas-mce-object-map\canvas-objects.json
 ```
 
-`canvas inspect` opens a temporary copy of the candidate, enters animation configuration, finds the MCGS canvas HWND, and probes:
+`canvas inspect` remains available for UIA/MSAA/WM_GETOBJECT diagnostics. On current MCGS 7.7 profiles, the self-drawn animation canvas may expose no child geometry through those channels, so the preferred automatic-placement source is `canvas mce-object-map-probe`.
+
+`canvas mce-object-map-probe` exports the candidate read-only, scans `WndUser.lbObjects` / `WndDevice.lbObjects`, and decodes high-confidence little-endian LTRB rectangles. It can match objects that mcgsctl created from workflow `createdUiObjects` evidence, and it can also emit generic occupied rectangles for existing controls. `--row-key` restricts inference to one exported window/device row so rectangles from multiple screens are not overlaid; `--canvas-width` / `--canvas-height` should match the visible editor viewport used for automatic placement.
+
+The older canvas diagnostics probe:
 
 ```text
 UIA / CUIAutomation
@@ -154,11 +161,12 @@ tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\layo
 tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
 tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
+tools\mcgsctl\mcgsctl.ps1 canvas mce-blob-diff-probe --before .mcgsctl-work\sample-a\candidate.MCE --after .mcgsctl-work\sample-b\candidate.MCE --out .mcgsctl-runs\canvas-mce-blob-diff
 ```
 
 These commands are read-only with respect to the real candidate because they operate on temporary copies. Clipboard probing records format names, sizes, and hashes only; it does not store raw proprietary object payloads.
 
-`toolbar-probe` records `ToolbarWindow32` command IDs for command-discovery evidence without clicking them. `mce-geometry-probe` exports the candidate read-only and scans only likely HMI object blobs for class and rectangle candidates; it reports `evidenceStatus=PASS` when the evidence file is valid, but the object map remains `UNKNOWN` until a trusted decoder can prove high-confidence rectangles.
+`toolbar-probe` records `ToolbarWindow32` command IDs for command-discovery evidence without clicking them. `mce-geometry-probe` exports the candidate read-only and scans likely HMI object blobs for class/string/geometry candidates. `mce-blob-diff-probe` compares paired candidate files and writes sanitized changed ranges plus bounded hex windows for decoder experiments; it does not store full raw blobs and never patches the project.
 
 ## Evidence
 

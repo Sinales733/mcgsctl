@@ -163,6 +163,7 @@ public final class MceExport {
             List<ClassOccurrence> classes = findClassOccurrences(bytes);
             if (classes.isEmpty()) continue;
             List<RectCandidate> rects = findRectCandidates(bytes);
+            List<TextAnchor> anchors = findTextAnchors(bytes);
             if (!isLikelyCanvasObjectBlob(tableName, c.getName())) continue;
             if (entryIndex++ > 0) w.write(",\n");
             w.write(indent(1) + "{\n");
@@ -195,6 +196,22 @@ public final class MceExport {
               inlineProp(w, "y", r.y, true);
               inlineProp(w, "width", r.width, true);
               inlineProp(w, "height", r.height, false);
+              w.write("}");
+            }
+            w.write("],\n");
+            w.write(indent(2) + "\"textAnchors\": [");
+            for (int i = 0; i < anchors.size(); i++) {
+              if (i > 0) w.write(", ");
+              TextAnchor a = anchors.get(i);
+              w.write("{");
+              inlineProp(w, "offset", hex(a.offset), true);
+              inlineProp(w, "encoding", a.encoding, true);
+              inlineProp(w, "byteLength", a.byteLength, true);
+              inlineProp(w, "charLength", a.charLength, true);
+              inlineProp(w, "sha256", a.sha256, true);
+              w.write(quote("sample") + ": ");
+              if (a.sample == null) w.write("null");
+              else w.write(quote(a.sample));
               w.write("}");
             }
             w.write("]\n");
@@ -233,6 +250,72 @@ public final class MceExport {
     return found;
   }
 
+  private static List<TextAnchor> findTextAnchors(byte[] bytes) throws Exception {
+    List<TextAnchor> found = new ArrayList<>();
+    Set<String> seen = new LinkedHashSet<>();
+    for (int i = 0; i < bytes.length && found.size() < 400; ) {
+      if (!isAsciiTextByte(bytes[i])) {
+        i++;
+        continue;
+      }
+      int start = i;
+      while (i < bytes.length && isAsciiTextByte(bytes[i])) i++;
+      if (i - start >= 3) {
+        String text = new String(bytes, start, i - start, StandardCharsets.US_ASCII);
+        addTextAnchor(found, seen, start, "ascii", i - start, text);
+      }
+    }
+
+    for (int i = 0; i + 5 < bytes.length && found.size() < 400; ) {
+      if (!isUtf16LeUseful(bytes, i)) {
+        i += 2;
+        continue;
+      }
+      int start = i;
+      while (i + 1 < bytes.length && isUtf16LeUseful(bytes, i)) i += 2;
+      if (i - start >= 6) {
+        String text = new String(bytes, start, i - start, StandardCharsets.UTF_16LE);
+        addTextAnchor(found, seen, start, "utf16le", i - start, text);
+      }
+    }
+    return found;
+  }
+
+  private static void addTextAnchor(List<TextAnchor> found, Set<String> seen, int offset,
+                                    String encoding, int byteLength, String rawText) throws Exception {
+    String text = normalizeText(rawText).trim();
+    if (text.length() < 3 || text.indexOf('\uFFFD') >= 0) return;
+    if (!looksMeaningful(text)) return;
+    String key = encoding + ":" + offset + ":" + text;
+    if (!seen.add(key)) return;
+    String sample = isSafeEvidenceSample(text) ? text : null;
+    found.add(new TextAnchor(offset, encoding, byteLength, text.length(),
+        sha256Hex(text.getBytes(StandardCharsets.UTF_8)), sample));
+  }
+
+  private static boolean isAsciiTextByte(byte value) {
+    int b = value & 0xFF;
+    return b >= 0x20 && b <= 0x7E;
+  }
+
+  private static boolean isUtf16LeUseful(byte[] bytes, int offset) {
+    if (offset + 1 >= bytes.length) return false;
+    int low = bytes[offset] & 0xFF;
+    int high = bytes[offset + 1] & 0xFF;
+    if (high == 0 && low >= 0x20 && low <= 0x7E) return true;
+    char ch = (char) (low | (high << 8));
+    return isUsefulChar(ch);
+  }
+
+  private static boolean isSafeEvidenceSample(String text) {
+    if (text.length() > 160) return false;
+    for (int i = 0; i < text.length(); i++) {
+      char ch = text.charAt(i);
+      if (ch < 0x20 || ch > 0x7E) return false;
+    }
+    return true;
+  }
+
   private static boolean isAsciiNameByte(byte value) {
     int b = value & 0xFF;
     return (b >= 'A' && b <= 'Z')
@@ -244,7 +327,7 @@ public final class MceExport {
   private static List<RectCandidate> findRectCandidates(byte[] bytes) {
     List<RectCandidate> found = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
-    for (int offset = 0; offset + 16 <= bytes.length && found.size() < 250; offset += 4) {
+    for (int offset = 0; offset + 16 <= bytes.length && found.size() < 20000; offset++) {
       int a = int32(bytes, offset);
       int b = int32(bytes, offset + 4);
       int c = int32(bytes, offset + 8);
@@ -252,13 +335,33 @@ public final class MceExport {
       addRectCandidate(found, seen, offset, "int32", "xywh", a, b, c, d);
       addRectCandidate(found, seen, offset, "int32", "ltrb", a, b, c - a, d - b);
     }
-    for (int offset = 0; offset + 8 <= bytes.length && found.size() < 250; offset += 2) {
+    for (int offset = 0; offset + 8 <= bytes.length && found.size() < 20000; offset += 2) {
       int a = int16(bytes, offset);
       int b = int16(bytes, offset + 2);
       int c = int16(bytes, offset + 4);
       int d = int16(bytes, offset + 6);
       addRectCandidate(found, seen, offset, "int16", "xywh", a, b, c, d);
       addRectCandidate(found, seen, offset, "int16", "ltrb", a, b, c - a, d - b);
+    }
+    for (int offset = 0; offset + 16 <= bytes.length && found.size() < 20000; offset += 4) {
+      Float a = float32(bytes, offset);
+      Float b = float32(bytes, offset + 4);
+      Float c = float32(bytes, offset + 8);
+      Float d = float32(bytes, offset + 12);
+      addFloatRectCandidate(found, seen, offset, "float32", "xywh", a, b, c, d);
+      if (a != null && b != null && c != null && d != null) {
+        addFloatRectCandidate(found, seen, offset, "float32", "ltrb", a, b, c - a, d - b);
+      }
+    }
+    for (int offset = 0; offset + 32 <= bytes.length && found.size() < 20000; offset += 8) {
+      Double a = float64(bytes, offset);
+      Double b = float64(bytes, offset + 8);
+      Double c = float64(bytes, offset + 16);
+      Double d = float64(bytes, offset + 24);
+      addDoubleRectCandidate(found, seen, offset, "float64", "xywh", a, b, c, d);
+      if (a != null && b != null && c != null && d != null) {
+        addDoubleRectCandidate(found, seen, offset, "float64", "ltrb", a, b, c - a, d - b);
+      }
     }
     return found;
   }
@@ -274,6 +377,27 @@ public final class MceExport {
     found.add(new RectCandidate(offset, encoding, pattern, x, y, width, height));
   }
 
+  private static void addFloatRectCandidate(List<RectCandidate> found, Set<String> seen, int offset,
+                                            String encoding, String pattern, Float x, Float y, Float width, Float height) {
+    if (x == null || y == null || width == null || height == null) return;
+    if (!isNearInteger(x) || !isNearInteger(y) || !isNearInteger(width) || !isNearInteger(height)) return;
+    addRectCandidate(found, seen, offset, encoding, pattern, Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+  }
+
+  private static void addDoubleRectCandidate(List<RectCandidate> found, Set<String> seen, int offset,
+                                             String encoding, String pattern, Double x, Double y, Double width, Double height) {
+    if (x == null || y == null || width == null || height == null) return;
+    if (!isNearInteger(x) || !isNearInteger(y) || !isNearInteger(width) || !isNearInteger(height)) return;
+    addRectCandidate(found, seen, offset, encoding, pattern, (int) Math.round(x), (int) Math.round(y),
+        (int) Math.round(width), (int) Math.round(height));
+  }
+
+  private static boolean isNearInteger(double value) {
+    if (!Double.isFinite(value)) return false;
+    if (value < -200 || value > 2400) return false;
+    return Math.abs(value - Math.rint(value)) <= 0.05;
+  }
+
   private static int int16(byte[] bytes, int offset) {
     int value = (bytes[offset] & 0xFF) | (bytes[offset + 1] << 8);
     return (short) value;
@@ -284,6 +408,21 @@ public final class MceExport {
         | ((bytes[offset + 1] & 0xFF) << 8)
         | ((bytes[offset + 2] & 0xFF) << 16)
         | (bytes[offset + 3] << 24);
+  }
+
+  private static Float float32(byte[] bytes, int offset) {
+    int bits = int32(bytes, offset);
+    float value = Float.intBitsToFloat(bits);
+    return Float.isFinite(value) ? value : null;
+  }
+
+  private static Double float64(byte[] bytes, int offset) {
+    long bits = 0;
+    for (int i = 7; i >= 0; i--) {
+      bits = (bits << 8) | (bytes[offset + i] & 0xFFL);
+    }
+    double value = Double.longBitsToDouble(bits);
+    return Double.isFinite(value) ? value : null;
   }
 
   private static String sha256Hex(byte[] bytes) throws Exception {
@@ -301,6 +440,8 @@ public final class MceExport {
   private record ClassOccurrence(int offset, String className) {}
 
   private record RectCandidate(int offset, String encoding, String pattern, int x, int y, int width, int height) {}
+
+  private record TextAnchor(int offset, String encoding, int byteLength, int charLength, String sha256, String sample) {}
 
   private static void writeValue(Writer w, Object value) throws Exception {
     if (value == null) {
@@ -479,4 +620,183 @@ public final class MceExport {
   private static String indent(int level) {
     return "  ".repeat(level);
   }
+}
+
+final class MceBlobDiff {
+  private static final int CONTEXT = 32;
+
+  public static void main(String[] args) throws Exception {
+    if (args.length < 3) {
+      System.err.println("Usage: java MceBlobDiff <before.mce> <after.mce> <outDir>");
+      System.exit(2);
+    }
+    Path outDir = Path.of(args[2]);
+    Files.createDirectories(outDir);
+    Map<String, BlobRow> before = load(Path.of(args[0]));
+    Map<String, BlobRow> after = load(Path.of(args[1]));
+    try (Writer w = Files.newBufferedWriter(outDir.resolve("blob_diff.json"), StandardCharsets.UTF_8)) {
+      w.write("[\n");
+      int written = 0;
+      Set<String> keys = new LinkedHashSet<>();
+      keys.addAll(before.keySet());
+      keys.addAll(after.keySet());
+      for (String key : keys) {
+        BlobRow a = before.get(key);
+        BlobRow b = after.get(key);
+        if (a == null || b == null) continue;
+        if (MessageDigest.isEqual(a.bytes, b.bytes)) continue;
+        if (written++ > 0) w.write(",\n");
+        writeEntry(w, a, b);
+      }
+      w.write("\n]\n");
+    }
+  }
+
+  private static Map<String, BlobRow> load(Path file) throws Exception {
+    Map<String, BlobRow> rows = new java.util.LinkedHashMap<>();
+    try (Database db = DatabaseBuilder.open(file.toFile())) {
+      for (String tableName : db.getTableNames()) {
+        Table table = db.getTable(tableName);
+        for (Row row : table) {
+          String rowKey = firstCell(row);
+          for (Column c : table.getColumns()) {
+            Object value = row.get(c.getName());
+            if (!(value instanceof byte[] bytes)) continue;
+            if (!isLikelyCanvasObjectBlob(tableName, c.getName())) continue;
+            String key = tableName + "|" + c.getName() + "|" + rowKey;
+            rows.put(key, new BlobRow(tableName, c.getName(), rowKey, bytes));
+          }
+        }
+      }
+    }
+    return rows;
+  }
+
+  private static boolean isLikelyCanvasObjectBlob(String tableName, String columnName) {
+    if (!"lbObjects".equalsIgnoreCase(columnName)) return false;
+    return "WndUser".equalsIgnoreCase(tableName) || "WndDevice".equalsIgnoreCase(tableName);
+  }
+
+  private static void writeEntry(Writer w, BlobRow before, BlobRow after) throws Exception {
+    w.write("  {\n");
+    prop(w, "table", after.table, true, 2);
+    prop(w, "column", after.column, true, 2);
+    prop(w, "rowKey", after.rowKey, true, 2);
+    prop(w, "beforeBytes", before.bytes.length, true, 2);
+    prop(w, "afterBytes", after.bytes.length, true, 2);
+    prop(w, "beforeSha256", sha256Hex(before.bytes), true, 2);
+    prop(w, "afterSha256", sha256Hex(after.bytes), true, 2);
+    w.write("    \"changedRanges\": [");
+    List<Range> ranges = changedRanges(before.bytes, after.bytes);
+    for (int i = 0; i < ranges.size() && i < 200; i++) {
+      if (i > 0) w.write(", ");
+      Range r = ranges.get(i);
+      int start = Math.max(0, r.start - CONTEXT);
+      int end = Math.min(Math.max(before.bytes.length, after.bytes.length), r.end + CONTEXT);
+      w.write("{");
+      inlineProp(w, "start", hex(r.start), true);
+      inlineProp(w, "endExclusive", hex(r.end), true);
+      inlineProp(w, "length", r.end - r.start, true);
+      inlineProp(w, "windowStart", hex(start), true);
+      inlineProp(w, "windowEndExclusive", hex(end), true);
+      inlineProp(w, "beforeHex", hexWindow(before.bytes, start, end), true);
+      inlineProp(w, "afterHex", hexWindow(after.bytes, start, end), false);
+      w.write("}");
+    }
+    w.write("]\n");
+    w.write("  }");
+  }
+
+  private static List<Range> changedRanges(byte[] before, byte[] after) {
+    List<Range> raw = new ArrayList<>();
+    int max = Math.max(before.length, after.length);
+    int start = -1;
+    for (int i = 0; i < max; i++) {
+      boolean same = i < before.length && i < after.length && before[i] == after[i];
+      if (!same && start < 0) start = i;
+      if ((same || i == max - 1) && start >= 0) {
+        int end = same ? i : i + 1;
+        raw.add(new Range(start, end));
+        start = -1;
+      }
+    }
+    List<Range> merged = new ArrayList<>();
+    for (Range r : raw) {
+      if (!merged.isEmpty() && r.start <= merged.get(merged.size() - 1).end + 16) {
+        Range last = merged.remove(merged.size() - 1);
+        merged.add(new Range(last.start, Math.max(last.end, r.end)));
+      } else {
+        merged.add(r);
+      }
+    }
+    return merged;
+  }
+
+  private static String hexWindow(byte[] bytes, int start, int end) {
+    StringBuilder sb = new StringBuilder(Math.max(0, end - start) * 2);
+    for (int i = start; i < end && i < bytes.length; i++) {
+      sb.append(String.format("%02x", bytes[i] & 0xFF));
+    }
+    return sb.toString();
+  }
+
+  private static String firstCell(Row row) {
+    for (Object value : row.values()) {
+      if (value != null) return String.valueOf(value);
+    }
+    return "";
+  }
+
+  private static void prop(Writer w, String key, Object value, boolean comma, int level) throws Exception {
+    w.write("  ".repeat(level) + quote(key) + ": ");
+    if (value instanceof Number || value instanceof Boolean) w.write(String.valueOf(value));
+    else w.write(quote(String.valueOf(value)));
+    if (comma) w.write(",");
+    w.write("\n");
+  }
+
+  private static void inlineProp(Writer w, String key, Object value, boolean comma) throws Exception {
+    w.write(quote(key) + ": ");
+    if (value instanceof Number || value instanceof Boolean) w.write(String.valueOf(value));
+    else w.write(quote(String.valueOf(value)));
+    if (comma) w.write(", ");
+  }
+
+  private static String sha256Hex(byte[] bytes) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    byte[] hash = digest.digest(bytes);
+    StringBuilder sb = new StringBuilder(hash.length * 2);
+    for (byte b : hash) sb.append(String.format("%02x", b & 0xFF));
+    return sb.toString();
+  }
+
+  private static String hex(int value) {
+    return "0x" + Integer.toHexString(value).toUpperCase();
+  }
+
+  private static String quote(String value) {
+    StringBuilder sb = new StringBuilder(value.length() + 2);
+    sb.append('"');
+    for (int i = 0; i < value.length(); i++) {
+      char ch = value.charAt(i);
+      switch (ch) {
+        case '\\' -> sb.append("\\\\");
+        case '"' -> sb.append("\\\"");
+        case '\b' -> sb.append("\\b");
+        case '\f' -> sb.append("\\f");
+        case '\n' -> sb.append("\\n");
+        case '\r' -> sb.append("\\r");
+        case '\t' -> sb.append("\\t");
+        default -> {
+          if (ch < 0x20) sb.append(String.format("\\u%04x", (int) ch));
+          else sb.append(ch);
+        }
+      }
+    }
+    sb.append('"');
+    return sb.toString();
+  }
+
+  private record BlobRow(String table, String column, String rowKey, byte[] bytes) {}
+  private record Range(int start, int end) {}
 }

@@ -112,9 +112,11 @@ Definition of "done" for unattended completion:
   isolated with evidence.
 - GUI-capable work has candidate evidence, screenshots, readback, and validator
   results when the desktop environment allows it.
-- Canvas reading/planning either succeeds with `canvas-objects.json` and
-  `layout-plan.json`, or all internal channels have been probed and the tool
-  truthfully returns `UNKNOWN` instead of pretending automatic planning works.
+- Canvas reading/planning succeeds with `canvas-objects.json` and
+  `layout-plan.json`. If surface channels return `UNKNOWN`, that is not final;
+  continue into `MCGS_DRAW_OBJ` / `lbObjects` differential reverse engineering
+  until tool-created object geometry can be read back or every file-safe
+  decoding path has concrete negative evidence.
 - A branch contains the verified work, with a commit and push when possible.
 
 When blocked on GUI access, keep advancing offline pieces:
@@ -342,9 +344,10 @@ Probe continuation rule:
 - If clipboard exposes nothing useful, inspect MCGS export/output evidence and
   `.MCE` internal read-only structures for coordinates, but never write private
   blobs.
-- Only after UIA, MSAA, WM_GETOBJECT, NativeOM, context menu, clipboard, toolbar
-  command discovery, and read-only MCE geometry have all been tried may automatic
-  internal-occupancy planning return `UNKNOWN`.
+- After UIA, MSAA, WM_GETOBJECT, NativeOM, context menu, clipboard, toolbar
+  command discovery, and read-only MCE geometry have all been tried, do not treat
+  `UNKNOWN` as completion. Treat it as input to the differential reverse
+  engineering stage below.
 
 Known current evidence as of the 2026-05-04 resume:
 
@@ -357,6 +360,86 @@ Known current evidence as of the 2026-05-04 resume:
   It should fix any probe lifecycle issue if obvious, then continue with
   `canvas clipboard-probe`, toolbar command discovery, and read-only MCE geometry
   inference.
+
+### MCGS Geometry Reverse Engineering Stage
+
+If the normal object channels cannot produce a reliable object map, continue
+with file-safe reverse engineering. This stage is required before declaring the
+automatic internal-occupancy planner impossible.
+
+Target evidence sources:
+
+- clipboard `MCGS_DRAW_OBJ` format
+- `WndUser.lbObjects`
+- `WndDevice.lbObjects`
+- exported MCE evidence and Java `MceExport` output
+- `CDraw*` class markers
+- text/variable anchors from objects created by this tool
+- known-coordinate GUI objects created in candidate copies
+
+Rules:
+
+- Do not patch `.MCE` private blobs.
+- Do not commit raw private payloads or large binary evidence.
+- Raw evidence may live under `.mcgsctl-runs` or `.codex_tmp` for local
+  analysis, but commits should contain only source, tests, docs, schemas, and
+  sanitized summaries.
+- Do not infer a field from one sample. Use differential experiments.
+- Gemini may review sanitized offset summaries, field hypotheses, and tiny hex
+  windows, but must not receive `.env`, keys, full raw blobs, or full `.MCE`
+  files.
+
+Minimum differential experiment set:
+
+1. Create candidate copies with one known object at a time.
+2. Use objects this tool can create and read back, such as momentary buttons,
+   status-buttons, synthetic labels, native static text, and native lamps when
+   their GUI path is available.
+3. Hold all fields constant except one variable per run:
+   - `x`
+   - `y`
+   - `width`
+   - `height`
+   - `text`
+   - `variable` or visibility expression
+4. For every run, capture sanitized evidence:
+   - project SHA and candidate path
+   - object kind and known x/y/width/height
+   - clipboard format names, IDs, sizes, and hashes
+   - `MCGS_DRAW_OBJ` length/hash and small bounded hex windows around changed
+     offsets
+   - `WndUser.lbObjects` / `WndDevice.lbObjects` length/hash and small bounded
+     hex windows around changed offsets
+   - `CDraw*` marker offsets
+   - text/variable anchor offsets
+   - changed byte ranges between paired samples
+5. Build a read-only differential analyzer that emits:
+   - object class candidate
+   - possible x/y/width/height fields
+   - anchor text/variable evidence
+   - confidence score
+   - rejected hypotheses
+   - enough evidence to reproduce the inference
+
+Completion target for this stage:
+
+- It is sufficient to decode geometry for objects created by `mcgsctl`; full
+  universal MCGS object decoding is not required for the first planner.
+- Once tool-created object geometry can be decoded, emit `canvas-objects.json`
+  with reliable occupied rectangles.
+- Use that object map to make `layout preview --placement internal-occupancy`
+  return a real plan instead of `blocked`.
+- Then run `window.layout.apply`, readback, `project.check`, `safety.verify`,
+  `candidate validate`, build, tests, commit, and push.
+
+Fallback rule:
+
+- The tool may return `UNKNOWN` only after the differential reverse engineering
+  stage has tried clipboard diffing, MCE blob diffing, Java export enhancement,
+  class-marker anchors, text/variable anchors, little-endian coordinate searches,
+  single-variable experiments, multi-sample statistics, and Gemini review.
+- That `UNKNOWN` must be encoded as tool behavior with evidence, not as a chat
+  excuse to stop early.
 
 ### Automatic Layout Planner
 
@@ -495,12 +578,17 @@ Proceed in this order unless current code shows a better safe path:
    object evidence.
 7. Canvas inspection: implement read-only `canvas inspect` and probe UIA, MSAA,
    `WM_GETOBJECT`, `OBJID_NATIVEOM`, clipboard, and coordinate mapping.
-8. Object map and planner: implement `canvas-objects.json`, occupied rectangles,
+8. Geometry reverse engineering: if surface probes return `UNKNOWN`, run
+   differential experiments against `MCGS_DRAW_OBJ`, `WndUser.lbObjects`,
+   `WndDevice.lbObjects`, `CDraw*` markers, text anchors, variable anchors, and
+   known-coordinate tool-created objects until tool-created object geometry can
+   be decoded or every file-safe path has concrete negative evidence.
+9. Object map and planner: implement `canvas-objects.json`, occupied rectangles,
    `layout-plan.json`, preview overlay, and `placementSource` evidence.
-9. Release integration: connect layout evidence to candidate summary and
+10. Release integration: connect layout evidence to candidate summary and
    `safety.verify`.
-10. Documentation: update README, operator runbook, examples, and schemas.
-11. Publish check: run build, tests, and publish script when the implementation
+11. Documentation: update README, operator runbook, examples, and schemas.
+12. Publish check: run build, tests, and publish script when the implementation
    is ready for release packaging.
 
 ## Definition Of Done
@@ -516,8 +604,14 @@ The task is not done when code merely compiles. A useful completion must include
 - GUI apply records before/after and readback evidence
 - `canvas inspect` can report whether MCGS exposes objects through UIA, MSAA,
   native object model, clipboard, read-only MCE geometry, or none
-- automatic layout either emits `canvas-objects.json` and `layout-plan.json`
-  from internal occupancy evidence, or returns `UNKNOWN` instead of guessing
+- if those channels return `UNKNOWN`, the tool has run differential
+  reverse-engineering experiments against `MCGS_DRAW_OBJ`, `WndUser.lbObjects`,
+  `WndDevice.lbObjects`, `CDraw*` markers, text anchors, variable anchors, and
+  known-coordinate tool-created objects
+- automatic layout emits `canvas-objects.json` and `layout-plan.json` from
+  decoded tool-created object geometry and internal occupancy evidence
+- any remaining `UNKNOWN` is backed by reverse-engineering evidence, not just by
+  surface probe failures
 - candidate summary sees layout workflow results
 - release gates block `FAIL` and `UNKNOWN`
 - README/runbook explain the workflow and limitations
@@ -540,7 +634,9 @@ The user can paste this to start an unattended run:
 
 禁止把 .env、API key、密钥、完整私有日志或 .MCE 私有二进制 blob 发给 Gemini；只发送必要的 spec、截图、导出证据、错误日志片段和小段代码。
 
-实现路线按最后聊天记录的新方向推进：不要继续靠截图猜坐标。先实现只读 `canvas inspect`，用 UIA/MSAA/WM_GETOBJECT/OBJID_NATIVEOM/clipboard/read-only MCE geometry 探测 MCGS 画布内部对象；再生成 `canvas-objects.json`、occupied rectangles、`layout-plan.json` 和 preview overlay；最后才让 `window.layout.apply` 根据内部 occupancy 做自动布局。显式坐标仍可支持，但必须标记 `placementSource=explicit`；自动规划必须标记 `placementSource=internal-occupancy`。没有可靠 object map 时，不要猜，返回 UNKNOWN。
+实现路线按最后聊天记录的新方向推进：不要继续靠截图猜坐标。先实现只读 `canvas inspect`，用 UIA/MSAA/WM_GETOBJECT/OBJID_NATIVEOM/clipboard/read-only MCE geometry 探测 MCGS 画布内部对象。表层通道返回 UNKNOWN 不是完成，而是进入 `MCGS_DRAW_OBJ` / `WndUser.lbObjects` / `WndDevice.lbObjects` 差分反解阶段：用单变量候选副本实验、clipboard diff、MCE blob diff、Java MceExport 增强、`CDraw*` 类标记、文本/变量 anchor、小端坐标搜索、多样本统计和 Gemini 复核，至少可靠读回本工具创建控件的 x/y/width/height。然后生成 `canvas-objects.json`、occupied rectangles、`layout-plan.json` 和 preview overlay；最后才让 `window.layout.apply` 根据 internal occupancy 做自动布局。显式坐标仍可支持，但必须标记 `placementSource=explicit`；自动规划必须标记 `placementSource=internal-occupancy`。没有完成差分反解前，不要把 UNKNOWN 当成阶段完成。
+
+新的完成标准不是“诚实返回 UNKNOWN”。新的完成标准是：至少能解析本工具创建的 MCGS 控件几何，`canvas-objects.json` 有真实 occupied rectangles，`layout preview --placement internal-occupancy` 不再因为没有 object map blocked，自动布局生成 `layout-plan.json`，GUI apply + readback + validators 通过，然后 build/test、commit、push。
 
 如果 GUI 条件不满足，不要停工；继续完成离线 schema、验证、预览、测试和文档。只有会影响正式 MCE、PLC 安全、真实硬件行为或不可逆图形写入时才停下来问我。
 

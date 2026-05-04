@@ -116,9 +116,14 @@ tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\layo
 tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
 tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
+tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-object-map --row-key 2 --canvas-width 800 --canvas-height 480
 ```
 
 `canvas inspect` writes `canvas-inspect.json` and `canvas-objects.json` from UIA, MSAA/IAccessible, `WM_GETOBJECT`, and `OBJID_NATIVEOM` probes. If those internal channels do not expose reliable object geometry, `canvas-objects.json` is `UNKNOWN`. In that case `layout preview --placement internal-occupancy --canvas-objects ...` and `window.layout.apply --placement internal-occupancy --canvas-objects ...` stay blocked; the tool does not use screenshots as a hidden automatic layout source. Screenshots remain evidence only.
+
+`canvas mce-object-map-probe` is the preferred internal-occupancy source for current MCGS 7.7 profiles. It performs a read-only MCE export, decodes high-confidence little-endian LTRB rectangles from `WndUser.lbObjects` / `WndDevice.lbObjects`, and writes `canvas-objects.json` with `ObjectProvider=mce-geometry-inferred`. Use `--row-key` to restrict inference to one exported user/device window row; otherwise rectangles from multiple animation windows may be overlaid. Use `--canvas-width` / `--canvas-height` to match the visible editor viewport when planning automatic placement.
+
+For decoder work, `canvas mce-blob-diff-probe --before <a.MCE> --after <b.MCE> --out <dir>` writes sanitized changed ranges and bounded hex windows only. It is evidence for field reverse engineering and must not be treated as permission to raw-patch the private object blobs.
 
 Common blocked summaries:
 
@@ -164,6 +169,8 @@ tools\mcgsctl\mcgsctl.ps1 canvas context-menu-probe --project .mcgsctl-work\e2e\
 tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-clipboard --select-all
 tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
+tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-mce-object-map --row-key 2 --canvas-width 800 --canvas-height 480
+tools\mcgsctl\mcgsctl.ps1 canvas mce-blob-diff-probe --before .mcgsctl-work\sample-a\candidate.MCE --after .mcgsctl-work\sample-b\candidate.MCE --out .mcgsctl-runs\canvas-mce-blob-diff
 tools\mcgsctl\mcgsctl.ps1 modules --pid <pid> --filter Smart200
 tools\mcgsctl\mcgsctl.ps1 wndproc --hwnd 0x123456
 tools\mcgsctl\mcgsctl.ps1 pe exports --file E:\MCGSE\Program\Drivers\PLC\Siemens\Smart200\Smart200.dll --filter SvrEdit
@@ -186,6 +193,8 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `canvas clipboard-probe`: focuses the animation canvas on a temporary copy, optionally selects all, copies, and records clipboard format names, IDs, sizes, hashes, and heuristic geometry/class-record summaries without storing raw private object payloads; the previous clipboard is restored when possible.
 - `canvas toolbar-probe`: opens a temporary copy, enters animation configuration, enumerates visible toolbars and command IDs/text/rectangles for command discovery evidence without clicking them.
 - `canvas mce-geometry-probe`: exports the candidate read-only and scans private object blobs for class/string/geometry candidates. It is evidence only; unreliable inferred geometry remains `UNKNOWN` and cannot drive internal occupancy placement.
+- `canvas mce-object-map-probe`: exports the candidate read-only, decodes high-confidence object occupancy rectangles from MCGS object blobs, and writes a reliable `canvas-objects.json` for internal-occupancy placement when the evidence is sufficient. It can match mcgsctl-created objects from workflow results and can also emit generic occupied rectangles for existing objects.
+- `canvas mce-blob-diff-probe`: compares two candidate files read-only and writes sanitized blob-diff evidence for decoder experiments. It does not store full raw blobs and does not modify either project.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
 - `window.layout.apply`: applies GUI-supported layout objects (`momentary-button`, `status-button`, `native-static-text`, `native-lamp`, and native static text defaults for `section-title` / `static-label`) to a candidate by chaining the existing readback-verified GUI workflows. With `--placement internal-occupancy --canvas-objects <json>`, it uses occupied rectangles from the internal canvas object map and writes `layout-plan.json`; unreliable maps produce `UNKNOWN` instead of automatic placement.

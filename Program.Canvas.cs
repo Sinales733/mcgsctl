@@ -35,6 +35,8 @@ internal static partial class Program
         public string Id { get; set; } = "";
         public string Kind { get; set; } = "";
         public string Text { get; set; } = "";
+        public string Variable { get; set; } = "";
+        public string Expression { get; set; } = "";
         public CanvasOccupiedRect Rect { get; set; } = new();
         public string Source { get; set; } = "";
         public string Confidence { get; set; } = "unknown";
@@ -45,12 +47,56 @@ internal static partial class Program
         public string Id { get; set; } = "";
         public string Kind { get; set; } = "";
         public string Text { get; set; } = "";
+        public string Variable { get; set; } = "";
+        public string Expression { get; set; } = "";
         public int X { get; set; }
         public int Y { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
         public string Source { get; set; } = "";
         public string Confidence { get; set; } = "unknown";
+    }
+
+    private sealed class KnownCanvasObject
+    {
+        public string Id { get; set; } = "";
+        public string Kind { get; set; } = "";
+        public string Text { get; set; } = "";
+        public string Variable { get; set; } = "";
+        public string Expression { get; set; } = "";
+        public CanvasOccupiedRect Rect { get; set; } = new();
+        public string Workflow { get; set; } = "";
+        public string ResultPath { get; set; } = "";
+        public string Readback { get; set; } = "";
+    }
+
+    private sealed class MceObjectMapProbeResult
+    {
+        public int SchemaVersion { get; set; } = 1;
+        public string Status { get; set; } = "UNKNOWN";
+        public string EvidenceStatus { get; set; } = "UNKNOWN";
+        public string CreatedAt { get; set; } = DateTimeOffset.Now.ToString("O");
+        public string? Project { get; set; }
+        public string? ProjectSha256 { get; set; }
+        public string? WorkflowResults { get; set; }
+        public string GeometryPath { get; set; } = "mce-export/blob_geometry.json";
+        public List<string> BlockedReasons { get; } = new();
+        public List<object> KnownObjects { get; } = new();
+        public List<object> BlobEntries { get; } = new();
+        public List<object> GenericOccupancy { get; } = new();
+        public List<object> Matches { get; } = new();
+        public List<object> RejectedHypotheses { get; } = new();
+    }
+
+    private sealed class MceObjectMapMatchResult
+    {
+        public bool Reliable { get; set; }
+        public int Score { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public object Evidence { get; set; } = new();
     }
 
     private sealed class CanvasClipboardProbeResult
@@ -114,7 +160,7 @@ internal static partial class Program
     private static int Canvas(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe --project <candidate.mce> --out <dir>");
+            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -123,6 +169,8 @@ internal static partial class Program
             "clipboard-probe" => CanvasClipboardProbe(args),
             "toolbar-probe" => CanvasToolbarProbe(args),
             "mce-geometry-probe" => CanvasMceGeometryProbe(args),
+            "mce-object-map-probe" => CanvasMceObjectMapProbe(args),
+            "mce-blob-diff-probe" => CanvasMceBlobDiffProbe(args),
             _ => Fail("Unknown canvas command: " + args[1])
         };
     }
@@ -447,6 +495,555 @@ internal static partial class Program
         }
     }
 
+    private static int CanvasMceObjectMapProbe(string[] args)
+    {
+        var project = RequiredPath(args, "--project");
+        var outDir = FullPath(Required(args, "--out"));
+        Directory.CreateDirectory(outDir);
+        var workflowResultsDir = Opt(args, "--workflow-results") ?? InferWorkflowResultsDir(project);
+        var windowIndex = OptInt(args, "--window-index") ?? 0;
+        try
+        {
+            var exportDir = Path.Combine(outDir, "mce-export");
+            MceExporter.Export(project, exportDir);
+            var geometryPath = Path.Combine(exportDir, "blob_geometry.json");
+            var projectSha = Sha256(project);
+            var canvasWidth = OptInt(args, "--canvas-width") ?? 1024;
+            var canvasHeight = OptInt(args, "--canvas-height") ?? 768;
+            var rowKeyFilter = Opt(args, "--row-key");
+            var map = new CanvasObjectMap
+            {
+                Project = Path.GetFullPath(project),
+                ProjectSha256 = projectSha,
+                WindowIndex = windowIndex
+            };
+            map.ChannelsTried.Add("mce-object-map");
+
+            var probe = new MceObjectMapProbeResult
+            {
+                Project = Path.GetFullPath(project),
+                ProjectSha256 = projectSha,
+                WorkflowResults = workflowResultsDir == null ? null : Path.GetFullPath(workflowResultsDir)
+            };
+
+            var knownObjects = workflowResultsDir == null
+                ? new List<KnownCanvasObject>()
+                : LoadKnownCanvasObjects(workflowResultsDir);
+            foreach (var known in knownObjects)
+            {
+                probe.KnownObjects.Add(new
+                {
+                    known.Id,
+                    known.Kind,
+                    known.Text,
+                    known.Variable,
+                    known.Expression,
+                    rect = new { known.Rect.X, known.Rect.Y, known.Rect.Width, known.Rect.Height },
+                    known.Workflow,
+                    known.ResultPath,
+                    known.Readback
+                });
+            }
+
+            if (!File.Exists(geometryPath))
+            {
+                probe.BlockedReasons.Add("blob_geometry.json was not produced by MCE export");
+            }
+            else
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(geometryPath, Encoding.UTF8));
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var entry in doc.RootElement.EnumerateArray())
+                    {
+                        var classCount = entry.TryGetProperty("classOccurrences", out var classes) && classes.ValueKind == JsonValueKind.Array
+                            ? classes.GetArrayLength()
+                            : 0;
+                        var rectCount = entry.TryGetProperty("candidateRectangles", out var rects) && rects.ValueKind == JsonValueKind.Array
+                            ? rects.GetArrayLength()
+                            : 0;
+                        var anchorCount = entry.TryGetProperty("textAnchors", out var anchors) && anchors.ValueKind == JsonValueKind.Array
+                            ? anchors.GetArrayLength()
+                            : 0;
+                        probe.BlobEntries.Add(new
+                        {
+                            table = JsonString(entry, "table"),
+                            column = JsonString(entry, "column"),
+                            rowKey = JsonString(entry, "rowKey"),
+                            bytes = JsonInt(entry, "bytes"),
+                            sha256 = JsonString(entry, "sha256"),
+                            classCount,
+                            rectCount,
+                            textAnchorCount = anchorCount
+                        });
+                    }
+
+                    AddGenericMceGeometryOccupancy(doc.RootElement, map, probe, canvasWidth, canvasHeight, rowKeyFilter);
+
+                    foreach (var known in knownObjects)
+                    {
+                        var match = FindMceObjectMapMatch(doc.RootElement, known);
+                        if (match.Reliable)
+                        {
+                            var rect = new CanvasOccupiedRect
+                            {
+                                Id = known.Id,
+                                Kind = known.Kind,
+                                Text = known.Text,
+                                Variable = known.Variable,
+                                Expression = known.Expression,
+                                X = match.X,
+                                Y = match.Y,
+                                Width = match.Width,
+                                Height = match.Height,
+                                Source = "mce-object-map",
+                                Confidence = "high"
+                            };
+                            AddCanvasObject(map, new CanvasDetectedObject
+                            {
+                                Id = known.Id,
+                                Kind = known.Kind,
+                                Text = known.Text,
+                                Variable = known.Variable,
+                                Expression = known.Expression,
+                                Rect = rect,
+                                Source = "mce-object-map",
+                                Confidence = "high"
+                            });
+                            probe.Matches.Add(match.Evidence);
+                        }
+                        else
+                        {
+                            probe.RejectedHypotheses.Add(match.Evidence);
+                        }
+                    }
+                }
+            }
+
+            FinalizeCanvasMap(map, fallbackProvider: "mce-object-map");
+            if (map.ReliableGeometry)
+            {
+                probe.Status = "PASS";
+                probe.EvidenceStatus = "PASS";
+                map.MceGeometryProbe = probe;
+            }
+            else
+            {
+                probe.Status = "UNKNOWN";
+                probe.EvidenceStatus = File.Exists(geometryPath) ? "PASS" : "UNKNOWN";
+                if (probe.BlockedReasons.Count == 0)
+                    probe.BlockedReasons.Add("MCE object-map probe could not decode high-confidence occupied geometry");
+                foreach (var reason in probe.BlockedReasons)
+                    map.BlockedReasons.Add(reason);
+                map.MceGeometryProbe = probe;
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "mce-object-map-probe.json"),
+                JsonSerializer.Serialize(probe, JsonOptions()), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(outDir, "canvas-objects.json"),
+                JsonSerializer.Serialize(map, JsonOptions()), Encoding.UTF8);
+            Console.WriteLine("canvas mce-object-map-probe: " + outDir);
+            return map.ReliableGeometry ? 0 : 2;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            Console.Error.WriteLine("canvas mce-object-map-probe failed: " + ex.Message);
+            return 1;
+        }
+    }
+
+    private static int CanvasMceBlobDiffProbe(string[] args)
+    {
+        var before = RequiredPath(args, "--before");
+        var after = RequiredPath(args, "--after");
+        var outDir = FullPath(Required(args, "--out"));
+        Directory.CreateDirectory(outDir);
+        try
+        {
+            MceExporter.BlobDiff(before, after, outDir);
+            Console.WriteLine("canvas mce-blob-diff-probe: " + outDir);
+            return File.Exists(Path.Combine(outDir, "blob_diff.json")) ? 0 : 2;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            Console.Error.WriteLine("canvas mce-blob-diff-probe failed: " + ex.Message);
+            return 1;
+        }
+    }
+
+    private static string? InferWorkflowResultsDir(string project)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(project));
+        if (string.IsNullOrWhiteSpace(dir)) return null;
+        var sibling = Path.Combine(dir, "workflow-results");
+        return Directory.Exists(sibling) ? sibling : null;
+    }
+
+    private static List<KnownCanvasObject> LoadKnownCanvasObjects(string workflowResultsDir)
+    {
+        var known = new List<KnownCanvasObject>();
+        if (!Directory.Exists(workflowResultsDir)) return known;
+
+        var sequence = 0;
+        foreach (var file in Directory.EnumerateFiles(workflowResultsDir, "*.json").OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            if (Path.GetFileName(file).Equals("index.json", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("createdUiObjects", out var objects) || objects.ValueKind != JsonValueKind.Array)
+                    continue;
+                var workflow = JsonString(root, "workflow") ?? "";
+                foreach (var item in objects.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("rect", out var rect) || rect.ValueKind != JsonValueKind.Object)
+                        continue;
+                    var x = LayoutJsonIntAny(rect, "x", "X");
+                    var y = LayoutJsonIntAny(rect, "y", "Y");
+                    var width = LayoutJsonIntAny(rect, "width", "Width");
+                    var height = LayoutJsonIntAny(rect, "height", "Height");
+                    if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0)
+                        continue;
+
+                    var kind = JsonStringAny(item, "kind", "Kind") ?? workflow;
+                    var text = JsonStringAny(item, "text", "Text") ?? "";
+                    var variable = JsonStringAny(item, "variable", "Variable") ?? "";
+                    var expression = JsonStringAny(item, "expression", "Expression") ?? "";
+                    var readback = JsonStringAny(item, "readback", "Readback") ?? "";
+                    sequence++;
+                    var id = JsonStringAny(item, "id", "Id");
+                    if (string.IsNullOrWhiteSpace(id))
+                        id = "known-" + sequence.ToString("0000", System.Globalization.CultureInfo.InvariantCulture);
+                    known.Add(new KnownCanvasObject
+                    {
+                        Id = id,
+                        Kind = kind,
+                        Text = text,
+                        Variable = variable,
+                        Expression = expression,
+                        Rect = new CanvasOccupiedRect
+                        {
+                            Id = id,
+                            Kind = kind,
+                            Text = text,
+                            Variable = variable,
+                            Expression = expression,
+                            X = x.Value,
+                            Y = y.Value,
+                            Width = width.Value,
+                            Height = height.Value,
+                            Source = "workflow-result",
+                            Confidence = readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? "high" : "medium"
+                        },
+                        Workflow = workflow,
+                        ResultPath = file,
+                        Readback = readback
+                    });
+                }
+            }
+            catch
+            {
+                // Probe evidence must be best-effort. Invalid old workflow evidence is reported by absence of anchors.
+            }
+        }
+        return known;
+    }
+
+    private static void AddGenericMceGeometryOccupancy(
+        JsonElement geometryRoot,
+        CanvasObjectMap map,
+        MceObjectMapProbeResult probe,
+        int canvasWidth,
+        int canvasHeight,
+        string? rowKeyFilter)
+    {
+        if (geometryRoot.ValueKind != JsonValueKind.Array) return;
+
+        var sequence = 0;
+        var evidenceLimit = 160;
+        foreach (var entry in geometryRoot.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("candidateRectangles", out var rects) ||
+                rects.ValueKind != JsonValueKind.Array)
+                continue;
+
+            var rowKey = JsonString(entry, "rowKey") ?? "";
+            if (!string.IsNullOrWhiteSpace(rowKeyFilter) &&
+                !rowKey.Equals(rowKeyFilter, StringComparison.OrdinalIgnoreCase))
+                continue;
+            foreach (var rectEl in rects.EnumerateArray())
+            {
+                if (!TryBuildGenericMceOccupiedRect(rectEl, canvasWidth, canvasHeight, out var rect))
+                    continue;
+
+                sequence++;
+                rect.Id = string.IsNullOrWhiteSpace(rowKey)
+                    ? "mce-occ-" + sequence.ToString("D4")
+                    : "mce-occ-r" + rowKey + "-" + sequence.ToString("D4");
+                rect.Kind = "unknown-mce-object";
+                rect.Source = "mce-geometry-inferred";
+                rect.Confidence = "high";
+
+                AddCanvasObject(map, new CanvasDetectedObject
+                {
+                    Id = rect.Id,
+                    Kind = rect.Kind,
+                    Rect = rect,
+                    Source = rect.Source,
+                    Confidence = rect.Confidence
+                });
+
+                if (probe.GenericOccupancy.Count < evidenceLimit)
+                {
+                    probe.GenericOccupancy.Add(new
+                    {
+                        id = rect.Id,
+                        rowKey,
+                        offset = JsonString(rectEl, "offset"),
+                        encoding = JsonString(rectEl, "encoding"),
+                        pattern = JsonString(rectEl, "pattern"),
+                        rect = new { rect.X, rect.Y, rect.Width, rect.Height },
+                        source = rect.Source,
+                        confidence = rect.Confidence
+                    });
+                }
+            }
+        }
+    }
+
+    private static bool TryBuildGenericMceOccupiedRect(JsonElement rectEl, int canvasWidth, int canvasHeight, out CanvasOccupiedRect rect)
+    {
+        rect = new CanvasOccupiedRect();
+        if (!string.Equals(JsonString(rectEl, "encoding"), "int32", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(JsonString(rectEl, "pattern"), "ltrb", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var x = LayoutJsonIntAny(rectEl, "x", "X");
+        var y = LayoutJsonIntAny(rectEl, "y", "Y");
+        var width = LayoutJsonIntAny(rectEl, "width", "Width");
+        var height = LayoutJsonIntAny(rectEl, "height", "Height");
+        if (x == null || y == null || width == null || height == null) return false;
+
+        if (x.Value <= 2 || y.Value <= 2) return false;
+        if (width.Value < 30 || height.Value < 16) return false;
+        if (width.Value > Math.Max(480, canvasWidth / 2) || height.Value > Math.Max(220, canvasHeight / 3)) return false;
+        if ((long)width.Value * height.Value > 40000) return false;
+        if (x.Value > canvasWidth + 20 || y.Value > canvasHeight + 20) return false;
+        if (x.Value + width.Value > canvasWidth + 40 || y.Value + height.Value > canvasHeight + 40) return false;
+        if (width.Value <= 25 && height.Value <= 25) return false;
+
+        rect = new CanvasOccupiedRect
+        {
+            X = x.Value,
+            Y = y.Value,
+            Width = width.Value,
+            Height = height.Value
+        };
+        return true;
+    }
+
+    private static MceObjectMapMatchResult FindMceObjectMapMatch(JsonElement geometryRoot, KnownCanvasObject known)
+    {
+        var best = new MceObjectMapMatchResult
+        {
+            Evidence = new
+            {
+                objectId = known.Id,
+                kind = known.Kind,
+                text = known.Text,
+                expectedRect = new { known.Rect.X, known.Rect.Y, known.Rect.Width, known.Rect.Height },
+                score = 0,
+                reliable = false,
+                rejectedReason = "no blob entry matched both text/class evidence and the known rectangle"
+            }
+        };
+
+        if (geometryRoot.ValueKind != JsonValueKind.Array) return best;
+        foreach (var entry in geometryRoot.EnumerateArray())
+        {
+            var tokenMatches = FindMceTokenAnchorMatches(entry, known);
+            var classMatches = FindMceClassMatches(entry, known.Kind).ToArray();
+            var rectMatches = FindMceRectMatches(entry, known.Rect).ToArray();
+            var exactOrNearRect = rectMatches.FirstOrDefault(match => match.ExactOrNear);
+            var bestRect = exactOrNearRect ?? rectMatches.FirstOrDefault();
+
+            var score = 0;
+            if (tokenMatches.Count > 0) score += 45;
+            if (classMatches.Length > 0) score += 20;
+            if (exactOrNearRect != null) score += 45;
+            else if (bestRect != null && bestRect.DimensionNear) score += 15;
+
+            var reliable = tokenMatches.Count > 0 && exactOrNearRect != null && score >= 90;
+            var evidence = new
+            {
+                objectId = known.Id,
+                kind = known.Kind,
+                text = known.Text,
+                variable = known.Variable,
+                expression = known.Expression,
+                expectedRect = new { known.Rect.X, known.Rect.Y, known.Rect.Width, known.Rect.Height },
+                blobEntry = new
+                {
+                    table = JsonString(entry, "table"),
+                    column = JsonString(entry, "column"),
+                    rowKey = JsonString(entry, "rowKey"),
+                    sha256 = JsonString(entry, "sha256")
+                },
+                score,
+                reliable,
+                tokenMatches,
+                classMatches,
+                rectMatches = rectMatches.Take(8).Select(match => new
+                {
+                    match.Offset,
+                    match.Encoding,
+                    match.Pattern,
+                    match.X,
+                    match.Y,
+                    match.Width,
+                    match.Height,
+                    match.TotalDelta,
+                    match.ExactOrNear,
+                    match.DimensionNear
+                }).ToArray(),
+                rejectedReason = reliable ? null : "token/class evidence did not align with an exact or near decoded rectangle"
+            };
+
+            if (score > best.Score)
+            {
+                best = new MceObjectMapMatchResult
+                {
+                    Reliable = reliable,
+                    Score = score,
+                    X = bestRect?.X ?? known.Rect.X,
+                    Y = bestRect?.Y ?? known.Rect.Y,
+                    Width = bestRect?.Width ?? known.Rect.Width,
+                    Height = bestRect?.Height ?? known.Rect.Height,
+                    Evidence = evidence
+                };
+            }
+        }
+        return best;
+    }
+
+    private static List<object> FindMceTokenAnchorMatches(JsonElement entry, KnownCanvasObject known)
+    {
+        var tokens = new[] { known.Text, known.Variable, known.Expression }
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var matches = new List<object>();
+        if (tokens.Length == 0 ||
+            !entry.TryGetProperty("textAnchors", out var anchors) ||
+            anchors.ValueKind != JsonValueKind.Array)
+            return matches;
+
+        foreach (var anchor in anchors.EnumerateArray())
+        {
+            var sample = JsonString(anchor, "sample") ?? "";
+            var sha = JsonString(anchor, "sha256") ?? "";
+            foreach (var token in tokens)
+            {
+                var tokenHash = Sha256Text(token);
+                if ((!string.IsNullOrEmpty(sample) && sample.Contains(token, StringComparison.Ordinal)) ||
+                    sha.Equals(tokenHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches.Add(new
+                    {
+                        token,
+                        offset = JsonString(anchor, "offset"),
+                        encoding = JsonString(anchor, "encoding"),
+                        byteLength = JsonInt(anchor, "byteLength"),
+                        sha256 = sha,
+                        sample = sample.Length > 120 ? sample[..120] : sample
+                    });
+                }
+            }
+        }
+        return matches;
+    }
+
+    private static IEnumerable<string> FindMceClassMatches(JsonElement entry, string kind)
+    {
+        if (!entry.TryGetProperty("classOccurrences", out var classes) ||
+            classes.ValueKind != JsonValueKind.Array)
+            yield break;
+
+        var compatible = CompatibleCanvasClasses(kind);
+        foreach (var cls in classes.EnumerateArray())
+        {
+            var name = JsonString(cls, "className") ?? "";
+            if (compatible.Any(match => name.Equals(match, StringComparison.OrdinalIgnoreCase)))
+                yield return name;
+        }
+    }
+
+    private sealed class MceRectMatch
+    {
+        public string Offset { get; set; } = "";
+        public string Encoding { get; set; } = "";
+        public string Pattern { get; set; } = "";
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public int TotalDelta { get; set; }
+        public bool ExactOrNear { get; set; }
+        public bool DimensionNear { get; set; }
+    }
+
+    private static IEnumerable<MceRectMatch> FindMceRectMatches(JsonElement entry, CanvasOccupiedRect expected)
+    {
+        if (!entry.TryGetProperty("candidateRectangles", out var rects) ||
+            rects.ValueKind != JsonValueKind.Array)
+            yield break;
+
+        var matches = new List<MceRectMatch>();
+        foreach (var rect in rects.EnumerateArray())
+        {
+            var x = LayoutJsonIntAny(rect, "x", "X");
+            var y = LayoutJsonIntAny(rect, "y", "Y");
+            var width = LayoutJsonIntAny(rect, "width", "Width");
+            var height = LayoutJsonIntAny(rect, "height", "Height");
+            if (x == null || y == null || width == null || height == null) continue;
+            var dx = Math.Abs(x.Value - expected.X);
+            var dy = Math.Abs(y.Value - expected.Y);
+            var dw = Math.Abs(width.Value - expected.Width);
+            var dh = Math.Abs(height.Value - expected.Height);
+            var total = dx + dy + dw + dh;
+            var exactOrNear = dx <= 3 && dy <= 3 && dw <= 3 && dh <= 3;
+            var dimensionNear = dw <= 10 && dh <= 10;
+            if (!exactOrNear && !dimensionNear && total > 120) continue;
+            matches.Add(new MceRectMatch
+            {
+                Offset = JsonString(rect, "offset") ?? "",
+                Encoding = JsonString(rect, "encoding") ?? "",
+                Pattern = JsonString(rect, "pattern") ?? "",
+                X = x.Value,
+                Y = y.Value,
+                Width = width.Value,
+                Height = height.Value,
+                TotalDelta = total,
+                ExactOrNear = exactOrNear,
+                DimensionNear = dimensionNear
+            });
+        }
+
+        foreach (var match in matches.OrderByDescending(match => match.ExactOrNear).ThenBy(match => match.TotalDelta))
+            yield return match;
+    }
+
+    private static string[] CompatibleCanvasClasses(string kind)
+        => kind.ToLowerInvariant() switch
+        {
+            "native-static-text" or "section-title" or "static-label" => new[] { "CDrawLabel" },
+            "native-lamp" => new[] { "CDrawMulDis", "CDrawButton" },
+            "momentary-button" or "status-button" => new[] { "CDrawButton" },
+            _ => new[] { "CDrawButton", "CDrawLabel", "CDrawMulDis", "CDrawEdit" }
+        };
+
     private sealed class CanvasProbeSession : IDisposable
     {
         public required Process Process { get; init; }
@@ -554,6 +1151,12 @@ internal static partial class Program
     private static void AddCanvasObject(CanvasObjectMap map, CanvasDetectedObject obj)
     {
         if (obj.Rect.Width <= 0 || obj.Rect.Height <= 0) return;
+        if (map.OccupiedRectangles.Any(existing =>
+            existing.X == obj.Rect.X &&
+            existing.Y == obj.Rect.Y &&
+            existing.Width == obj.Rect.Width &&
+            existing.Height == obj.Rect.Height))
+            return;
         map.Objects.Add(obj);
         map.OccupiedRectangles.Add(obj.Rect);
     }

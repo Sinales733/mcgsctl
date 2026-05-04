@@ -1797,6 +1797,17 @@ Commands:
                 reopenVerified ? RequiredPass("reopen-readback", label) : RequiredFail("reopen-readback", "Reopen readback failed.")
             }, extra: new Dictionary<string, object?>
             {
+                ["createdUiObjects"] = new[]
+                {
+                    new
+                    {
+                        kind = "momentary-button",
+                        text = label,
+                        variable,
+                        rect = new { x, y, width, height },
+                        readback = propertyReadbackVerified && reopenVerified ? "PASS" : "UNKNOWN"
+                    }
+                },
                 ["touchedDataObjects"] = new[] { variable },
                 ["createdDataObjects"] = Array.Empty<string>(),
                 ["modifiedDataObjects"] = new[] { variable },
@@ -2295,6 +2306,17 @@ Commands:
                 : new[] { "status-button property readback incomplete; native lamp is not implemented" },
                 new Dictionary<string, object?>
                 {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            kind = "status-button",
+                            text = label,
+                            expression,
+                            rect = new { x, y, width, height },
+                            readback = indicatorReadbackVerified && reopenVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
                     ["touchedDataObjects"] = Array.Empty<string>(),
                     ["createdDataObjects"] = Array.Empty<string>(),
                     ["modifiedDataObjects"] = Array.Empty<string>(),
@@ -5498,6 +5520,23 @@ internal static class MceExporter
         var result = ProcessRunner.Run("java", args, toolRoot, 120000);
         if (result.ExitCode != 0)
             throw new InvalidOperationException("MCE export failed: " + result.StdErr + result.StdOut);
+    }
+
+    public static void BlobDiff(string before, string after, string outDir)
+    {
+        var toolRoot = ToolPaths.FindToolRoot();
+        EnsureCompiled(toolRoot);
+        Directory.CreateDirectory(outDir);
+        var beforeCopy = Path.Combine(outDir, "_before.MCE");
+        var afterCopy = Path.Combine(outDir, "_after.MCE");
+        File.Copy(before, beforeCopy, overwrite: true);
+        File.Copy(after, afterCopy, overwrite: true);
+        var cache = JavaCache(toolRoot);
+        var classPath = string.Join(";", ToolPaths.JackcessJars(toolRoot).Concat(new[] { cache }).Select(Quote));
+        var args = $"-cp {classPath} MceBlobDiff {Quote(beforeCopy)} {Quote(afterCopy)} {Quote(outDir)}";
+        var result = ProcessRunner.Run("java", args, toolRoot, 120000);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException("MCE blob diff failed: " + result.StdErr + result.StdOut);
     }
 
     public static void EnsureCompiled(string toolRoot)

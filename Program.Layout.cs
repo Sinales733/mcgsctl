@@ -505,7 +505,7 @@ internal static partial class Program
         result.Objects.AddRange(ReadSectionLayoutObjects(root, style, windowIndex));
         var placementMode = placementModeOverride ?? ReadPlacementMode(root);
         if (placementMode.Equals("internal-occupancy", StringComparison.OrdinalIgnoreCase))
-            ApplyInternalOccupancyPlacement(result, canvasObjectsPath, style);
+            ApplyInternalOccupancyPlacement(result, canvasObjectsPath, style, ReadPlacementMargin(root, style));
         else if (!placementMode.Equals("explicit", StringComparison.OrdinalIgnoreCase) &&
                  !placementMode.Equals("layout", StringComparison.OrdinalIgnoreCase))
             result.BlockedReasons.Add("unsupported placement mode: " + placementMode);
@@ -528,7 +528,19 @@ internal static partial class Program
         return "explicit";
     }
 
-    private static void ApplyInternalOccupancyPlacement(LayoutValidationResult result, string? canvasObjectsPath, LayoutStyle style)
+    private static int ReadPlacementMargin(JsonElement root, LayoutStyle style)
+    {
+        if (root.TryGetProperty("placement", out var placement) &&
+            placement.ValueKind == JsonValueKind.Object &&
+            placement.TryGetProperty("margin", out var margin) &&
+            margin.TryGetInt32(out var value) &&
+            value > 0)
+            return value;
+
+        return Math.Max(80, Math.Max(4, style.Grid * 4));
+    }
+
+    private static void ApplyInternalOccupancyPlacement(LayoutValidationResult result, string? canvasObjectsPath, LayoutStyle style, int placementMargin)
     {
         result.PlacementSource = "internal-occupancy";
         var plan = new LayoutPlacementPlan
@@ -536,7 +548,7 @@ internal static partial class Program
             Status = "UNKNOWN",
             PlacementSource = "internal-occupancy",
             CanvasObjects = canvasObjectsPath,
-            Margin = Math.Max(4, style.Grid)
+            Margin = placementMargin
         };
         result.PlacementPlan = plan;
 
@@ -595,9 +607,10 @@ internal static partial class Program
             })
             .ToArray();
         var grid = Math.Max(1, style.Grid);
-        for (var y = grid; y <= result.CanvasHeight - groupHeight - grid; y += grid)
+        var edgeMargin = Math.Max(grid, Math.Min(margin, Math.Min(result.CanvasWidth, result.CanvasHeight) / 4));
+        for (var y = edgeMargin; y <= result.CanvasHeight - groupHeight - edgeMargin; y += grid)
         {
-            for (var x = grid; x <= result.CanvasWidth - groupWidth - grid; x += grid)
+            for (var x = edgeMargin; x <= result.CanvasWidth - groupWidth - edgeMargin; x += grid)
             {
                 var candidate = new CanvasOccupiedRect { X = x, Y = y, Width = groupWidth, Height = groupHeight };
                 if (inflated.Any(r => RectsOverlap(candidate, r))) continue;
@@ -641,7 +654,7 @@ internal static partial class Program
         if (rects.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in rects.EnumerateArray())
-                if (TryReadCanvasOccupiedRect(item, out var rect)) map.OccupiedRectangles.Add(rect);
+                if (TryReadCanvasOccupiedRect(item, out var rect)) AddUniqueCanvasOccupiedRect(map, rect);
         }
         var objects = JsonArrayAny(root, "Objects", "objects");
         if (objects.ValueKind == JsonValueKind.Array)
@@ -657,12 +670,25 @@ internal static partial class Program
                         rect.Text = JsonStringAny(item, "Text", "text") ?? rect.Text;
                         rect.Source = JsonStringAny(item, "Source", "source") ?? rect.Source;
                         rect.Confidence = JsonStringAny(item, "Confidence", "confidence") ?? rect.Confidence;
-                        map.OccupiedRectangles.Add(rect);
+                        AddUniqueCanvasOccupiedRect(map, rect);
                     }
                 }
             }
         }
         return map;
+    }
+
+    private static void AddUniqueCanvasOccupiedRect(CanvasObjectMap map, CanvasOccupiedRect rect)
+    {
+        if (map.OccupiedRectangles.Any(existing =>
+            existing.X == rect.X &&
+            existing.Y == rect.Y &&
+            existing.Width == rect.Width &&
+            existing.Height == rect.Height &&
+            string.Equals(existing.Id, rect.Id, StringComparison.Ordinal) &&
+            string.Equals(existing.Source, rect.Source, StringComparison.OrdinalIgnoreCase)))
+            return;
+        map.OccupiedRectangles.Add(rect);
     }
 
     private static bool TryReadCanvasOccupiedRect(JsonElement item, out CanvasOccupiedRect rect)

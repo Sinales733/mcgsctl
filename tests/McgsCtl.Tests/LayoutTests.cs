@@ -246,7 +246,11 @@ public sealed class LayoutTests : IDisposable
     public void InternalOccupancyWithReliableCanvasMapWritesPlanAndOverlay()
     {
         var json = ValidLayout();
-        json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
+        json["placement"] = new JsonObject
+        {
+            ["mode"] = "internal-occupancy",
+            ["margin"] = 20
+        };
         var layout = WriteLayout("internal-map", json);
         var map = WriteCanvasObjects("internal-map", reliable: true);
         var previewDir = Path.Combine(_root, "internal-map-preview");
@@ -260,6 +264,29 @@ public sealed class LayoutTests : IDisposable
         Assert.Contains("\"placementSource\": \"internal-occupancy\"", previewJson);
         Assert.Contains("\"status\": \"PASS\"", previewJson);
         Assert.DoesNotContain("\"x\": 120", previewJson);
+    }
+
+    [Fact]
+    public void InternalOccupancyAcceptsObjectRectMap()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject
+        {
+            ["mode"] = "internal-occupancy",
+            ["margin"] = 20
+        };
+        var layout = WriteLayout("internal-object-rect-map", json);
+        var map = WriteCanvasObjectRectMap("internal-object-rect-map");
+        var previewDir = Path.Combine(_root, "internal-object-rect-map-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var planJson = File.ReadAllText(Path.Combine(previewDir, "layout-plan.json"), Encoding.UTF8);
+        Assert.Contains("\"objectProvider\": \"mce-geometry-inferred\"", planJson);
+        Assert.Contains("\"id\": \"known-mce-object\"", planJson);
+        Assert.Contains("\"margin\": 20", planJson);
+        Assert.Contains("\"placementSource\": \"internal-occupancy\"", File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8));
     }
 
     [Fact]
@@ -340,6 +367,44 @@ public sealed class LayoutTests : IDisposable
                     ["Height"] = 210,
                     ["Source"] = "test",
                     ["Confidence"] = "high"
+                }
+            }
+        };
+        File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+        return path;
+    }
+
+    private string WriteCanvasObjectRectMap(string name)
+    {
+        var path = Path.Combine(_root, name + ".canvas-objects.json");
+        var json = new JsonObject
+        {
+            ["SchemaVersion"] = 1,
+            ["Status"] = "PASS",
+            ["ObjectProvider"] = "mce-geometry-inferred",
+            ["ReliableGeometry"] = true,
+            ["BlockedReasons"] = new JsonArray(),
+            ["Objects"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["Id"] = "known-mce-object",
+                    ["Kind"] = "native-static-text",
+                    ["Text"] = "Known",
+                    ["Source"] = "mce-geometry-inferred",
+                    ["Confidence"] = "high",
+                    ["Rect"] = new JsonObject
+                    {
+                        ["Id"] = "known-mce-object",
+                        ["Kind"] = "native-static-text",
+                        ["Text"] = "Known",
+                        ["X"] = 0,
+                        ["Y"] = 0,
+                        ["Width"] = 430,
+                        ["Height"] = 210,
+                        ["Source"] = "mce-geometry-inferred",
+                        ["Confidence"] = "high"
+                    }
                 }
             }
         };
