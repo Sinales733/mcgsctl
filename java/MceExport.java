@@ -348,11 +348,16 @@ public final class MceExport {
     if (text.length() > 160) return false;
     for (int i = 0; i < text.length(); i++) {
       char ch = text.charAt(i);
+      if (ch == '\uFFFD') return false;
+      Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+      if (block == Character.UnicodeBlock.PRIVATE_USE_AREA
+          || block == Character.UnicodeBlock.SPECIALS
+          || block == Character.UnicodeBlock.LOW_SURROGATES
+          || block == Character.UnicodeBlock.HIGH_SURROGATES) return false;
       if (Character.isISOControl(ch) || Character.isSurrogate(ch)) return false;
       if (Character.isLetterOrDigit(ch) || Character.isWhitespace(ch)) continue;
       if ("_./:#()[]{}=+-*@,;，。：；（）【】#".indexOf(ch) >= 0) continue;
       if (isCjk(ch)) continue;
-      Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
       if (block == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
           || block == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
           || block == Character.UnicodeBlock.GENERAL_PUNCTUATION) continue;

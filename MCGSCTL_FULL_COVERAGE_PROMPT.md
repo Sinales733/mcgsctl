@@ -30,6 +30,56 @@ Do not treat "can avoid occupied rectangles" as done. Do not treat "can read
 variable, press set-1, release clear-0, script empty" as complete property
 coverage.
 
+## Continuous Work Loop
+
+In unattended mode, never treat a verified milestone as the end of the task.
+Build/test/commit/push is only a checkpoint. After each checkpoint, inspect the
+latest machine-readable evidence and immediately continue with the next
+file-safe probe.
+
+Use this loop:
+
+1. Re-read `AGENTS.md`, `MCGSCTL_LONGRUN_PROMPT.md`, this file, `git status`,
+   current diffs, and latest `.mcgsctl-runs` / `.mcgsctl-work` evidence.
+2. Load the current queues:
+   - `property-map.json` unresolved properties and `nextProbe` records
+   - `tool-sweep.json` uninvoked or unresolved tools
+   - `tool-catalog.json` tools without behavior evidence
+   - `function-catalog.json` functions missing purpose/effect/readback evidence
+   - build/test failures if any
+3. Pick the highest-value next file-safe item.
+4. Ask Gemini immediately if UI interpretation, field naming, visual grouping,
+   or offset hypotheses would benefit from it.
+5. Run the probe on a candidate/throwaway copy, or implement the missing probe.
+6. Save structured evidence.
+7. Run the smallest relevant build/test/check.
+8. Commit/push a coherent milestone when allowed.
+9. Return to step 1 without asking the user.
+
+Stopping rules:
+
+- `UNKNOWN` is a queue item, not completion.
+- `unresolvedPropertyCount > 0` is a queue item, not completion.
+- `tool-sweep invokedCount < toolCount` is a queue item, not completion.
+- A Gemini failure is a local-evidence fallback, not completion.
+- A successful push is a checkpoint, not completion.
+
+Only stop when there are no remaining file-safe probes, or when the next action
+requires human approval for official `FG2_HMI.MCE` apply, real hardware/PLC
+behavior, secrets, destructive git, or another irreversible boundary. If a model
+runtime or context limit forces a response, make the response a resume packet
+with the exact next probe and evidence path, not a "done" report.
+
+Latest known unfinished queues from the 2026-05-04 full-coverage scaffold:
+
+- `property-map.json`: `status=UNKNOWN`, `objectCount=15`,
+  `unresolvedPropertyCount=197`.
+- `tool-catalog.json`: `status=PASS`, `toolCount=219`.
+- `tool-sweep.json`: `status=UNKNOWN`, `invokedCount=0`.
+
+Treat those as direct inputs for the next continuation: start reducing the
+property unresolved queue and start invoking/probing the tool-sweep queue.
+
 ## Scope Of Whole Software
 
 For this project, "whole software" means the local MCGS embedded editor version

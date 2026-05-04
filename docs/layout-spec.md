@@ -116,7 +116,15 @@ tools\mcgsctl\mcgsctl.ps1 canvas property-map-probe `
   --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
   --out .mcgsctl-runs\canvas-property-map `
   --semantic-map .mcgsctl-runs\canvas-semantic-map\semantic-map.json `
-  --row-key 2
+  --row-key 2 `
+  --property-readback-dir .mcgsctl-runs
+
+tools\mcgsctl\mcgsctl.ps1 canvas property-readback `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --semantic-map .mcgsctl-runs\canvas-semantic-map\semantic-map.json `
+  --object-id <semantic-object-id> `
+  --out .mcgsctl-runs\canvas-property-readback `
+  --probe-font
 
 tools\mcgsctl\mcgsctl.ps1 layout preview `
   --layout layouts\ptz-basic.json `
@@ -161,6 +169,15 @@ property-map.json
 property-map-probe.json
 semantic-map-source/       # only when the probe generated a semantic map itself
 ```
+
+`canvas property-readback` is the GUI evidence feeder for `property-map-probe`.
+It opens a temporary candidate copy, selects one semantic object, captures every
+property-dialog tab/control, and writes `property-readback.json`,
+`property-dialog.tree.txt`, and `property-dialog.png`. With `--probe-font`, it
+opens the font subdialog, records `font-dialog.tree.txt` and `font-dialog.png`,
+extracts font family/style/size, then cancels the subdialog without saving.
+`property-map-probe --property-readback-dir <dir>` ingests those readbacks and
+uses the newest evidence for each object ID.
 
 Every object record carries a `properties` object with stable keys for geometry, semantic kind, displayed text, variable/expression bindings, operations, script, font, alignment, colors, borders, visibility, input/display format, permissions, navigation, animation/alarm rules, grouping, and z-order. The value contract is deliberately strict:
 

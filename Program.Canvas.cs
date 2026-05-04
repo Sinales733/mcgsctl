@@ -250,7 +250,7 @@ internal static partial class Program
     private static int Canvas(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe|property-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
+            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe|property-map-probe|property-readback --project <candidate.mce> --out <dir> OR canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font] OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -262,6 +262,7 @@ internal static partial class Program
             "mce-object-map-probe" => CanvasMceObjectMapProbe(args),
             "semantic-map-probe" => CanvasSemanticMapProbe(args),
             "property-map-probe" => CanvasPropertyMapProbe(args),
+            "property-readback" => CanvasPropertyReadback(args),
             "mce-blob-diff-probe" => CanvasMceBlobDiffProbe(args),
             _ => Fail("Unknown canvas command: " + args[1])
         };
@@ -2144,7 +2145,18 @@ internal static partial class Program
         main = UiAutomation.FindMainWindow(process.Id);
         if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
         OpenAnimationConfiguration(process.Id, main, windowIndex, "canvas " + label);
-        var canvas = FindCanvas(main);
+        IntPtr canvas;
+        try
+        {
+            canvas = FindCanvas(main);
+        }
+        catch
+        {
+            File.WriteAllLines(Path.Combine(outDir, label + "-no-canvas.window-tree.txt"),
+                UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+            TryScreenshot(main, Path.Combine(outDir, label + "-no-canvas-main.png"));
+            throw;
+        }
         return new CanvasProbeSession
         {
             Process = process,

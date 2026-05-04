@@ -152,7 +152,8 @@ Commands:
   mcgsctl canvas clipboard-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--select-all]
   mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>]
   mcgsctl canvas mce-geometry-probe --project <candidate.mce> --out <dir>
-  mcgsctl canvas property-map-probe --project <candidate.mce> --row-key <key> --out <dir> [--semantic-map <semantic-map.json>]
+  mcgsctl canvas property-map-probe --project <candidate.mce> --row-key <key> --out <dir> [--semantic-map <semantic-map.json>] [--property-readback-dir <dir>]
+  mcgsctl canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font]
   mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy] [--out <file-or-dir>]
   mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir> [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]

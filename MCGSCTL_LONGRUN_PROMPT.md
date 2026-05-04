@@ -109,6 +109,22 @@ Treat every blocker as a new engineering task:
 - Keep a local work log in generated evidence or the final summary so a later
   run can resume without relying on chat memory.
 
+Milestone rule:
+
+- A successful build/test/commit/push is a checkpoint, not completion.
+- If any latest evidence still has `UNKNOWN`, unresolved records, `nextProbe`,
+  missing property fields, uninvoked tools, or unprobed tools, immediately pick
+  the next file-safe probe and continue after the checkpoint.
+- In full-coverage work, specifically keep going while
+  `property-map.json` has unresolved properties, `tool-sweep.json` has
+  uninvoked tools, or `function-catalog.json` lacks purpose/effect/readback
+  evidence.
+- Do not ask the user for ordinary prioritization; choose from the unresolved
+  queue, consult Gemini if helpful, and keep working.
+- If runtime/context limits force a response, make it a resume packet with the
+  exact next evidence path and next probe; do not describe the milestone as
+  done unless the full completion criteria are actually met.
+
 Only stop before full completion when the next required action is outside a
 file-revertible development task: real hardware operation, field-device action,
 credential exposure, irreversible external service change, or a formal release
@@ -136,6 +152,8 @@ Definition of "done" for unattended completion:
   only a temporary investigation marker that must trigger more file-safe reverse
   engineering.
 - A branch contains the verified work, with a commit and push when possible.
+- Intermediate branches/commits/pushes do not satisfy "done" while unresolved
+  property/tool/function queues remain.
 
 When blocked on GUI access, keep advancing offline pieces:
 
@@ -910,6 +928,8 @@ past semantic mapping into full MCGS understanding:
 Gemini 可以随时参与，不需要等到某个固定节点。遇到 UI 字段命名、截图理解、工具用途判断、属性页结构、MCE/clipboard offset 假设、下一步探针优先级，都可以立即通过 E:\googlecli\bridge 问 Gemini 3.1 Pro Preview。禁止发送 .env、密钥、完整 .MCE、完整私有 blob；只能发送截图、窗口树、摘要、bounded hex window、schema、错误片段和小段代码。Gemini 只是顾问，最终以本地证据、build/test、readback、candidate validate 为准。
 
 完成标准：目标范围内没有最终 UNKNOWN，没有未解释的元件，没有静默缺失的属性；每个可发现工具都有记录，每个候选安全工具都有可逆 probe 或明确 blocker；property-map 能服务布局规划和后续修改；build/test 通过；文档/schema/runbook 同步；可验证里程碑 commit/push。
+
+如果上一次报告里出现 property-map status=UNKNOWN、unresolvedPropertyCount、tool-sweep status=UNKNOWN、invokedCount=0、nextProbe、未验证字段、未调用工具，那么那不是完成报告，而是下一轮输入。commit/push 只是检查点，不准因此停下。直接读取这些 evidence，先处理 property-map 的 unresolved 队列，再处理 tool-sweep 的 uninvoked 工具队列；每完成一个小闭环就 build/test、必要时 commit/push，然后继续下一项。只有没有任何文件安全 nextProbe，或者下一步必须正式 apply FG2_HMI.MCE、真实 PLC/硬件动作、密钥、destructive git 时，才停下来问我。
 ```
 
 ## Final Reporting Contract
