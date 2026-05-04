@@ -117,6 +117,13 @@ Definition of "done" for unattended completion:
   continue into `MCGS_DRAW_OBJ` / `lbObjects` differential reverse engineering
   until tool-created object geometry can be read back or every file-safe
   decoding path has concrete negative evidence.
+- After geometry succeeds, do not stop at "occupied rectangles only." Continue
+  into semantic mapping until every object in the target MCGS window/row has a
+  resolved semantic record: object kind, displayed text if any,
+  variable/expression bindings, operation/script behavior if any, and evidence
+  source. `unknown-mce-object` is not a completion state for this stage; it is
+  only a temporary investigation marker that must trigger more file-safe reverse
+  engineering.
 - A branch contains the verified work, with a commit and push when possible.
 
 When blocked on GUI access, keep advancing offline pieces:
@@ -441,6 +448,127 @@ Fallback rule:
 - That `UNKNOWN` must be encoded as tool behavior with evidence, not as a chat
   excuse to stop early.
 
+Known geometry milestone as of the 2026-05-04 continuation:
+
+- `canvas mce-object-map-probe` and `canvas mce-blob-diff-probe` exist.
+- Differential samples showed MCGS stores non-4-byte-aligned little-endian int32
+  LTRB rectangles.
+- The tool can read geometry for mcgsctl-created `momentary-button`,
+  `status-button`, `native-static-text`, and `native-lamp` objects.
+- Existing window row geometry can produce generic occupied rectangles.
+- `layout preview --placement internal-occupancy` can now generate a real plan
+  from decoded occupancy instead of blocking for missing object maps.
+- `window.layout.apply` has completed a candidate workflow using
+  internal-occupancy planning, followed by readback, `project.check`,
+  `safety.verify`, `candidate summarize`, and `candidate validate`.
+- Current limitations: decoded geometry is high-confidence occupancy, not full
+  MCGS object semantics; `--row-key` matters; `canvas-width` and
+  `canvas-height` must match the visible/editable view; no formal apply to
+  `FG2_HMI.MCE` has been authorized.
+
+### Canvas Semantic Map Stage
+
+After internal occupancy planning works, the next stage is semantic
+understanding. The tool must not merely know that an object occupies a
+rectangle. For the active target window/row, it must resolve what every object
+is and what it does: control type, displayed text, variable/expression bindings,
+press/release or other operation behavior, script presence/content summary when
+available, and the evidence chain proving the claim. Do not end this stage by
+saying "best effort" or "unknown objects remain"; those are intermediate states,
+not the unattended completion condition.
+
+Target command surface:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe --project <candidate.MCE> --window-index <n> --row-key <key> --out <dir>
+```
+
+Semantic output should extend or pair with `canvas-objects.json`, for example:
+
+```json
+{
+  "id": "mce-occ-r2-0001",
+  "rect": { "x": 180, "y": 80, "width": 141, "height": 42 },
+  "geometryConfidence": "high",
+  "semanticKind": "momentary-button|status-button|static-label|native-lamp|numeric-input|...",
+  "semanticConfidence": "high|medium|low",
+  "text": { "value": "DEMO_JOG", "confidence": "high", "source": "readback|mce-anchor|workflow-result" },
+  "variable": { "value": "MCGSCTL_DEMO_SW", "confidence": "high", "source": "readback|mce-anchor|workflow-result" },
+  "operation": { "press": "set-1", "release": "clear-0", "confidence": "high" },
+  "expression": { "value": "MCGSCTL_DEMO_SW", "confidence": "high" },
+  "script": { "empty": true, "confidence": "high" },
+  "evidence": ["workflow-result", "property-readback", "mce-anchor", "blob-diff"],
+  "notes": []
+}
+```
+
+Semantic evidence sources, in priority order:
+
+1. Workflow results for objects created by `mcgsctl`.
+2. Property-page readback after reopening the candidate.
+3. Existing `momentary-readback.json`, indicator/status readback, and object
+   result JSON under workflow evidence.
+4. Text, variable, and expression anchors in decoded MCE blobs.
+5. Class markers such as `CDraw*` near object records.
+6. Differential experiments that vary only text, variable, expression,
+   operation, script, or object type.
+7. Clipboard `MCGS_DRAW_OBJ` summaries and hashes.
+8. Gemini review of sanitized offset summaries and classification hypotheses.
+
+Rules:
+
+- Treat mcgsctl-created objects differently from legacy project objects.
+  mcgsctl-created objects may have high semantic confidence when workflow result
+  and readback agree.
+- Legacy project objects must not remain `unknown-mce-object` in the final
+  semantic map for the target scope. If an object is not understood, keep
+  working: create controlled samples, compare MCE blob deltas, add anchor
+  extractors, enhance `MceExport.java`, add property-page readback paths, and
+  ask Gemini for sanitized offset/classification review. `unknown-mce-object`
+  may appear only in intermediate evidence files with a `nextProbe` / `nextStep`
+  field, not as a final success.
+- Do not use screenshots as semantic proof. Screenshots may help review visual
+  grouping, but semantic claims must come from readback, workflow results, or
+  decoded internal evidence.
+- Do not infer "button" or "lamp" from rectangle size alone.
+- Never use semantic guesses to drive dangerous PLC/HMI release decisions.
+- Preserve confidence and source fields. A low-confidence classification is an
+  investigation artifact, not a done condition. Final semantic claims for the
+  target scope need enough evidence to survive reopen/readback, blob-diff, or
+  equivalent independent verification.
+
+Minimum semantic experiments:
+
+1. For each object kind this tool can create, generate two samples with identical
+   geometry and different text.
+2. Generate two samples with identical geometry/text and different variables or
+   expressions.
+3. Generate press/release vs no-operation samples where GUI workflow supports
+   it.
+4. Compare offsets around text anchors, variable anchors, expression anchors,
+   and `CDraw*` class markers.
+5. Verify the inferred semantics by reopening property pages for at least one
+   object of each supported kind.
+
+Completion target for semantic mapping:
+
+- mcgsctl-created momentary buttons, status buttons, synthetic labels/native
+  static text, and native lamps can be emitted with geometry plus semantic kind,
+  text, binding/expression, operation/script evidence, and confidence.
+- Existing MCGS objects in the selected target window/row are emitted with
+  resolved semantics, not best-effort placeholders. Each object must have a
+  supported semantic kind, text/variable/expression/operation/script fields as
+  applicable, confidence, and evidence source. If the decoder cannot explain an
+  object, the run continues with more differential experiments and readback
+  probes instead of stopping.
+- The layout planner can use semantic map information to avoid disrupting
+  meaningful groups, choose readable placement near related controls when safe,
+  and may use geometry-only avoidance only during intermediate experiments. The
+  semantic stage is not complete while target-scope semantics are unknown.
+- Documentation states exactly which semantics are fully decoded, how each was
+  verified, and what file-safe evidence would be needed before expanding beyond
+  the current target scope.
+
 ### Automatic Layout Planner
 
 Do not advertise "automatic visual planning" until the tool can produce a
@@ -585,10 +713,18 @@ Proceed in this order unless current code shows a better safe path:
    be decoded or every file-safe path has concrete negative evidence.
 9. Object map and planner: implement `canvas-objects.json`, occupied rectangles,
    `layout-plan.json`, preview overlay, and `placementSource` evidence.
-10. Release integration: connect layout evidence to candidate summary and
+10. Semantic mapping: implement `canvas semantic-map-probe` or equivalent
+   semantic output that identifies mcgsctl-created object kind, text,
+   variable/expression, operation/script evidence, and fully resolved legacy
+   object semantics for the selected target window/row.
+11. Semantic-aware planning: let layout planning use reliable semantic groups
+   when available. Geometry-only avoidance is allowed as an intermediate
+   experiment, but final semantic completion requires no target-scope
+   `unknown-mce-object` records.
+12. Release integration: connect layout evidence to candidate summary and
    `safety.verify`.
-11. Documentation: update README, operator runbook, examples, and schemas.
-12. Publish check: run build, tests, and publish script when the implementation
+13. Documentation: update README, operator runbook, examples, and schemas.
+14. Publish check: run build, tests, and publish script when the implementation
    is ready for release packaging.
 
 ## Definition Of Done
@@ -610,8 +746,15 @@ The task is not done when code merely compiles. A useful completion must include
   known-coordinate tool-created objects
 - automatic layout emits `canvas-objects.json` and `layout-plan.json` from
   decoded tool-created object geometry and internal occupancy evidence
-- any remaining `UNKNOWN` is backed by reverse-engineering evidence, not just by
-  surface probe failures
+- semantic map output distinguishes mcgsctl-created object kinds, text,
+  variable/expression bindings, operation/script evidence, and resolved legacy
+  object semantics with confidence/source fields
+- semantic-aware layout preserves readable HMI grouping when reliable semantics
+  exist; geometry-only avoidance is only an intermediate fallback while semantic
+  probes are still running
+- no target-scope `UNKNOWN` / `unknown-mce-object` remains in the final
+  semantic-map success path; any such record keeps the task open and must list
+  the next file-safe probe to run
 - candidate summary sees layout workflow results
 - release gates block `FAIL` and `UNKNOWN`
 - README/runbook explain the workflow and limitations
@@ -637,6 +780,10 @@ The user can paste this to start an unattended run:
 实现路线按最后聊天记录的新方向推进：不要继续靠截图猜坐标。先实现只读 `canvas inspect`，用 UIA/MSAA/WM_GETOBJECT/OBJID_NATIVEOM/clipboard/read-only MCE geometry 探测 MCGS 画布内部对象。表层通道返回 UNKNOWN 不是完成，而是进入 `MCGS_DRAW_OBJ` / `WndUser.lbObjects` / `WndDevice.lbObjects` 差分反解阶段：用单变量候选副本实验、clipboard diff、MCE blob diff、Java MceExport 增强、`CDraw*` 类标记、文本/变量 anchor、小端坐标搜索、多样本统计和 Gemini 复核，至少可靠读回本工具创建控件的 x/y/width/height。然后生成 `canvas-objects.json`、occupied rectangles、`layout-plan.json` 和 preview overlay；最后才让 `window.layout.apply` 根据 internal occupancy 做自动布局。显式坐标仍可支持，但必须标记 `placementSource=explicit`；自动规划必须标记 `placementSource=internal-occupancy`。没有完成差分反解前，不要把 UNKNOWN 当成阶段完成。
 
 新的完成标准不是“诚实返回 UNKNOWN”。新的完成标准是：至少能解析本工具创建的 MCGS 控件几何，`canvas-objects.json` 有真实 occupied rectangles，`layout preview --placement internal-occupancy` 不再因为没有 object map blocked，自动布局生成 `layout-plan.json`，GUI apply + readback + validators 通过，然后 build/test、commit、push。
+
+几何占用闭环后，继续进入语义理解阶段，不要停在“知道占哪里”，也不要停在“尽量解析”。新增或完善 `canvas semantic-map-probe`：必须把目标画面/目标 row 里的每一个 MCGS 对象解析明白，输出 kind、text、variable/expression、press/release operation、script 空/非空或摘要、confidence、evidence source。对 mcgsctl 创建的对象要用 workflow-results + 属性页 readback + MCE anchor/diff 交叉证明；对原工程已有对象也不能用 best-effort 或 unknown 收口。如果某个旧对象还没解析明白，就继续做单变量候选副本、clipboard diff、MCE blob diff、Java MceExport 增强、`CDraw*` marker、文本/变量/expression anchor、属性页 readback 和 Gemini 复核。`unknown-mce-object` 只能出现在中间 evidence 里，并且必须带 nextProbe/nextStep；它不是完成状态。不要用截图或矩形大小直接推断对象语义。
+
+语义阶段的新完成标准：目标画面/目标 row 内没有任何最终 `UNKNOWN` / `unknown-mce-object`。mcgsctl 创建的 momentary-button、status-button、synthetic label/native static text、native lamp 必须输出几何 + 语义 kind + 文本/绑定/表达式/操作证据；已有 legacy 对象也必须有证据支持的语义分类和字段解释。layout planner 应使用这些语义保护相关控件分组和可读性；geometry-only avoidance 只能作为语义反解过程中的临时保护，不能作为语义阶段最终交付。
 
 如果 GUI 条件不满足，不要停工；继续完成离线 schema、验证、预览、测试和文档。只有会影响正式 MCE、PLC 安全、真实硬件行为或不可逆图形写入时才停下来问我。
 

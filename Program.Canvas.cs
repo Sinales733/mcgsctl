@@ -68,6 +68,11 @@ internal static partial class Program
         public string Workflow { get; set; } = "";
         public string ResultPath { get; set; } = "";
         public string Readback { get; set; } = "";
+        public string PressOperation { get; set; } = "";
+        public string ReleaseOperation { get; set; } = "";
+        public string ScriptStatus { get; set; } = "";
+        public string ScriptSummary { get; set; } = "";
+        public List<object> EvidenceChain { get; } = new();
     }
 
     private sealed class MceObjectMapProbeResult
@@ -97,6 +102,91 @@ internal static partial class Program
         public int Width { get; set; }
         public int Height { get; set; }
         public object Evidence { get; set; } = new();
+    }
+
+    private sealed class CanvasSemanticMap
+    {
+        public int SchemaVersion { get; set; } = 1;
+        public string Status { get; set; } = "UNKNOWN";
+        public string EvidenceStatus { get; set; } = "UNKNOWN";
+        public string CreatedAt { get; set; } = DateTimeOffset.Now.ToString("O");
+        public string? Project { get; set; }
+        public string? ProjectSha256 { get; set; }
+        public string? RowKey { get; set; }
+        public string ObjectProvider { get; set; } = "mce-semantic-map";
+        public bool Complete { get; set; }
+        public string GeometryPath { get; set; } = "mce-export/blob_geometry.json";
+        public string? WorkflowResults { get; set; }
+        public string? LayoutApplyEvidence { get; set; }
+        public List<string> ChannelsTried { get; } = new();
+        public List<string> BlockedReasons { get; } = new();
+        public List<string> UnknownReasons { get; } = new();
+        public List<CanvasSemanticObject> Objects { get; } = new();
+        public List<object> BlobEntries { get; } = new();
+        public List<object> UnresolvedObjects { get; } = new();
+        public List<object> RejectedHypotheses { get; } = new();
+    }
+
+    private sealed class CanvasSemanticObject
+    {
+        public string Id { get; set; } = "";
+        public string RowKey { get; set; } = "";
+        public CanvasOccupiedRect Rect { get; set; } = new();
+        public string SemanticKind { get; set; } = "unknown";
+        public string DisplayedText { get; set; } = "";
+        public string Variable { get; set; } = "";
+        public string Expression { get; set; } = "";
+        public string PressOperation { get; set; } = "";
+        public string ReleaseOperation { get; set; } = "";
+        public List<string> OtherOperations { get; } = new();
+        public string ScriptStatus { get; set; } = "unknown";
+        public string ScriptSummary { get; set; } = "";
+        public double Confidence { get; set; }
+        public List<string> EvidenceSources { get; } = new();
+        public List<object> EvidenceChain { get; } = new();
+        public string NextProbe { get; set; } = "";
+    }
+
+    private sealed class MceBlobContext
+    {
+        public string Table { get; set; } = "";
+        public string Column { get; set; } = "";
+        public string RowKey { get; set; } = "";
+        public string Sha256 { get; set; } = "";
+        public int Bytes { get; set; }
+        public List<string> ClassNames { get; } = new();
+        public List<MceTextAnchorEvidence> TextAnchors { get; } = new();
+        public List<MceRectEvidence> Rects { get; } = new();
+    }
+
+    private sealed class MceTextAnchorEvidence
+    {
+        public int Offset { get; set; }
+        public string OffsetHex => FormatHex(Offset);
+        public string Encoding { get; set; } = "";
+        public string Sample { get; set; } = "";
+        public string Sha256 { get; set; } = "";
+        public int ByteLength { get; set; }
+    }
+
+    private sealed class MceRectEvidence
+    {
+        public int Offset { get; set; }
+        public string OffsetHex => FormatHex(Offset);
+        public string Encoding { get; set; } = "";
+        public string Pattern { get; set; } = "";
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+    }
+
+    private sealed class MceControlAnchor
+    {
+        public int Number { get; set; }
+        public string Token { get; set; } = "";
+        public MceTextAnchorEvidence Anchor { get; set; } = new();
+        public List<MceTextAnchorEvidence> Payload { get; } = new();
     }
 
     private sealed class CanvasClipboardProbeResult
@@ -160,7 +250,7 @@ internal static partial class Program
     private static int Canvas(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
+            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -170,6 +260,7 @@ internal static partial class Program
             "toolbar-probe" => CanvasToolbarProbe(args),
             "mce-geometry-probe" => CanvasMceGeometryProbe(args),
             "mce-object-map-probe" => CanvasMceObjectMapProbe(args),
+            "semantic-map-probe" => CanvasSemanticMapProbe(args),
             "mce-blob-diff-probe" => CanvasMceBlobDiffProbe(args),
             _ => Fail("Unknown canvas command: " + args[1])
         };
@@ -653,6 +744,121 @@ internal static partial class Program
         }
     }
 
+    private static int CanvasSemanticMapProbe(string[] args)
+    {
+        var project = RequiredPath(args, "--project");
+        var outDir = FullPath(Required(args, "--out"));
+        Directory.CreateDirectory(outDir);
+        var workflowResultsDir = Opt(args, "--workflow-results") ?? InferWorkflowResultsDir(project);
+        var layoutApplyDir = OptionalFullPath(Opt(args, "--layout-apply"));
+        var rowKeyFilter = Opt(args, "--row-key");
+        var canvasWidth = OptInt(args, "--canvas-width") ?? 1024;
+        var canvasHeight = OptInt(args, "--canvas-height") ?? 768;
+        try
+        {
+            var exportDir = Path.Combine(outDir, "mce-export");
+            MceExporter.Export(project, exportDir);
+            var geometryPath = Path.Combine(exportDir, "blob_geometry.json");
+            var projectSha = Sha256(project);
+            var semantic = new CanvasSemanticMap
+            {
+                Project = Path.GetFullPath(project),
+                ProjectSha256 = projectSha,
+                RowKey = rowKeyFilter,
+                WorkflowResults = workflowResultsDir == null ? null : Path.GetFullPath(workflowResultsDir),
+                LayoutApplyEvidence = layoutApplyDir
+            };
+            semantic.ChannelsTried.AddRange(new[]
+            {
+                "workflow-results",
+                "layout-apply-readback",
+                "mce-geometry",
+                "text-anchor",
+                "rect-anchor"
+            });
+
+            var knownObjects = LoadKnownCanvasObjectsForSemanticMap(workflowResultsDir, layoutApplyDir);
+            if (!File.Exists(geometryPath))
+            {
+                semantic.BlockedReasons.Add("blob_geometry.json was not produced by MCE export");
+            }
+            else
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(geometryPath, Encoding.UTF8));
+                var contexts = BuildMceBlobContexts(doc.RootElement, rowKeyFilter, canvasWidth, canvasHeight);
+                foreach (var context in contexts)
+                {
+                    semantic.BlobEntries.Add(new
+                    {
+                        context.Table,
+                        context.Column,
+                        context.RowKey,
+                        context.Bytes,
+                        context.Sha256,
+                        classes = context.ClassNames,
+                        rectCount = context.Rects.Count,
+                        textAnchorCount = context.TextAnchors.Count
+                    });
+                    AddSemanticObjectsFromBlobContext(semantic, context, knownObjects);
+                }
+                MergeKnownSemanticObjects(semantic, knownObjects);
+            }
+
+            foreach (var obj in semantic.Objects)
+            {
+                if (obj.SemanticKind.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
+                    obj.SemanticKind.Equals("unknown-mce-object", StringComparison.OrdinalIgnoreCase))
+                {
+                    semantic.UnresolvedObjects.Add(new
+                    {
+                        obj.Id,
+                        obj.RowKey,
+                        rect = new { obj.Rect.X, obj.Rect.Y, obj.Rect.Width, obj.Rect.Height },
+                        reason = "semanticKind unresolved",
+                        nextProbe = string.IsNullOrWhiteSpace(obj.NextProbe) ? "run targeted MCE blob/text-anchor diff around this rect" : obj.NextProbe
+                    });
+                }
+                if (obj.Confidence < 0.6)
+                {
+                    semantic.UnresolvedObjects.Add(new
+                    {
+                        obj.Id,
+                        obj.RowKey,
+                        rect = new { obj.Rect.X, obj.Rect.Y, obj.Rect.Width, obj.Rect.Height },
+                        reason = "semantic confidence below completion threshold",
+                        obj.Confidence,
+                        nextProbe = string.IsNullOrWhiteSpace(obj.NextProbe) ? "collect property-page readback or single-variable diff sample" : obj.NextProbe
+                    });
+                }
+            }
+
+            if (semantic.Objects.Count == 0)
+                semantic.UnknownReasons.Add("no MCGS canvas semantic objects were decoded from the target row");
+            foreach (var unresolved in semantic.UnresolvedObjects)
+                semantic.UnknownReasons.Add("unresolved semantic object: " + JsonSerializer.Serialize(unresolved, JsonOptions()));
+
+            semantic.EvidenceStatus = File.Exists(geometryPath) ? "PASS" : "UNKNOWN";
+            semantic.Complete = semantic.BlockedReasons.Count == 0 && semantic.UnknownReasons.Count == 0 && semantic.Objects.Count > 0;
+            semantic.Status = semantic.BlockedReasons.Count > 0 ? "FAIL" : semantic.Complete ? "PASS" : "UNKNOWN";
+
+            var canvasMap = BuildSemanticCanvasObjectMap(semantic, canvasWidth, canvasHeight);
+            File.WriteAllText(Path.Combine(outDir, "semantic-map-probe.json"),
+                JsonSerializer.Serialize(semantic, JsonOptions()), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(outDir, "semantic-map.json"),
+                JsonSerializer.Serialize(semantic, JsonOptions()), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(outDir, "canvas-objects.json"),
+                JsonSerializer.Serialize(canvasMap, JsonOptions()), Encoding.UTF8);
+            Console.WriteLine("canvas semantic-map-probe: " + outDir);
+            return semantic.Status == "PASS" ? 0 : 2;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            Console.Error.WriteLine("canvas semantic-map-probe failed: " + ex.Message);
+            return 1;
+        }
+    }
+
     private static int CanvasMceBlobDiffProbe(string[] args)
     {
         var before = RequiredPath(args, "--before");
@@ -752,6 +958,202 @@ internal static partial class Program
         return known;
     }
 
+    private static List<KnownCanvasObject> LoadKnownCanvasObjectsForSemanticMap(string? workflowResultsDir, string? layoutApplyDir)
+    {
+        var known = new List<KnownCanvasObject>();
+        if (!string.IsNullOrWhiteSpace(workflowResultsDir) && Directory.Exists(workflowResultsDir))
+            known.AddRange(LoadKnownCanvasObjects(workflowResultsDir));
+
+        if (!string.IsNullOrWhiteSpace(layoutApplyDir) && Directory.Exists(layoutApplyDir))
+        {
+            foreach (var file in Directory.EnumerateFiles(layoutApplyDir, "*.json", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var name = Path.GetFileName(file);
+                if (!name.Equals("result.json", StringComparison.OrdinalIgnoreCase) &&
+                    !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                foreach (var item in LoadKnownCanvasObjectsFromJsonFile(file))
+                    known.Add(item);
+            }
+        }
+
+        var deduped = new List<KnownCanvasObject>();
+        foreach (var item in known)
+        {
+            var existing = deduped.FirstOrDefault(existing =>
+                NearRect(existing.Rect, item.Rect, tolerance: 6) &&
+                string.Equals(existing.Text, item.Text, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.Variable, item.Variable, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.Expression, item.Expression, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                MergeKnownCanvasObjectEvidence(existing, item);
+                continue;
+            }
+            deduped.Add(item);
+        }
+        return deduped;
+    }
+
+    private static void MergeKnownCanvasObjectEvidence(KnownCanvasObject target, KnownCanvasObject source)
+    {
+        if (!target.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+            source.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+            target.Readback = source.Readback;
+        if (string.IsNullOrWhiteSpace(target.PressOperation)) target.PressOperation = source.PressOperation;
+        if (string.IsNullOrWhiteSpace(target.ReleaseOperation)) target.ReleaseOperation = source.ReleaseOperation;
+        if (string.IsNullOrWhiteSpace(target.ScriptStatus)) target.ScriptStatus = source.ScriptStatus;
+        if (string.IsNullOrWhiteSpace(target.ScriptSummary)) target.ScriptSummary = source.ScriptSummary;
+        if (string.IsNullOrWhiteSpace(target.ResultPath)) target.ResultPath = source.ResultPath;
+        foreach (var evidence in source.EvidenceChain)
+            target.EvidenceChain.Add(evidence);
+    }
+
+    private static IEnumerable<KnownCanvasObject> LoadKnownCanvasObjectsFromJsonFile(string file)
+    {
+        JsonDocument? doc = null;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                yield break;
+            var workflow = JsonStringAny(root, "workflow", "Workflow") ?? "";
+            if (root.TryGetProperty("createdUiObjects", out var objects) && objects.ValueKind == JsonValueKind.Array)
+            {
+                var sequence = 0;
+                foreach (var item in objects.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("rect", out var rect) || rect.ValueKind != JsonValueKind.Object)
+                        continue;
+                    var known = BuildKnownObjectFromRect(item, rect, workflow, file, ++sequence);
+                    if (known != null) yield return known;
+                }
+            }
+
+            if (root.TryGetProperty("rectangle", out var rectangle) && rectangle.ValueKind == JsonValueKind.Object)
+            {
+                var known = BuildKnownObjectFromRect(root, rectangle, "window.button.add-momentary", file, 1);
+                if (known != null)
+                {
+                    var readbackPath = Path.Combine(Path.GetDirectoryName(file) ?? "", "momentary-readback.json");
+                    if (File.Exists(readbackPath))
+                        AddMomentaryReadbackEvidence(known, readbackPath);
+                    yield return known;
+                }
+            }
+        }
+        finally
+        {
+            doc?.Dispose();
+        }
+    }
+
+    private static KnownCanvasObject? BuildKnownObjectFromRect(JsonElement item, JsonElement rect, string workflow, string file, int sequence)
+    {
+        var x = LayoutJsonIntAny(rect, "x", "X");
+        var y = LayoutJsonIntAny(rect, "y", "Y");
+        var width = LayoutJsonIntAny(rect, "width", "Width");
+        var height = LayoutJsonIntAny(rect, "height", "Height");
+        if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0)
+            return null;
+
+        var label = JsonStringAny(item, "text", "Text", "label", "Label") ?? "";
+        var variable = JsonStringAny(item, "variable", "Variable") ?? "";
+        var expression = JsonStringAny(item, "expression", "Expression") ?? "";
+        var kind = JsonStringAny(item, "kind", "Kind") ??
+                   (!string.IsNullOrWhiteSpace(variable) ? "momentary-button" :
+                       !string.IsNullOrWhiteSpace(expression) ? "status-button" : workflow);
+        var readback = JsonStringAny(item, "readback", "Readback") ?? "";
+        if (JsonBoolAny(item, "reopenVerified", "ReopenVerified") == true ||
+            JsonBoolAny(item, "propertyReadbackVerified", "PropertyReadbackVerified") == true)
+            readback = "PASS";
+        var id = JsonStringAny(item, "id", "Id");
+        if (string.IsNullOrWhiteSpace(id))
+            id = "known-" + sequence.ToString("0000", System.Globalization.CultureInfo.InvariantCulture);
+
+        var known = new KnownCanvasObject
+        {
+            Id = id!,
+            Kind = kind,
+            Text = label,
+            Variable = variable,
+            Expression = expression,
+            Rect = new CanvasOccupiedRect
+            {
+                Id = id!,
+                Kind = kind,
+                Text = label,
+                Variable = variable,
+                Expression = expression,
+                X = x.Value,
+                Y = y.Value,
+                Width = width.Value,
+                Height = height.Value,
+                Source = "workflow-result",
+                Confidence = readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? "high" : "medium"
+            },
+            Workflow = workflow,
+            ResultPath = file,
+            Readback = readback
+        };
+        known.EvidenceChain.Add(new
+        {
+            source = "workflow-result",
+            path = file,
+            kind,
+            label,
+            variable,
+            expression,
+            rect = new { x = x.Value, y = y.Value, width = width.Value, height = height.Value },
+            readback
+        });
+        return known;
+    }
+
+    private static void AddMomentaryReadbackEvidence(KnownCanvasObject known, string readbackPath)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(readbackPath, Encoding.UTF8));
+            var root = doc.RootElement;
+            var press = root.TryGetProperty("pressReadback", out var pressReadback) ? pressReadback : default;
+            var release = root.TryGetProperty("releaseReadback", out var releaseReadback) ? releaseReadback : default;
+            known.PressOperation = press.ValueKind == JsonValueKind.Object
+                ? JsonStringAny(press, "SelectedOperation", "selectedOperation", "ExpectedOperation", "expectedOperation") ?? "set1"
+                : "set1";
+            known.ReleaseOperation = release.ValueKind == JsonValueKind.Object
+                ? JsonStringAny(release, "SelectedOperation", "selectedOperation", "ExpectedOperation", "expectedOperation") ?? "clear0"
+                : "clear0";
+            known.ScriptStatus = JsonBoolAny(root, "scriptEmpty", "ScriptEmpty") == true ? "empty" : "nonempty";
+            known.ScriptSummary = known.ScriptStatus == "empty" ? "" : "script page is not empty";
+            known.Readback = (JsonBoolAny(root, "pressOk", "PressOk") == true &&
+                              JsonBoolAny(root, "releaseOk", "ReleaseOk") == true &&
+                              JsonBoolAny(root, "tokenReopenVerified", "TokenReopenVerified") == true)
+                ? "PASS"
+                : known.Readback;
+            known.EvidenceChain.Add(new
+            {
+                source = "property-readback",
+                path = readbackPath,
+                pressOperation = known.PressOperation,
+                releaseOperation = known.ReleaseOperation,
+                scriptStatus = known.ScriptStatus,
+                readback = known.Readback
+            });
+        }
+        catch
+        {
+            known.EvidenceChain.Add(new
+            {
+                source = "property-readback",
+                path = readbackPath,
+                status = "unreadable"
+            });
+        }
+    }
+
     private static void AddGenericMceGeometryOccupancy(
         JsonElement geometryRoot,
         CanvasObjectMap map,
@@ -842,6 +1244,665 @@ internal static partial class Program
             Height = height.Value
         };
         return true;
+    }
+
+    private static List<MceBlobContext> BuildMceBlobContexts(JsonElement geometryRoot, string? rowKeyFilter, int canvasWidth, int canvasHeight)
+    {
+        var contexts = new List<MceBlobContext>();
+        if (geometryRoot.ValueKind != JsonValueKind.Array) return contexts;
+        foreach (var entry in geometryRoot.EnumerateArray())
+        {
+            var rowKey = JsonString(entry, "rowKey") ?? "";
+            if (!string.IsNullOrWhiteSpace(rowKeyFilter) &&
+                !rowKey.Equals(rowKeyFilter, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var context = new MceBlobContext
+            {
+                Table = JsonString(entry, "table") ?? "",
+                Column = JsonString(entry, "column") ?? "",
+                RowKey = rowKey,
+                Sha256 = JsonString(entry, "sha256") ?? "",
+                Bytes = JsonInt(entry, "bytes") ?? 0
+            };
+            if (entry.TryGetProperty("classOccurrences", out var classes) && classes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var cls in classes.EnumerateArray())
+                {
+                    var name = JsonString(cls, "className");
+                    if (!string.IsNullOrWhiteSpace(name) && !context.ClassNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                        context.ClassNames.Add(name);
+                }
+            }
+            if (entry.TryGetProperty("textAnchors", out var anchors) && anchors.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var anchor in anchors.EnumerateArray())
+                {
+                    var sample = JsonString(anchor, "sample") ?? "";
+                    if (string.IsNullOrWhiteSpace(sample)) continue;
+                    var offset = ParseMceOffset(JsonString(anchor, "offset"));
+                    if (offset == null) continue;
+                    context.TextAnchors.Add(new MceTextAnchorEvidence
+                    {
+                        Offset = offset.Value,
+                        Encoding = JsonString(anchor, "encoding") ?? "",
+                        Sample = sample,
+                        Sha256 = JsonString(anchor, "sha256") ?? "",
+                        ByteLength = JsonInt(anchor, "byteLength") ?? 0
+                    });
+                }
+            }
+            if (entry.TryGetProperty("candidateRectangles", out var rects) && rects.ValueKind == JsonValueKind.Array)
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var rect in rects.EnumerateArray())
+                {
+                    if (!TryBuildSemanticMceRect(rect, canvasWidth, canvasHeight, out var evidence))
+                        continue;
+                    var key = evidence.X + ":" + evidence.Y + ":" + evidence.Width + ":" + evidence.Height;
+                    if (!seen.Add(key)) continue;
+                    context.Rects.Add(evidence);
+                }
+            }
+            context.TextAnchors.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+            context.Rects.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+            if (context.ClassNames.Count > 0 || context.Rects.Count > 0 || context.TextAnchors.Count > 0)
+                contexts.Add(context);
+        }
+        return contexts;
+    }
+
+    private static bool TryBuildSemanticMceRect(JsonElement rectEl, int canvasWidth, int canvasHeight, out MceRectEvidence evidence)
+    {
+        evidence = new MceRectEvidence();
+        if (!string.Equals(JsonString(rectEl, "encoding"), "int32", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(JsonString(rectEl, "pattern"), "ltrb", StringComparison.OrdinalIgnoreCase)) return false;
+        var x = LayoutJsonIntAny(rectEl, "x", "X");
+        var y = LayoutJsonIntAny(rectEl, "y", "Y");
+        var width = LayoutJsonIntAny(rectEl, "width", "Width");
+        var height = LayoutJsonIntAny(rectEl, "height", "Height");
+        var offset = ParseMceOffset(JsonString(rectEl, "offset"));
+        if (x == null || y == null || width == null || height == null || offset == null) return false;
+        if (x.Value <= 2 || y.Value <= 2) return false;
+        if (width.Value < 30 || height.Value < 16) return false;
+        if (width.Value > canvasWidth || height.Value > canvasHeight) return false;
+        if ((long)width.Value * height.Value > 100000) return false;
+        if (x.Value + width.Value > canvasWidth + 40 || y.Value + height.Value > canvasHeight + 40) return false;
+        evidence = new MceRectEvidence
+        {
+            Offset = offset.Value,
+            Encoding = JsonString(rectEl, "encoding") ?? "",
+            Pattern = JsonString(rectEl, "pattern") ?? "",
+            X = x.Value,
+            Y = y.Value,
+            Width = width.Value,
+            Height = height.Value
+        };
+        return true;
+    }
+
+    private static int? ParseMceOffset(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        text = text.Trim();
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return int.TryParse(text[2..], System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : null;
+        }
+        return int.TryParse(text, out var value) ? value : null;
+    }
+
+    private static void AddSemanticObjectsFromBlobContext(CanvasSemanticMap semantic, MceBlobContext context, List<KnownCanvasObject> knownObjects)
+    {
+        var controls = BuildMceControlAnchors(context);
+        if (controls.Count == 0)
+        {
+            foreach (var rect in context.Rects)
+            {
+                semantic.UnresolvedObjects.Add(new
+                {
+                    rowKey = context.RowKey,
+                    rect = new { rect.X, rect.Y, rect.Width, rect.Height },
+                    reason = "rect decoded but no control anchor was found",
+                    nextProbe = "run clipboard/MCE text-anchor diff around the rect offset " + rect.OffsetHex
+                });
+            }
+            return;
+        }
+
+        var largeRects = context.Rects
+            .Where(r => r.Height >= 160 && r.Width >= 80)
+            .OrderBy(r => r.Offset)
+            .ToList();
+        var normalRects = context.Rects
+            .Where(r => !largeRects.Any(l => SameRect(l, r)))
+            .OrderBy(r => r.Offset)
+            .ToList();
+        var normalControls = controls
+            .Where(c => !IsOverlayControl(c))
+            .OrderBy(c => c.Anchor.Offset)
+            .ToList();
+
+        for (var i = 0; i < normalControls.Count; i++)
+        {
+            if (i >= normalRects.Count)
+            {
+                semantic.UnresolvedObjects.Add(new
+                {
+                    rowKey = context.RowKey,
+                    control = normalControls[i].Token,
+                    reason = "control anchor had no paired rectangle",
+                    nextProbe = "single-object diff to identify rectangle field for " + normalControls[i].Token
+                });
+                continue;
+            }
+            AddSemanticObjectFromControl(semantic, context, normalControls[i], normalRects[i], knownObjects);
+        }
+
+        foreach (var control in controls.Where(IsOverlayControl))
+        {
+            var rect = largeRects.FirstOrDefault() ?? normalRects.LastOrDefault();
+            if (rect == null)
+            {
+                semantic.UnresolvedObjects.Add(new
+                {
+                    rowKey = context.RowKey,
+                    control = control.Token,
+                    reason = "overlay/visibility control had no decoded rectangle",
+                    nextProbe = "inspect CAniVisible anchor and nearby int32 LTRB candidates"
+                });
+                continue;
+            }
+            AddSemanticObjectFromControl(semantic, context, control, rect, knownObjects);
+        }
+    }
+
+    private static List<MceControlAnchor> BuildMceControlAnchors(MceBlobContext context)
+    {
+        var controls = new List<MceControlAnchor>();
+        foreach (var anchor in context.TextAnchors)
+        {
+            if (!TryParseControlAnchor(anchor.Sample, out var number))
+                continue;
+            controls.Add(new MceControlAnchor
+            {
+                Number = number,
+                Token = anchor.Sample,
+                Anchor = anchor
+            });
+        }
+        controls.Sort((a, b) => a.Anchor.Offset.CompareTo(b.Anchor.Offset));
+        for (var i = 0; i < controls.Count; i++)
+        {
+            var start = controls[i].Anchor.Offset;
+            var end = i + 1 < controls.Count ? controls[i + 1].Anchor.Offset : int.MaxValue;
+            foreach (var anchor in context.TextAnchors)
+            {
+                if (anchor.Offset <= start || anchor.Offset >= end) continue;
+                if (anchor.Encoding.Equals("utf16le", StringComparison.OrdinalIgnoreCase)) continue;
+                var sample = CleanMceToken(anchor.Sample);
+                if (string.IsNullOrWhiteSpace(sample)) continue;
+                if (IsClassOrHeaderToken(sample)) continue;
+                controls[i].Payload.Add(anchor);
+            }
+        }
+        return controls
+            .GroupBy(c => c.Number)
+            .Select(g => g.OrderBy(c => c.Anchor.Offset).First())
+            .OrderBy(c => c.Anchor.Offset)
+            .ToList();
+    }
+
+    private static bool TryParseControlAnchor(string sample, out int number)
+    {
+        number = 0;
+        sample = CleanMceToken(sample);
+        if (!sample.StartsWith("控件", StringComparison.Ordinal)) return false;
+        var digits = new StringBuilder();
+        for (var i = 2; i < sample.Length && char.IsDigit(sample[i]); i++)
+            digits.Append(sample[i]);
+        return digits.Length > 0 && int.TryParse(digits.ToString(), out number);
+    }
+
+    private static bool IsOverlayControl(MceControlAnchor control)
+        => control.Number == 11;
+
+    private static void AddSemanticObjectFromControl(
+        CanvasSemanticMap semantic,
+        MceBlobContext context,
+        MceControlAnchor control,
+        MceRectEvidence rectEvidence,
+        List<KnownCanvasObject> knownObjects)
+    {
+        var payload = control.Payload
+            .Select(a => new { Anchor = a, Token = CleanMceToken(a.Sample), Text = ExtractFormulaText(CleanMceToken(a.Sample)) })
+            .Where(x => !string.IsNullOrWhiteSpace(x.Token) && !IsClassOrHeaderToken(x.Token))
+            .ToList();
+        var formulaTexts = payload.Select(x => x.Text).Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
+        var bareTexts = payload.Select(x => x.Token)
+            .Where(t => !string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(ExtractFormulaText(t)) && !IsScriptLikeToken(t))
+            .ToList();
+        var scriptTokens = payload.Select(x => x.Token).Where(IsScriptLikeToken).ToList();
+        var rect = new CanvasOccupiedRect
+        {
+            Id = "mce-sem-r" + context.RowKey + "-" + control.Number.ToString("0000", System.Globalization.CultureInfo.InvariantCulture),
+            Kind = "semantic-mce-object",
+            X = rectEvidence.X,
+            Y = rectEvidence.Y,
+            Width = rectEvidence.Width,
+            Height = rectEvidence.Height,
+            Source = "mce-semantic-map",
+            Confidence = "high"
+        };
+        var known = knownObjects.FirstOrDefault(k => NearRect(k.Rect, rect, tolerance: 8) &&
+                                                     TokenEvidenceMatchesKnown(payload.Select(p => p.Token), k));
+        var expression = known?.Expression ?? ChooseExpression(control, payload.Select(p => p.Token).ToList());
+        var semanticKind = known?.Kind ?? InferSemanticKind(control, rectEvidence, formulaTexts, bareTexts, scriptTokens, expression);
+        var displayed = ChooseDisplayedText(control, formulaTexts, bareTexts, scriptTokens, known);
+        var variable = known?.Variable ?? ChooseVariable(control, semanticKind, formulaTexts, bareTexts, scriptTokens);
+        var obj = new CanvasSemanticObject
+        {
+            Id = rect.Id,
+            RowKey = context.RowKey,
+            Rect = rect,
+            SemanticKind = semanticKind,
+            DisplayedText = displayed,
+            Variable = variable,
+            Expression = expression,
+            PressOperation = known?.PressOperation ?? "",
+            ReleaseOperation = known?.ReleaseOperation ?? "",
+            ScriptStatus = known?.ScriptStatus ?? (scriptTokens.Count > 0 ? "nonempty" : "empty"),
+            ScriptSummary = known?.ScriptSummary ?? SummarizeScriptTokens(scriptTokens),
+            Confidence = known != null && known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase)
+                ? 0.98
+                : (string.IsNullOrWhiteSpace(displayed) ? 0.68 : 0.82)
+        };
+        obj.EvidenceSources.Add("mce-rect-anchor");
+        obj.EvidenceSources.Add("mce-text-anchor");
+        if (known != null)
+        {
+            obj.EvidenceSources.Add("workflow-result");
+            if (known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                obj.EvidenceSources.Add("property-readback");
+        }
+        if (known == null || (!known.Kind.Equals("momentary-button", StringComparison.OrdinalIgnoreCase) &&
+                              !known.Kind.Equals("status-button", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var op in ExtractOperations(scriptTokens, formulaTexts, bareTexts))
+                obj.OtherOperations.Add(op);
+        }
+        obj.EvidenceChain.Add(new
+        {
+            source = "mce-rect-anchor",
+            rowKey = context.RowKey,
+            rectOffset = rectEvidence.OffsetHex,
+            rect = new { rectEvidence.X, rectEvidence.Y, rectEvidence.Width, rectEvidence.Height }
+        });
+        obj.EvidenceChain.Add(new
+        {
+            source = "mce-control-anchor",
+            control = control.Token,
+            controlOffset = control.Anchor.OffsetHex,
+            payload = payload.Take(24).Select(p => new
+            {
+                offset = p.Anchor.OffsetHex,
+                p.Anchor.Encoding,
+                sample = p.Token
+            }).ToArray()
+        });
+        if (known != null)
+        {
+            foreach (var chain in known.EvidenceChain)
+                obj.EvidenceChain.Add(chain);
+        }
+        if (string.IsNullOrWhiteSpace(obj.DisplayedText) && string.IsNullOrWhiteSpace(obj.Variable) && string.IsNullOrWhiteSpace(obj.Expression))
+            obj.NextProbe = "property-page readback or single-variable diff is required for " + control.Token;
+
+        rect.Kind = obj.SemanticKind;
+        rect.Text = obj.DisplayedText;
+        rect.Variable = obj.Variable;
+        rect.Expression = obj.Expression;
+        AddOrReplaceSemanticObject(semantic, obj);
+    }
+
+    private static void MergeKnownSemanticObjects(CanvasSemanticMap semantic, List<KnownCanvasObject> knownObjects)
+    {
+        foreach (var known in knownObjects)
+        {
+            var existing = semantic.Objects.FirstOrDefault(obj => NearRect(obj.Rect, known.Rect, tolerance: 8) &&
+                                                                  (string.IsNullOrWhiteSpace(known.Text) ||
+                                                                   obj.DisplayedText.Contains(known.Text, StringComparison.OrdinalIgnoreCase) ||
+                                                                   obj.EvidenceChain.Any(e => JsonSerializer.Serialize(e, JsonOptions()).Contains(known.Text, StringComparison.OrdinalIgnoreCase))));
+            if (existing == null)
+            {
+                var rect = new CanvasOccupiedRect
+                {
+                    Id = known.Id,
+                    Kind = known.Kind,
+                    Text = known.Text,
+                    Variable = known.Variable,
+                    Expression = known.Expression,
+                    X = known.Rect.X,
+                    Y = known.Rect.Y,
+                    Width = known.Rect.Width,
+                    Height = known.Rect.Height,
+                    Source = "workflow-result",
+                    Confidence = known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? "high" : "medium"
+                };
+                existing = new CanvasSemanticObject
+                {
+                    Id = known.Id,
+                    Rect = rect,
+                    SemanticKind = known.Kind,
+                    DisplayedText = known.Text,
+                    Variable = known.Variable,
+                    Expression = known.Expression,
+                    PressOperation = known.PressOperation,
+                    ReleaseOperation = known.ReleaseOperation,
+                    ScriptStatus = string.IsNullOrWhiteSpace(known.ScriptStatus) ? "unknown" : known.ScriptStatus,
+                    ScriptSummary = known.ScriptSummary,
+                    Confidence = known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? 0.92 : 0.7
+                };
+                existing.EvidenceSources.Add("workflow-result");
+                foreach (var chain in known.EvidenceChain)
+                    existing.EvidenceChain.Add(chain);
+                AddOrReplaceSemanticObject(semantic, existing);
+                continue;
+            }
+            existing.SemanticKind = known.Kind;
+            existing.DisplayedText = string.IsNullOrWhiteSpace(known.Text) ? existing.DisplayedText : known.Text;
+            existing.Variable = string.IsNullOrWhiteSpace(known.Variable) ? existing.Variable : known.Variable;
+            existing.Expression = string.IsNullOrWhiteSpace(known.Expression) ? existing.Expression : known.Expression;
+            existing.PressOperation = string.IsNullOrWhiteSpace(known.PressOperation) ? existing.PressOperation : known.PressOperation;
+            existing.ReleaseOperation = string.IsNullOrWhiteSpace(known.ReleaseOperation) ? existing.ReleaseOperation : known.ReleaseOperation;
+            existing.ScriptStatus = string.IsNullOrWhiteSpace(known.ScriptStatus) ? existing.ScriptStatus : known.ScriptStatus;
+            existing.ScriptSummary = string.IsNullOrWhiteSpace(known.ScriptSummary) ? existing.ScriptSummary : known.ScriptSummary;
+            existing.Confidence = Math.Max(existing.Confidence, known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? 0.98 : 0.82);
+            if (!existing.EvidenceSources.Contains("workflow-result")) existing.EvidenceSources.Add("workflow-result");
+            if (known.Readback.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                !existing.EvidenceSources.Contains("property-readback")) existing.EvidenceSources.Add("property-readback");
+            foreach (var chain in known.EvidenceChain)
+                existing.EvidenceChain.Add(chain);
+            existing.Rect.Kind = existing.SemanticKind;
+            existing.Rect.Text = existing.DisplayedText;
+            existing.Rect.Variable = existing.Variable;
+            existing.Rect.Expression = existing.Expression;
+        }
+    }
+
+    private static void AddOrReplaceSemanticObject(CanvasSemanticMap semantic, CanvasSemanticObject obj)
+    {
+        var existing = semantic.Objects.FindIndex(item => NearRect(item.Rect, obj.Rect, tolerance: 2));
+        if (existing >= 0)
+        {
+            if (obj.Confidence >= semantic.Objects[existing].Confidence)
+                semantic.Objects[existing] = obj;
+            return;
+        }
+        semantic.Objects.Add(obj);
+        semantic.Objects.Sort((a, b) => a.Rect.Y == b.Rect.Y
+            ? a.Rect.X.CompareTo(b.Rect.X)
+            : a.Rect.Y.CompareTo(b.Rect.Y));
+    }
+
+    private static CanvasObjectMap BuildSemanticCanvasObjectMap(CanvasSemanticMap semantic, int canvasWidth, int canvasHeight)
+    {
+        var map = new CanvasObjectMap
+        {
+            Status = semantic.Status == "PASS" ? "PASS" : "UNKNOWN",
+            ObjectProvider = "mce-semantic-map",
+            ReliableGeometry = semantic.Status == "PASS",
+            Project = semantic.Project,
+            ProjectSha256 = semantic.ProjectSha256
+        };
+        map.ChannelsTried.AddRange(semantic.ChannelsTried);
+        foreach (var reason in semantic.BlockedReasons.Concat(semantic.UnknownReasons))
+            map.BlockedReasons.Add(reason);
+        foreach (var obj in semantic.Objects)
+        {
+            var rect = new CanvasOccupiedRect
+            {
+                Id = obj.Id,
+                Kind = obj.SemanticKind,
+                Text = obj.DisplayedText,
+                Variable = obj.Variable,
+                Expression = obj.Expression,
+                X = obj.Rect.X,
+                Y = obj.Rect.Y,
+                Width = obj.Rect.Width,
+                Height = obj.Rect.Height,
+                Source = "mce-semantic-map",
+                Confidence = obj.Confidence >= 0.8 ? "high" : "medium"
+            };
+            AddCanvasObject(map, new CanvasDetectedObject
+            {
+                Id = obj.Id,
+                Kind = obj.SemanticKind,
+                Text = obj.DisplayedText,
+                Variable = obj.Variable,
+                Expression = obj.Expression,
+                Rect = rect,
+                Source = "mce-semantic-map",
+                Confidence = rect.Confidence
+            });
+        }
+        return map;
+    }
+
+    private static bool NearRect(CanvasOccupiedRect a, CanvasOccupiedRect b, int tolerance)
+        => Math.Abs(a.X - b.X) <= tolerance &&
+           Math.Abs(a.Y - b.Y) <= tolerance &&
+           Math.Abs(a.Width - b.Width) <= tolerance &&
+           Math.Abs(a.Height - b.Height) <= tolerance;
+
+    private static bool SameRect(MceRectEvidence a, MceRectEvidence b)
+        => a.X == b.X && a.Y == b.Y && a.Width == b.Width && a.Height == b.Height;
+
+    private static bool TokenEvidenceMatchesKnown(IEnumerable<string> tokens, KnownCanvasObject known)
+    {
+        var tokenArray = tokens.Where(t => !string.IsNullOrWhiteSpace(t)).ToArray();
+        if (!string.IsNullOrWhiteSpace(known.Text) &&
+            tokenArray.Any(t => t.Contains(known.Text, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (!string.IsNullOrWhiteSpace(known.Variable) &&
+            tokenArray.Any(t => t.Contains(known.Variable, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (!string.IsNullOrWhiteSpace(known.Expression) &&
+            tokenArray.Any(t => t.Contains(known.Expression, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return string.IsNullOrWhiteSpace(known.Text) &&
+               string.IsNullOrWhiteSpace(known.Variable) &&
+               string.IsNullOrWhiteSpace(known.Expression);
+    }
+
+    private static string CleanMceToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return "";
+        token = token.Replace("\0", "").Trim();
+        if (token.Length > 240) token = token[..240];
+        return token;
+    }
+
+    private static bool IsClassOrHeaderToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return true;
+        if (token.StartsWith("CDraw", StringComparison.OrdinalIgnoreCase)) return true;
+        if (token.Contains("MCGS-SET DOCUMENT", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static string ExtractFormulaText(string token)
+    {
+        token = CleanMceToken(token);
+        var marker = "#/(1/:";
+        var index = token.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0) return "";
+        var body = token[(index + marker.Length)..].Trim();
+        while (body.EndsWith("/)", StringComparison.Ordinal) ||
+               body.EndsWith(")", StringComparison.Ordinal) ||
+               body.EndsWith("/", StringComparison.Ordinal))
+        {
+            if (body.EndsWith("/)", StringComparison.Ordinal)) body = body[..^2].Trim();
+            else body = body[..^1].Trim();
+        }
+        return body;
+    }
+
+    private static bool IsScriptLikeToken(string token)
+    {
+        token = CleanMceToken(token);
+        if (token.Length < 3) return false;
+        if (token.Contains('=') || token.Contains("脚本", StringComparison.Ordinal)) return true;
+        if (token.Contains("!", StringComparison.Ordinal) && token.Contains("=", StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    private static string ChooseDisplayedText(
+        MceControlAnchor control,
+        List<string> formulaTexts,
+        List<string> bareTexts,
+        List<string> scriptTokens,
+        KnownCanvasObject? known)
+    {
+        if (known != null && !string.IsNullOrWhiteSpace(known.Text)) return known.Text;
+        if (IsOverlayControl(control))
+        {
+            var message = formulaTexts.FirstOrDefault(t => t.Contains("喷水", StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(message)) return message;
+        }
+        var nonUnitFormula = formulaTexts.FirstOrDefault(t => !IsUnitLikeText(t));
+        if (!string.IsNullOrWhiteSpace(nonUnitFormula)) return nonUnitFormula;
+        var bare = bareTexts.FirstOrDefault(t => !t.StartsWith("控件", StringComparison.Ordinal) &&
+                                                !t.Equals("CAniVisible@", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(bare)) return bare;
+        return formulaTexts.FirstOrDefault() ?? "";
+    }
+
+    private static string ChooseVariable(MceControlAnchor control, string semanticKind, List<string> formulaTexts, List<string> bareTexts, List<string> scriptTokens)
+    {
+        if (!semanticKind.Equals("numeric-input", StringComparison.OrdinalIgnoreCase) &&
+            !semanticKind.Equals("status-button", StringComparison.OrdinalIgnoreCase) &&
+            !semanticKind.Equals("momentary-button", StringComparison.OrdinalIgnoreCase))
+            return "";
+        if (IsOverlayControl(control)) return "";
+        var dataObject = bareTexts.FirstOrDefault(t => LooksLikeCanvasSemanticDataObjectName(t) && !IsNavigationTarget(t));
+        if (!string.IsNullOrWhiteSpace(dataObject)) return dataObject;
+        return "";
+    }
+
+    private static string ChooseExpression(MceControlAnchor control, List<string> tokens)
+    {
+        if (IsOverlayControl(control))
+        {
+            if (tokens.Any(t => t.Contains("CAniVisible", StringComparison.OrdinalIgnoreCase)))
+                return "CAniVisible";
+            return "visibility-expression-present";
+        }
+        var unit = tokens.Select(ExtractFormulaText).FirstOrDefault(IsUnitLikeText);
+        return unit ?? "";
+    }
+
+    private static string InferSemanticKind(
+        MceControlAnchor control,
+        MceRectEvidence rect,
+        List<string> formulaTexts,
+        List<string> bareTexts,
+        List<string> scriptTokens,
+        string expression)
+    {
+        if (IsOverlayControl(control)) return "conditional-message";
+        var suffix = ControlSuffix(control.Token);
+        if (suffix.Equals("K", StringComparison.OrdinalIgnoreCase)) return "numeric-input";
+        if (suffix.Equals("c", StringComparison.OrdinalIgnoreCase)) return "command-button";
+        if (suffix.Equals("i", StringComparison.OrdinalIgnoreCase) ||
+            suffix.Equals("g", StringComparison.OrdinalIgnoreCase)) return "navigation-button";
+        if (scriptTokens.Count > 0) return "command-button";
+        if (bareTexts.Any(IsNavigationTarget)) return "navigation-button";
+        var displayed = formulaTexts.FirstOrDefault(t => !IsUnitLikeText(t)) ?? bareTexts.FirstOrDefault() ?? "";
+        if (displayed.Contains("设置", StringComparison.Ordinal) ||
+            displayed.Contains("选择", StringComparison.Ordinal))
+        {
+            if (rect.Width >= 200 && rect.Height >= 50) return "section-title";
+        }
+        if (formulaTexts.Any(IsUnitLikeText) && bareTexts.Any(t => t.Contains("设定", StringComparison.Ordinal))) return "numeric-input";
+        if (rect.Width >= 130 && rect.Height >= 38 && formulaTexts.Count > 0) return "command-button";
+        return "static-label";
+    }
+
+    private static string ControlSuffix(string controlToken)
+    {
+        controlToken = CleanMceToken(controlToken);
+        if (!controlToken.StartsWith("控件", StringComparison.Ordinal)) return "";
+        var i = 2;
+        while (i < controlToken.Length && char.IsDigit(controlToken[i])) i++;
+        return i < controlToken.Length ? controlToken[i].ToString() : "";
+    }
+
+    private static bool IsUnitLikeText(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return false;
+        return text.Equals("Mpa", StringComparison.OrdinalIgnoreCase) ||
+               text.Equals("MPa", StringComparison.OrdinalIgnoreCase) ||
+               text.Length <= 4 && text.Any(char.IsLetter) && !text.Any(IsCjkChar);
+    }
+
+    private static bool LooksLikeCanvasSemanticDataObjectName(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text.StartsWith("控件", StringComparison.Ordinal)) return false;
+        if (text.Equals("CAniVisible@", StringComparison.OrdinalIgnoreCase)) return false;
+        if (text.Contains("#/(1/:", StringComparison.Ordinal)) return false;
+        if (text.Contains("MCGS-SET", StringComparison.OrdinalIgnoreCase)) return false;
+        if (IsNavigationTarget(text)) return false;
+        if (char.IsDigit(text[0])) return false;
+        foreach (var ch in text)
+        {
+            if (ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_') continue;
+            if (ch >= '\u4e00' && ch <= '\u9fff') continue;
+            return false;
+        }
+        return text.Any(char.IsLetterOrDigit) || text.Any(ch => ch >= '\u4e00' && ch <= '\u9fff');
+    }
+
+    private static bool IsNavigationTarget(string text)
+        => text.Contains("主监控", StringComparison.Ordinal) ||
+           text.Contains("时序调整", StringComparison.Ordinal);
+
+    private static string SummarizeScriptTokens(List<string> scriptTokens)
+    {
+        if (scriptTokens.Count == 0) return "";
+        var joined = string.Join("; ", scriptTokens.Select(t => t.Trim()).Where(t => t.Length > 0));
+        return joined.Length > 240 ? joined[..240] + "..." : joined;
+    }
+
+    private static IEnumerable<string> ExtractOperations(List<string> scriptTokens, List<string> formulaTexts, List<string> bareTexts)
+    {
+        foreach (var target in ExtractAssignmentTargets(scriptTokens).Take(20))
+            yield return "assign:" + target;
+        foreach (var target in bareTexts.Where(IsNavigationTarget).Distinct(StringComparer.Ordinal).Take(4))
+            yield return "open-window:" + target;
+        if (formulaTexts.Any(t => t.Contains("返回", StringComparison.Ordinal)) &&
+            bareTexts.Any(IsNavigationTarget))
+            yield return "navigation";
+    }
+
+    private static IEnumerable<string> ExtractAssignmentTargets(IEnumerable<string> scriptTokens)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var token in scriptTokens)
+        {
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                         token,
+                         @"(?<lhs>[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*)\s*="))
+            {
+                var lhs = match.Groups["lhs"].Value;
+                if (seen.Add(lhs)) yield return lhs;
+            }
+        }
     }
 
     private static MceObjectMapMatchResult FindMceObjectMapMatch(JsonElement geometryRoot, KnownCanvasObject known)

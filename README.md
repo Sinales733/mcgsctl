@@ -117,11 +117,14 @@ tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\layout-
 tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
 tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-object-map --row-key 2 --canvas-width 800 --canvas-height 480
+tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-semantic-map --workflow-results .mcgsctl-work\layout-gui-smoke\workflow-results --row-key 2 --canvas-width 800 --canvas-height 480
 ```
 
 `canvas inspect` writes `canvas-inspect.json` and `canvas-objects.json` from UIA, MSAA/IAccessible, `WM_GETOBJECT`, and `OBJID_NATIVEOM` probes. If those internal channels do not expose reliable object geometry, `canvas-objects.json` is `UNKNOWN`. In that case `layout preview --placement internal-occupancy --canvas-objects ...` and `window.layout.apply --placement internal-occupancy --canvas-objects ...` stay blocked; the tool does not use screenshots as a hidden automatic layout source. Screenshots remain evidence only.
 
 `canvas mce-object-map-probe` is the preferred internal-occupancy source for current MCGS 7.7 profiles. It performs a read-only MCE export, decodes high-confidence little-endian LTRB rectangles from `WndUser.lbObjects` / `WndDevice.lbObjects`, and writes `canvas-objects.json` with `ObjectProvider=mce-geometry-inferred`. Use `--row-key` to restrict inference to one exported user/device window row; otherwise rectangles from multiple animation windows may be overlaid. Use `--canvas-width` / `--canvas-height` to match the visible editor viewport when planning automatic placement.
+
+`canvas semantic-map-probe` builds on the same read-only export and adds object semantics for the target row. It combines decoded rect anchors, GBK/text anchors, workflow `createdUiObjects`, and GUI property readback evidence when available. Its `semantic-map.json` records each object rectangle, semantic kind, displayed text, variable/expression, press/release operations, script status/summary, confidence, and evidence chain. It also writes a semantic `canvas-objects.json` with `ObjectProvider=mce-semantic-map`, so `layout preview --placement internal-occupancy` can protect existing grouped controls without falling back to screenshot guessing. If an object cannot be resolved, the probe returns `UNKNOWN` and includes `nextProbe` evidence guidance instead of emitting a final `unknown-mce-object`.
 
 For decoder work, `canvas mce-blob-diff-probe --before <a.MCE> --after <b.MCE> --out <dir>` writes sanitized changed ranges and bounded hex windows only. It is evidence for field reverse engineering and must not be treated as permission to raw-patch the private object blobs.
 
@@ -170,6 +173,7 @@ tools\mcgsctl\mcgsctl.ps1 canvas clipboard-probe --project .mcgsctl-work\e2e\can
 tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-toolbar
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
 tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-mce-object-map --row-key 2 --canvas-width 800 --canvas-height 480
+tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe --project .mcgsctl-work\e2e\candidate.MCE --out .mcgsctl-runs\canvas-semantic-map --workflow-results .mcgsctl-work\e2e\workflow-results --row-key 2 --canvas-width 800 --canvas-height 480
 tools\mcgsctl\mcgsctl.ps1 canvas mce-blob-diff-probe --before .mcgsctl-work\sample-a\candidate.MCE --after .mcgsctl-work\sample-b\candidate.MCE --out .mcgsctl-runs\canvas-mce-blob-diff
 tools\mcgsctl\mcgsctl.ps1 modules --pid <pid> --filter Smart200
 tools\mcgsctl\mcgsctl.ps1 wndproc --hwnd 0x123456
@@ -194,6 +198,7 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `canvas toolbar-probe`: opens a temporary copy, enters animation configuration, enumerates visible toolbars and command IDs/text/rectangles for command discovery evidence without clicking them.
 - `canvas mce-geometry-probe`: exports the candidate read-only and scans private object blobs for class/string/geometry candidates. It is evidence only; unreliable inferred geometry remains `UNKNOWN` and cannot drive internal occupancy placement.
 - `canvas mce-object-map-probe`: exports the candidate read-only, decodes high-confidence object occupancy rectangles from MCGS object blobs, and writes a reliable `canvas-objects.json` for internal-occupancy placement when the evidence is sufficient. It can match mcgsctl-created objects from workflow results and can also emit generic occupied rectangles for existing objects.
+- `canvas semantic-map-probe`: exports the candidate read-only, resolves target-row MCGS objects into semantic records, and writes `semantic-map.json` plus a semantic `canvas-objects.json`. It uses rect anchors, text/variable/expression anchors, workflow results, and property readback; unresolved objects remain `UNKNOWN` with `nextProbe` rather than becoming final `unknown-mce-object`.
 - `canvas mce-blob-diff-probe`: compares two candidate files read-only and writes sanitized blob-diff evidence for decoder experiments. It does not store full raw blobs and does not modify either project.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
@@ -201,7 +206,7 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 
 ## Verification Limits
 
-`blob_strings.json` verification is evidence, not proof of full object semantics. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Native static text and native lamp workflows additionally reopen the native property dialogs and verify configured fields. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
+`blob_strings.json` verification is evidence, not proof of full object semantics. `semantic-map-probe` raises semantic confidence by cross-checking rect anchors, text anchors, workflow results, and property readback where available, but it still returns `UNKNOWN` for unresolved objects. `device.channel.map` reopens the saved working copy and reads the Smart200 channel table again. `window.button.add-momentary` now also reopens the button property page and reads back the two operation sub-tabs; variable binding is set through the editor's picker instead of raw text injection. Native static text and native lamp workflows additionally reopen the native property dialogs and verify configured fields. AWL scanning is heuristic and is not a formal PLC proof. Hardware wiring, drive parameters, relay behavior, and field safety validation remain outside this tool.
 
 Layout preview proves planned geometry and operator-readable structure only. A layout candidate is not release-ready until the underlying GUI workflow results, profile check, project.check, safety.verify, candidate summarize, and candidate validate all pass.
 

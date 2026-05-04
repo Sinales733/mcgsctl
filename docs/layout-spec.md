@@ -104,16 +104,49 @@ tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe `
   --canvas-width 800 `
   --canvas-height 480
 
+tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --out .mcgsctl-runs\canvas-semantic-map `
+  --workflow-results .mcgsctl-work\layout-gui-smoke\workflow-results `
+  --row-key 2 `
+  --canvas-width 800 `
+  --canvas-height 480
+
 tools\mcgsctl\mcgsctl.ps1 layout preview `
   --layout layouts\ptz-basic.json `
   --out .mcgsctl-runs\layout-preview-auto `
   --placement internal-occupancy `
-  --canvas-objects .mcgsctl-runs\canvas-mce-object-map\canvas-objects.json
+  --canvas-objects .mcgsctl-runs\canvas-semantic-map\canvas-objects.json
 ```
 
 `canvas inspect` remains available for UIA/MSAA/WM_GETOBJECT diagnostics. On current MCGS 7.7 profiles, the self-drawn animation canvas may expose no child geometry through those channels, so the preferred automatic-placement source is `canvas mce-object-map-probe`.
 
 `canvas mce-object-map-probe` exports the candidate read-only, scans `WndUser.lbObjects` / `WndDevice.lbObjects`, and decodes high-confidence little-endian LTRB rectangles. It can match objects that mcgsctl created from workflow `createdUiObjects` evidence, and it can also emit generic occupied rectangles for existing controls. `--row-key` restricts inference to one exported window/device row so rectangles from multiple screens are not overlaid; `--canvas-width` / `--canvas-height` should match the visible editor viewport used for automatic placement.
+
+`canvas semantic-map-probe` is the preferred source once a target row must be understood rather than only avoided geometrically. It consumes the same read-only MCE export and emits:
+
+```text
+semantic-map.json
+semantic-map-probe.json
+canvas-objects.json
+mce-export/
+```
+
+Each semantic object includes:
+
+```text
+rect
+semanticKind
+displayedText
+variable / expression
+pressOperation / releaseOperation or otherOperations
+scriptStatus / scriptSummary
+confidence
+evidenceSources
+evidenceChain
+```
+
+The evidence chain may include MCE rect offsets, text/variable/expression anchors, workflow result paths, and property readback paths. For mcgsctl-created controls, workflow results and GUI readback are used to override ambiguous MCE payloads. For existing legacy controls, the probe uses control anchors plus decoded text/script anchors and returns `UNKNOWN` with `nextProbe` when an object cannot be resolved. A final semantic map must not silently leave `unknown-mce-object` records.
 
 The older canvas diagnostics probe:
 

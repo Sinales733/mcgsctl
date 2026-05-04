@@ -266,6 +266,30 @@ public final class MceExport {
       }
     }
 
+    for (int i = 0; i < bytes.length && found.size() < 800; ) {
+      if (!isGbkTextStart(bytes, i)) {
+        i++;
+        continue;
+      }
+      int start = i;
+      while (i < bytes.length && i - start < 320) {
+        if (isAsciiTextByte(bytes[i])) {
+          i++;
+          continue;
+        }
+        if (isGbkDoubleByte(bytes, i)) {
+          i += 2;
+          continue;
+        }
+        break;
+      }
+      if (i - start >= 4) {
+        String text = new String(bytes, start, i - start, MCGS_CHARSET);
+        addTextAnchor(found, seen, start, "gbk", i - start, text);
+      }
+      if (i == start) i++;
+    }
+
     for (int i = 0; i + 5 < bytes.length && found.size() < 400; ) {
       if (!isUtf16LeUseful(bytes, i)) {
         i += 2;
@@ -298,6 +322,19 @@ public final class MceExport {
     return b >= 0x20 && b <= 0x7E;
   }
 
+  private static boolean isGbkTextStart(byte[] bytes, int offset) {
+    if (offset >= bytes.length) return false;
+    if (isAsciiTextByte(bytes[offset])) return true;
+    return isGbkDoubleByte(bytes, offset);
+  }
+
+  private static boolean isGbkDoubleByte(byte[] bytes, int offset) {
+    if (offset + 1 >= bytes.length) return false;
+    int b1 = bytes[offset] & 0xFF;
+    int b2 = bytes[offset + 1] & 0xFF;
+    return b1 >= 0x81 && b1 <= 0xFE && b2 >= 0x40 && b2 <= 0xFE && b2 != 0x7F;
+  }
+
   private static boolean isUtf16LeUseful(byte[] bytes, int offset) {
     if (offset + 1 >= bytes.length) return false;
     int low = bytes[offset] & 0xFF;
@@ -311,7 +348,15 @@ public final class MceExport {
     if (text.length() > 160) return false;
     for (int i = 0; i < text.length(); i++) {
       char ch = text.charAt(i);
-      if (ch < 0x20 || ch > 0x7E) return false;
+      if (Character.isISOControl(ch) || Character.isSurrogate(ch)) return false;
+      if (Character.isLetterOrDigit(ch) || Character.isWhitespace(ch)) continue;
+      if ("_./:#()[]{}=+-*@,;，。：；（）【】#".indexOf(ch) >= 0) continue;
+      if (isCjk(ch)) continue;
+      Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+      if (block == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+          || block == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
+          || block == Character.UnicodeBlock.GENERAL_PUNCTUATION) continue;
+      return false;
     }
     return true;
   }
@@ -599,6 +644,19 @@ public final class MceExport {
     sb.append('"');
     for (int i = 0; i < value.length(); i++) {
       char ch = value.charAt(i);
+      if (Character.isHighSurrogate(ch)) {
+        if (i + 1 < value.length() && Character.isLowSurrogate(value.charAt(i + 1))) {
+          sb.append(ch).append(value.charAt(i + 1));
+          i++;
+        } else {
+          sb.append("\\ufffd");
+        }
+        continue;
+      }
+      if (Character.isLowSurrogate(ch)) {
+        sb.append("\\ufffd");
+        continue;
+      }
       switch (ch) {
         case '\\' -> sb.append("\\\\");
         case '"' -> sb.append("\\\"");
@@ -608,7 +666,7 @@ public final class MceExport {
         case '\r' -> sb.append("\\r");
         case '\t' -> sb.append("\\t");
         default -> {
-          if (ch < 0x20) sb.append(String.format("\\u%04x", (int) ch));
+          if (ch < 0x20 || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
           else sb.append(ch);
         }
       }
@@ -779,6 +837,19 @@ final class MceBlobDiff {
     sb.append('"');
     for (int i = 0; i < value.length(); i++) {
       char ch = value.charAt(i);
+      if (Character.isHighSurrogate(ch)) {
+        if (i + 1 < value.length() && Character.isLowSurrogate(value.charAt(i + 1))) {
+          sb.append(ch).append(value.charAt(i + 1));
+          i++;
+        } else {
+          sb.append("\\ufffd");
+        }
+        continue;
+      }
+      if (Character.isLowSurrogate(ch)) {
+        sb.append("\\ufffd");
+        continue;
+      }
       switch (ch) {
         case '\\' -> sb.append("\\\\");
         case '"' -> sb.append("\\\"");
@@ -788,7 +859,7 @@ final class MceBlobDiff {
         case '\r' -> sb.append("\\r");
         case '\t' -> sb.append("\\t");
         default -> {
-          if (ch < 0x20) sb.append(String.format("\\u%04x", (int) ch));
+          if (ch < 0x20 || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
           else sb.append(ch);
         }
       }

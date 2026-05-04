@@ -290,6 +290,29 @@ public sealed class LayoutTests : IDisposable
     }
 
     [Fact]
+    public void InternalOccupancyAcceptsSemanticCanvasMap()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject
+        {
+            ["mode"] = "internal-occupancy",
+            ["margin"] = 20
+        };
+        var layout = WriteLayout("internal-semantic-map", json);
+        var map = WriteCanvasSemanticMap("internal-semantic-map");
+        var previewDir = Path.Combine(_root, "internal-semantic-map-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var planJson = File.ReadAllText(Path.Combine(previewDir, "layout-plan.json"), Encoding.UTF8);
+        Assert.Contains("\"objectProvider\": \"mce-semantic-map\"", planJson);
+        Assert.Contains("\"kind\": \"momentary-button\"", planJson);
+        Assert.Contains("\"text\": \"Existing Jog\"", planJson);
+        Assert.Contains("\"status\": \"PASS\"", File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8));
+    }
+
+    [Fact]
     public void InternalOccupancyWithUnreliableCanvasMapIsUnknown()
     {
         var json = ValidLayout();
@@ -403,6 +426,46 @@ public sealed class LayoutTests : IDisposable
                         ["Width"] = 430,
                         ["Height"] = 210,
                         ["Source"] = "mce-geometry-inferred",
+                        ["Confidence"] = "high"
+                    }
+                }
+            }
+        };
+        File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+        return path;
+    }
+
+    private string WriteCanvasSemanticMap(string name)
+    {
+        var path = Path.Combine(_root, name + ".canvas-objects.json");
+        var json = new JsonObject
+        {
+            ["SchemaVersion"] = 1,
+            ["Status"] = "PASS",
+            ["ObjectProvider"] = "mce-semantic-map",
+            ["ReliableGeometry"] = true,
+            ["BlockedReasons"] = new JsonArray(),
+            ["Objects"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["Id"] = "existing-jog",
+                    ["Kind"] = "momentary-button",
+                    ["Text"] = "Existing Jog",
+                    ["Variable"] = "MCGSCTL_EXISTING_SW",
+                    ["Source"] = "mce-semantic-map",
+                    ["Confidence"] = "high",
+                    ["Rect"] = new JsonObject
+                    {
+                        ["Id"] = "existing-jog",
+                        ["Kind"] = "momentary-button",
+                        ["Text"] = "Existing Jog",
+                        ["Variable"] = "MCGSCTL_EXISTING_SW",
+                        ["X"] = 0,
+                        ["Y"] = 0,
+                        ["Width"] = 430,
+                        ["Height"] = 210,
+                        ["Source"] = "mce-semantic-map",
                         ["Confidence"] = "high"
                     }
                 }
