@@ -345,6 +345,12 @@ internal static partial class Program
             IsCandidateSafeReversibleReturnProbe(commandId, requestedContext) &&
             candidateSafeMutationFunctionalDiff &&
             !candidateSafeMutationReversibleReturn;
+        var candidateSafeEditorContextOnlyModeToggle =
+            candidateSafeCommand &&
+            IsEditorContextOnlyModeToggleCommand(commandId, requestedContext) &&
+            candidateSafeMutation &&
+            normalizedDiffEvidence != null &&
+            normalizedDiffEditorContextOnly;
         var readOnlyHashDriftExplained = readOnlyHashDrift &&
                                          (readOnlyHashDriftClass.Equals("editor-context-only", StringComparison.OrdinalIgnoreCase) ||
                                           readOnlyHashDriftClass.Equals("normalized-equivalent", StringComparison.OrdinalIgnoreCase));
@@ -359,7 +365,8 @@ internal static partial class Program
         var candidateSafeMutationNotFunctional = candidateSafeMutation &&
                                                  normalizedDiffEvidence != null &&
                                                  !candidateSafeMutationFunctionalDiff &&
-                                                 !candidateSafeMutationReversibleReturn;
+                                                 !candidateSafeMutationReversibleReturn &&
+                                                 !candidateSafeEditorContextOnlyModeToggle;
         var candidateSafePreconditionUnmet = candidateSafeCommand &&
                                              !candidateSafeMutation &&
                                              !newWindowObserved &&
@@ -414,6 +421,7 @@ internal static partial class Program
                 candidateSafeMutationUnexpectedFunctionalDiff,
                 candidateSafeMutationUnclassified,
                 candidateSafeMutationNotFunctional,
+                candidateSafeEditorContextOnlyModeToggle,
                 candidateSafePreconditionUnmet,
                 unknownRiskHashDrift,
                 unknownRiskHashDriftExplained,
@@ -454,13 +462,6 @@ internal static partial class Program
 
     private static BaselineReferenceResult TryCreateToolProbePreconditionReferenceBaseline(string[] args, string project, string outDir, string requestedContext, McgsToolEntry tool)
     {
-        if (requestedContext.StartsWith("animation-", StringComparison.OrdinalIgnoreCase) ||
-            requestedContext.Equals("animation", StringComparison.OrdinalIgnoreCase) ||
-            tool.uiPath.Contains("\u52A8\u753B\u7EC4\u6001", StringComparison.OrdinalIgnoreCase))
-        {
-            return new BaselineReferenceResult(false, "", "", "", "after-precondition reference baseline is not implemented for animation canvas contexts");
-        }
-
         Process? process = null;
         var main = IntPtr.Zero;
         var copyDir = Path.Combine(outDir, "baseline-after-precondition-copy");
@@ -468,6 +469,30 @@ internal static partial class Program
         var projectCopy = "";
         try
         {
+            if (requestedContext.StartsWith("animation-", StringComparison.OrdinalIgnoreCase) ||
+                requestedContext.Equals("animation", StringComparison.OrdinalIgnoreCase) ||
+                tool.uiPath.Contains("\u52A8\u753B\u7EC4\u6001", StringComparison.OrdinalIgnoreCase))
+            {
+                using var session = OpenCanvasProbeSession(args, outDir, "baseline-after-precondition", out process, out main);
+                projectCopy = session.ProjectCopy;
+                ApplyAnimationToolProbePrecondition(args, requestedContext,
+                    Path.Combine(outDir, "baseline-after-precondition-reference"), process.Id, session);
+                UiAutomation.SendCommand(main, 57603, send: true);
+                Thread.Sleep(1000);
+                CloseEditorProcess(process.Id, main, saveIntent: true);
+                process.WaitForExit(7000);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                    throw new InvalidOperationException("MCGS editor did not exit cleanly after animation reference baseline creation.");
+                }
+
+                var animationSha = Sha256(projectCopy);
+                MceExporter.Export(projectCopy, exportDir);
+                return new BaselineReferenceResult(true, projectCopy, animationSha, exportDir, "");
+            }
+
             Directory.CreateDirectory(copyDir);
             projectCopy = Path.Combine(copyDir, Path.GetFileNameWithoutExtension(project) + "-baseline-precondition.MCE");
             File.Copy(project, projectCopy, overwrite: true);
@@ -538,8 +563,16 @@ internal static partial class Program
         if (context.StartsWith("animation-single-", StringComparison.OrdinalIgnoreCase) &&
             TryReadAnimationSelection(args, out var sx, out var sy, out selectedObject))
         {
+            var objectSelectDouble = Has(args, "--object-select-double") || Has(args, "--table-cell-select");
             UiAutomation.ClickPoint(session.Canvas, Math.Max(5, sx), Math.Max(5, sy),
-                MouseButton.Left, doubleClick: false, mouse: true);
+                MouseButton.Left, doubleClick: objectSelectDouble, mouse: true);
+            Thread.Sleep(objectSelectDouble ? 450 : 180);
+            if (Has(args, "--table-cell-select"))
+            {
+                UiAutomation.ClickPoint(session.Canvas, Math.Max(5, sx), Math.Max(5, sy),
+                    MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(250);
+            }
             selectedAll = false;
         }
         else
@@ -605,6 +638,8 @@ internal static partial class Program
             canvas = WindowInfo.FromHandle(session.Canvas),
             selectedAll,
             selectedObject,
+            objectSelectDouble = Has(args, "--object-select-double") || Has(args, "--table-cell-select"),
+            tableCellSelect = Has(args, "--table-cell-select"),
             clipboardSeeded,
             clipboardFormatsAfterSeed,
             cutApplied,
@@ -1133,6 +1168,10 @@ internal static partial class Program
         => commandId == 57643 && context is "animation-after-cut" or "animation-single-after-cut" or
             "animation-after-paste" or "animation-single-after-paste" or "strategy-after-add";
 
+    private static bool IsEditorContextOnlyModeToggleCommand(int commandId, string context)
+        => commandId == 33110 &&
+           context.Equals("animation-single-object", StringComparison.OrdinalIgnoreCase);
+
     private static bool TryReadAnimationSelection(string[] args, out int centerX, out int centerY, out object? selectedObject)
     {
         centerX = 0;
@@ -1146,7 +1185,9 @@ internal static partial class Program
             return false;
         var wantedId = Opt(args, "--object-id") ?? "";
         using var doc = JsonDocument.Parse(File.ReadAllText(fullPath, Encoding.UTF8));
-        if (!doc.RootElement.TryGetProperty("objects", out var objects) || objects.ValueKind != JsonValueKind.Array)
+        if ((!doc.RootElement.TryGetProperty("objects", out var objects) &&
+             !doc.RootElement.TryGetProperty("Objects", out objects)) ||
+            objects.ValueKind != JsonValueKind.Array)
             return false;
 
         JsonElement? chosen = null;
@@ -1176,7 +1217,9 @@ internal static partial class Program
             return false;
 
         var chosenElement = chosen.Value;
-        if (!chosenElement.TryGetProperty("rect", out var rect) || rect.ValueKind != JsonValueKind.Object)
+        if ((!chosenElement.TryGetProperty("rect", out var rect) &&
+             !chosenElement.TryGetProperty("Rect", out rect)) ||
+            rect.ValueKind != JsonValueKind.Object)
             return false;
         var x = LayoutJsonIntAny(rect, "x", "X");
         var y = LayoutJsonIntAny(rect, "y", "Y");
@@ -2049,6 +2092,7 @@ internal static partial class Program
                 var candidateSafeMutationReversibleReturn = false;
                 var candidateSafeMutationUnexpectedFunctionalDiff = false;
                 var candidateSafeMutationNotFunctional = false;
+                var candidateSafeEditorContextOnlyModeToggle = false;
                 var projectCopyHashChanged = false;
                 var unknownRiskHashDriftExplained = false;
                 var drawingCreateClosurePass = false;
@@ -2061,6 +2105,7 @@ internal static partial class Program
                     candidateSafeMutationReversibleReturn = JsonBoolAny(evidence, "candidateSafeMutationReversibleReturn", "CandidateSafeMutationReversibleReturn") == true;
                     candidateSafeMutationUnexpectedFunctionalDiff = JsonBoolAny(evidence, "candidateSafeMutationUnexpectedFunctionalDiff", "CandidateSafeMutationUnexpectedFunctionalDiff") == true;
                     candidateSafeMutationNotFunctional = JsonBoolAny(evidence, "candidateSafeMutationNotFunctional", "CandidateSafeMutationNotFunctional") == true;
+                    candidateSafeEditorContextOnlyModeToggle = JsonBoolAny(evidence, "candidateSafeEditorContextOnlyModeToggle", "CandidateSafeEditorContextOnlyModeToggle") == true;
                     projectCopyHashChanged = JsonBoolAny(evidence, "projectCopyHashChanged", "ProjectCopyHashChanged") == true;
                     unknownRiskHashDriftExplained = JsonBoolAny(evidence, "unknownRiskHashDriftExplained", "UnknownRiskHashDriftExplained") == true;
                     var readOnlyHashDriftClass = JsonStringAny(evidence, "readOnlyHashDriftClass", "ReadOnlyHashDriftClass") ?? "";
@@ -2090,7 +2135,7 @@ internal static partial class Program
                 result[toolId] = new McgsToolProbeEvidence(toolId, path, status, commandId, safetyClass, candidateSafeMutation,
                     candidateSafeMutationFunctionalDiff, candidateSafeMutationReversibleReturn,
                     candidateSafeMutationUnexpectedFunctionalDiff, candidateSafeMutationNotFunctional,
-                    newWindowObserved, projectCopyHashChanged, context, unknownRiskHashDriftExplained,
+                    candidateSafeEditorContextOnlyModeToggle, newWindowObserved, projectCopyHashChanged, context, unknownRiskHashDriftExplained,
                     drawingCreateClosurePass);
             }
             catch
@@ -2147,6 +2192,7 @@ internal static partial class Program
         => probe.DrawingCreateClosurePass ||
            probe.CandidateSafeMutationFunctionalDiff ||
            probe.CandidateSafeMutationReversibleReturn ||
+           probe.CandidateSafeEditorContextOnlyModeToggle ||
            probe.NewWindowObserved;
 
     private static bool ProbeHasReadOnlyEvidence(McgsToolProbeEvidence probe)
@@ -2242,6 +2288,25 @@ internal static partial class Program
             closureStatus = "closedLoopPass";
             nextProbe = "";
         }
+        else if (category == "selection" &&
+                 IsTableEditorCommand(tool) &&
+                 probed &&
+                 probe?.CandidateSafeMutationFunctionalDiff == true &&
+                 probe.Context.Equals("animation-single-object", StringComparison.OrdinalIgnoreCase) &&
+                 ProbeHasAnimationSingleObjectSelection(probe))
+        {
+            closureStatus = "closedLoopPass";
+            nextProbe = "";
+        }
+        else if (category == "selection" &&
+                 IsEditorContextOnlyModeToggleCommand(tool.commandId.GetValueOrDefault(), probe?.Context ?? "") &&
+                 probed &&
+                 probe?.CandidateSafeEditorContextOnlyModeToggle == true &&
+                 ProbeHasAnimationSingleObjectSelection(probe))
+        {
+            closureStatus = "readOnlyClosedLoopPass";
+            nextProbe = "";
+        }
         else if (category == "drawing-create" && probed && probe?.DrawingCreateClosurePass == true)
         {
             closureStatus = "closedLoopPass";
@@ -2252,6 +2317,7 @@ internal static partial class Program
             closureStatus = "notClosedLoop";
         }
 
+        var tableEditorClosed = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" && IsTableEditorCommand(tool);
         if (closureStatus is "notClosedLoop" or "needsProbe" or "invalidEvidence")
             missing.AddRange(McgsToolMissingClosureEvidence(tool, category, probed, probe));
         if (closureStatus == "notClosedLoop" && string.IsNullOrWhiteSpace(nextProbe))
@@ -2304,14 +2370,20 @@ internal static partial class Program
             internalCanvasEvidence = McgsToolInternalCanvasEvidence(tool, closureStatus, category, probe),
             collisionAnalysis = new
             {
-                status = category is "drawing-create" or "drawing-edit"
+                status = tableEditorClosed
+                    ? "notApplicable-table-editor-selected-object"
+                    : category is "drawing-create" or "drawing-edit"
                     ? (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true
                         ? "covered-by-tool-probe-drawing-create-closure"
                         : closureStatus == "closedLoopPass"
                             ? "covered-by-workflow-internal-evidence"
                             : "missing-internal-canvas-closure")
                     : "notApplicable",
-                source = category is "drawing-create" or "drawing-edit"
+                source = tableEditorClosed
+                    ? probe?.CandidateSafeEditorContextOnlyModeToggle == true
+                        ? "tool-probe selected a decoded table fixture object and recorded an editor-context-only mode-toggle diff"
+                        : "tool-probe selected a decoded table fixture object and recorded a functional normalized table-object diff"
+                    : category is "drawing-create" or "drawing-edit"
                     ? probe?.DrawingCreateClosurePass == true
                         ? "tool-probe drawing-create-closure.json"
                         : "property-map/canvas-object-map/readback evidence required"
@@ -2428,6 +2500,42 @@ internal static partial class Program
                evidence.Contains("mutating workflow save/readback evidence", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsTableEditorCommand(McgsToolEntry tool)
+    {
+        var id = tool.commandId.GetValueOrDefault();
+        return (id >= 33110 && id <= 33134) ||
+               tool.uiPath.Contains("\u8868\u683C\u7F16\u8F91", StringComparison.OrdinalIgnoreCase) ||
+               tool.displayName.Contains("table editor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ProbeHasAnimationSingleObjectSelection(McgsToolProbeEvidence? probe)
+    {
+        if (probe == null || string.IsNullOrWhiteSpace(probe.Path))
+            return false;
+        var precondition = Path.Combine(Path.GetDirectoryName(probe.Path) ?? "", "precondition-animation-single-object", "precondition.json");
+        if (!File.Exists(precondition))
+            return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(precondition, Encoding.UTF8));
+            if (JsonBoolAny(doc.RootElement, "selectedAll", "SelectedAll") == true)
+                return false;
+            if ((!doc.RootElement.TryGetProperty("selectedObject", out var selected) &&
+                 !doc.RootElement.TryGetProperty("SelectedObject", out selected)) ||
+                selected.ValueKind != JsonValueKind.Object)
+                return false;
+            var objectId = JsonStringAny(selected, "objectId", "ObjectId", "id", "Id") ?? "";
+            if (string.IsNullOrWhiteSpace(objectId))
+                return false;
+            return selected.TryGetProperty("rect", out var rect) && rect.ValueKind == JsonValueKind.Object ||
+                   selected.TryGetProperty("Rect", out rect) && rect.ValueKind == JsonValueKind.Object;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string[] McgsToolMissingClosureEvidence(McgsToolEntry tool, string category, bool probed, McgsToolProbeEvidence? probe)
     {
         var missing = new List<string>();
@@ -2497,6 +2605,7 @@ internal static partial class Program
         if (probed && probe?.DrawingCreateClosurePass == true) return "probe created a drawing object with internal occupancy, class-delta, rectangle, collision, and export evidence";
         if (probed && probe?.CandidateSafeMutationFunctionalDiff == true) return "probe observed functional normalized candidate diff";
         if (probed && probe?.CandidateSafeMutationReversibleReturn == true) return "probe observed reversible return";
+        if (probed && probe?.CandidateSafeEditorContextOnlyModeToggle == true) return "probe observed selected-object editor mode toggle with editor-context-only normalized diff";
         if (probed && probe?.NewWindowObserved == true) return "probe observed new dialog/window";
         return sweepStatus;
     }
@@ -2505,6 +2614,10 @@ internal static partial class Program
     {
         if (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true)
             return new[] { probe.Path, "tool-probe drawing-create-closure/drawing-create-closure.json" };
+        if (closureStatus == "closedLoopPass" && IsTableEditorCommand(tool) && probe != null)
+            return new[] { probe.Path, "tool-probe saved selected table fixture and normalized-diff candidate-export" };
+        if (closureStatus == "readOnlyClosedLoopPass" && IsTableEditorCommand(tool) && probe?.CandidateSafeEditorContextOnlyModeToggle == true)
+            return new[] { probe.Path, "tool-probe saved selected table fixture and normalized diff proved editor-context-only mode state" };
         if (closureStatus == "closedLoopPass")
             return new[] { tool.evidenceSource };
         if (probe?.CandidateSafeMutationReversibleReturn == true)
@@ -2516,6 +2629,10 @@ internal static partial class Program
     {
         if (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true)
             return new[] { probe.Path, "tool-probe candidate export/blob_geometry class and rectangle evidence" };
+        if (closureStatus == "closedLoopPass" && IsTableEditorCommand(tool) && probe != null)
+            return new[] { probe.Path, "tool-probe normalized-diff over selected CDrawGrid/CDrawHisGrid fixture" };
+        if (closureStatus == "readOnlyClosedLoopPass" && IsTableEditorCommand(tool) && probe?.CandidateSafeEditorContextOnlyModeToggle == true)
+            return new[] { probe.Path, "tool-probe normalized-diff over selected table fixture showed no functional project-object mutation" };
         return closureStatus == "closedLoopPass" || closureStatus == "readOnlyClosedLoopPass"
             ? new[] { tool.evidenceSource }
             : Array.Empty<string>();
@@ -2523,9 +2640,11 @@ internal static partial class Program
 
     private static string[] McgsToolInternalCanvasEvidence(McgsToolEntry tool, string closureStatus, string category, McgsToolProbeEvidence? probe)
         => category is "drawing-create" or "drawing-edit" or "selection"
-            ? closureStatus == "closedLoopPass"
+            ? closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
                 ? probe?.DrawingCreateClosurePass == true
                     ? new[] { probe.Path, "tool-probe post-command safeSlotPlan and drawing-create-closure collisionAnalysis" }
+                    : IsTableEditorCommand(tool) && probe != null
+                        ? new[] { probe.Path, "tool-probe precondition-animation-single-object selectedObject evidence" }
                     : new[] { tool.evidenceSource }
                 : Array.Empty<string>()
             : Array.Empty<string>();
@@ -2540,6 +2659,8 @@ internal static partial class Program
     private static string[] McgsToolVisualEvidence(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
         => closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true
             ? new[] { probe.Path, "tool-probe screenshot/window capture evidence for audit only" }
+            : closureStatus == "closedLoopPass" && IsTableEditorCommand(tool) && probe != null
+            ? new[] { probe.Path, "tool-probe before/after window capture evidence for audit only" }
             : closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
             ? new[] { tool.evidenceSource }
             : Array.Empty<string>();
@@ -2549,6 +2670,7 @@ internal static partial class Program
         if (probe == null) return Array.Empty<string>();
         if (probe.CandidateSafeMutationFunctionalDiff) return new[] { probe.Path };
         if (probe.CandidateSafeMutationReversibleReturn) return new[] { probe.Path };
+        if (probe.CandidateSafeEditorContextOnlyModeToggle) return new[] { probe.Path, "normalized diff classified as editor-context-only table mode toggle" };
         if (!probe.ProjectCopyHashChanged) return new[] { "tool-probe project copy hash unchanged" };
         return new[] { "tool-probe project copy hash changed" };
     }
@@ -2557,7 +2679,9 @@ internal static partial class Program
     {
         var sideEffects = new List<string>();
         if (probe?.NewWindowObserved == true) sideEffects.Add("opened dialog/window");
-        if (probe?.ProjectCopyHashChanged == true) sideEffects.Add("candidate/project copy SHA changed");
+        if (probe?.CandidateSafeEditorContextOnlyModeToggle == true)
+            sideEffects.Add("editor-context-only table mode state changed on disposable copy; normalized functional project evidence unchanged");
+        else if (probe?.ProjectCopyHashChanged == true) sideEffects.Add("candidate/project copy SHA changed");
         if (IsSafetyBlockedTool(tool)) sideEffects.Add("not invoked because the expected side effect crosses the safety boundary");
         return sideEffects.ToArray();
     }
@@ -2682,7 +2806,7 @@ internal static partial class Program
     private sealed record McgsToolProbeEvidence(string ToolId, string Path, string Status, int CommandId, string SafetyClass,
         bool CandidateSafeMutation, bool CandidateSafeMutationFunctionalDiff, bool CandidateSafeMutationReversibleReturn,
         bool CandidateSafeMutationUnexpectedFunctionalDiff, bool CandidateSafeMutationNotFunctional,
-        bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained,
+        bool CandidateSafeEditorContextOnlyModeToggle, bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained,
         bool DrawingCreateClosurePass);
 
     private sealed class McgsCatalogBuild
