@@ -1412,26 +1412,31 @@ internal static partial class Program
             var blocked = tool.supportStatus.Equals("blocked", StringComparison.OrdinalIgnoreCase);
             var candidateSafe = tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase);
             var unknownRisk = tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase);
+            var readOnly = tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase);
             var probeHasCandidateSafeEvidence = probe != null && ProbeHasCandidateSafeEvidence(probe);
             var probeHasUnknownRiskEvidence = probe != null && ProbeHasUnknownRiskEvidence(probe);
+            var probeHasReadOnlyEvidence = probe != null && ProbeHasReadOnlyEvidence(probe);
             var documentedBlockerNextProbe = "";
             var documentedProbeBlocker = exactProbe != null && ProbeHasDocumentedBlocker(tool, exactProbe, out documentedBlockerNextProbe);
             var probed = !blocked &&
                          probe != null &&
                          probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
                          (!candidateSafe || probeHasCandidateSafeEvidence) &&
-                         (!unknownRisk || probeHasUnknownRiskEvidence);
+                         (!unknownRisk || probeHasUnknownRiskEvidence) &&
+                         (!readOnly || probeHasReadOnlyEvidence);
             blocked = blocked || documentedProbeBlocker;
             var status = probed ? "probed" : blocked ? "blocked" : tool.supportStatus;
-            return new
+            var closure = BuildMcgsToolClosureRecord(tool, status, probed, exactProbe, equivalentProbe, probe, documentedProbeBlocker ? documentedBlockerNextProbe : "");
+            return new McgsToolSweepEntry
             {
-                tool.toolId,
-                tool.displayName,
-                tool.source,
-                tool.commandId,
-                status,
+                toolId = tool.toolId,
+                displayName = tool.displayName,
+                source = tool.source,
+                uiPath = tool.uiPath,
+                commandId = tool.commandId,
+                status = status,
                 invoked = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) || probed,
-                tool.safetyClass,
+                safetyClass = tool.safetyClass,
                 invocationEvidence = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)
                     ? tool.evidenceSource
                     : probed ? probe!.Path : "",
@@ -1440,16 +1445,42 @@ internal static partial class Program
                 equivalentProbePath = equivalentProbe?.Path ?? "",
                 equivalentProbeToolId = equivalentProbe?.ToolId ?? "",
                 probeEvidenceKind = exactProbe != null ? "exact-tool" : equivalentProbe != null ? "equivalent-command" : "",
-                nextProbe = probed ? "" : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe
+                closureStatus = closure.closureStatus,
+                missingEvidence = closure.missingEvidence,
+                closureRecordPath = "tool-closure-records.json",
+                nextProbe = probed ? closure.nextProbe : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe
             };
         }).ToArray();
         var needsPreconditionCount = entries.Count(e => string.Equals(e.status, "needs-precondition", StringComparison.OrdinalIgnoreCase));
         var needsProbeCount = entries.Count(e => string.Equals(e.status, "needs-probe", StringComparison.OrdinalIgnoreCase));
         var blockedCount = entries.Count(e => string.Equals(e.status, "blocked", StringComparison.OrdinalIgnoreCase));
+        var closureRecords = catalog.Tools.Zip(entries, (tool, entry) =>
+        {
+            probes.TryGetValue(tool.toolId, out var exactProbe);
+            McgsToolProbeEvidence? equivalentProbe = null;
+            if (exactProbe == null &&
+                tool.commandId.GetValueOrDefault() != 0 &&
+                commandProbes.TryGetValue(tool.commandId.GetValueOrDefault(), out var commandProbe) &&
+                CommandProbeCanCoverTool(tool, commandProbe))
+            {
+                equivalentProbe = commandProbe;
+            }
+            var probe = exactProbe ?? equivalentProbe;
+            return BuildMcgsToolClosureRecord(tool, entry.status, entry.status.Equals("probed", StringComparison.OrdinalIgnoreCase), exactProbe, equivalentProbe, probe, "");
+        }).ToArray();
+        var closedLoopPassCount = closureRecords.Count(r => r.closureStatus == "closedLoopPass");
+        var readOnlyClosedLoopPassCount = closureRecords.Count(r => r.closureStatus == "readOnlyClosedLoopPass");
+        var notClosedLoopCount = closureRecords.Count(r => r.closureStatus == "notClosedLoop");
+        var needsProbeClosureCount = closureRecords.Count(r => r.closureStatus == "needsProbe");
+        var blockedBySafetyCount = closureRecords.Count(r => r.closureStatus == "blockedBySafety");
+        var blockedNeedsHumanCount = closureRecords.Count(r => r.closureStatus == "blockedNeedsHuman");
+        var invalidEvidenceCount = closureRecords.Count(r => r.closureStatus == "invalidEvidence");
+        var closureComplete = notClosedLoopCount == 0 && needsProbeClosureCount == 0 && invalidEvidenceCount == 0;
         var result = new
         {
             schemaVersion = 1,
             status = needsProbeCount > 0 || needsPreconditionCount > 0 ? "UNKNOWN" : "PASS",
+            closureStatus = closureComplete ? "PASS" : "UNKNOWN",
             project,
             projectSha256 = Sha256(project),
             createdAt = DateTimeOffset.Now.ToString("O"),
@@ -1461,6 +1492,14 @@ internal static partial class Program
             needsProbeCount,
             needsPreconditionCount,
             blockedCount,
+            closedLoopPassCount,
+            readOnlyClosedLoopPassCount,
+            notClosedLoopCount,
+            needsProbeClosureCount,
+            blockedBySafetyCount,
+            blockedNeedsHumanCount,
+            invalidEvidenceCount,
+            closureComplete,
             entries,
             blockedReasons = new[]
             {
@@ -1470,10 +1509,30 @@ internal static partial class Program
                 blockedCount > 0
                     ? $"Stage-1 tool-sweep has {blockedCount} blocked tools whose blocker/risk record is explicit."
                     : "Stage-1 tool-sweep has no blocked tools.",
-                "Stage-1 tool-sweep does not invoke unknown-risk tools. Entries with needs-precondition/blocked are classified from local toolbar state and still require safe follow-up evidence or documented blockers."
+                "Stage-1 tool-sweep does not invoke unknown-risk tools. Entries with needs-precondition/blocked are classified from local toolbar state and still require safe follow-up evidence or documented blockers.",
+                closureComplete
+                    ? "Closure records contain no notClosedLoop/needsProbe/invalidEvidence continuation states."
+                    : $"Full-coverage closure remains incomplete: {notClosedLoopCount} notClosedLoop, {needsProbeClosureCount} needsProbe, {invalidEvidenceCount} invalidEvidence. Do not claim these tools are usable until closureStatus is closedLoopPass/readOnlyClosedLoopPass or blocked with a concrete safety/human boundary."
             }
         };
         File.WriteAllText(Path.Combine(outDir, "tool-sweep.json"), JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(outDir, "tool-closure-records.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            status = closureComplete ? "PASS" : "UNKNOWN",
+            createdAt = result.createdAt,
+            project,
+            projectSha256 = result.projectSha256,
+            toolCount = closureRecords.Length,
+            closedLoopPassCount,
+            readOnlyClosedLoopPassCount,
+            notClosedLoopCount,
+            needsProbeClosureCount,
+            blockedBySafetyCount,
+            blockedNeedsHumanCount,
+            invalidEvidenceCount,
+            records = closureRecords
+        }, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-sweep: " + outDir);
         return result.status == "PASS" ? 0 : 2;
     }
@@ -1519,6 +1578,17 @@ internal static partial class Program
                     candidateSafeMutationNotFunctional = JsonBoolAny(evidence, "candidateSafeMutationNotFunctional", "CandidateSafeMutationNotFunctional") == true;
                     projectCopyHashChanged = JsonBoolAny(evidence, "projectCopyHashChanged", "ProjectCopyHashChanged") == true;
                     unknownRiskHashDriftExplained = JsonBoolAny(evidence, "unknownRiskHashDriftExplained", "UnknownRiskHashDriftExplained") == true;
+                    var readOnlyHashDriftClass = JsonStringAny(evidence, "readOnlyHashDriftClass", "ReadOnlyHashDriftClass") ?? "";
+                    if (readOnlyHashDriftClass.Equals("editor-context-only", StringComparison.OrdinalIgnoreCase) ||
+                        readOnlyHashDriftClass.Equals("normalized-equivalent", StringComparison.OrdinalIgnoreCase))
+                        unknownRiskHashDriftExplained = true;
+                    if (evidence.TryGetProperty("normalizedDiff", out var normalizedDiff) &&
+                        normalizedDiff.ValueKind == JsonValueKind.Object &&
+                        (JsonBoolAny(normalizedDiff, "EditorContextOnly", "editorContextOnly") == true ||
+                         JsonBoolAny(normalizedDiff, "Equivalent", "equivalent") == true))
+                    {
+                        unknownRiskHashDriftExplained = true;
+                    }
                 }
                 var newWindowObserved = JsonBoolAny(doc.RootElement, "newWindowObserved", "NewWindowObserved") == true ||
                                         (doc.RootElement.TryGetProperty("commandObservedWindows", out var windows) &&
@@ -1574,6 +1644,8 @@ internal static partial class Program
             return ProbeHasCandidateSafeEvidence(probe);
         if (tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase))
             return ProbeHasUnknownRiskEvidence(probe);
+        if (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase))
+            return ProbeHasReadOnlyEvidence(probe);
         return true;
     }
 
@@ -1581,6 +1653,9 @@ internal static partial class Program
         => probe.CandidateSafeMutationFunctionalDiff ||
            probe.CandidateSafeMutationReversibleReturn ||
            probe.NewWindowObserved;
+
+    private static bool ProbeHasReadOnlyEvidence(McgsToolProbeEvidence probe)
+        => !probe.ProjectCopyHashChanged || probe.UnknownRiskHashDriftExplained;
 
     private static bool ProbeHasUnknownRiskEvidence(McgsToolProbeEvidence probe)
         => !probe.ProjectCopyHashChanged || probe.UnknownRiskHashDriftExplained;
@@ -1624,6 +1699,383 @@ internal static partial class Program
         if (probe.UnknownRiskHashDriftExplained) score += 3;
         if (!probe.ProjectCopyHashChanged) score += 1;
         return score;
+    }
+
+    private static McgsToolClosureRecord BuildMcgsToolClosureRecord(McgsToolEntry tool, string sweepStatus, bool probed,
+        McgsToolProbeEvidence? exactProbe, McgsToolProbeEvidence? equivalentProbe, McgsToolProbeEvidence? probe,
+        string documentedBlockerNextProbe)
+    {
+        var category = McgsToolCategory(tool);
+        var missing = new List<string>();
+        var evidencePath = probe?.Path ?? "";
+        var nextProbe = !string.IsNullOrWhiteSpace(documentedBlockerNextProbe)
+            ? documentedBlockerNextProbe
+            : tool.nextProbe;
+        var closureStatus = "notClosedLoop";
+
+        if (IsToolbarSeparatorTool(tool))
+        {
+            closureStatus = "readOnlyClosedLoopPass";
+            nextProbe = "";
+        }
+        else if (IsSafetyBlockedTool(tool))
+        {
+            closureStatus = "blockedBySafety";
+            if (string.IsNullOrWhiteSpace(nextProbe))
+                nextProbe = "Safety boundary is explicit; do not invoke unattended unless a disposable, non-external fixture and human authorization exist.";
+        }
+        else if (sweepStatus.Equals("blocked", StringComparison.OrdinalIgnoreCase))
+        {
+            closureStatus = "blockedNeedsHuman";
+            if (string.IsNullOrWhiteSpace(nextProbe))
+                nextProbe = "Provide a file-safe fixture or manual editor state that makes this command reversible before probing.";
+        }
+        else if (sweepStatus.Equals("needs-precondition", StringComparison.OrdinalIgnoreCase) ||
+                 sweepStatus.Equals("needs-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            closureStatus = "needsProbe";
+            if (string.IsNullOrWhiteSpace(nextProbe))
+                nextProbe = "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after/readback evidence.";
+        }
+        else if (IsReadOnlyClosedLoopImplemented(tool))
+        {
+            closureStatus = "readOnlyClosedLoopPass";
+            nextProbe = "";
+        }
+        else if (IsCandidateSafeClosedLoopImplemented(tool))
+        {
+            closureStatus = "closedLoopPass";
+            nextProbe = "";
+        }
+        else if (probed)
+        {
+            closureStatus = "notClosedLoop";
+        }
+
+        if (closureStatus is "notClosedLoop" or "needsProbe" or "invalidEvidence")
+            missing.AddRange(McgsToolMissingClosureEvidence(tool, category, probed, probe));
+
+        var probeEvidenceKind = exactProbe != null ? "exact-tool" : equivalentProbe != null ? "equivalent-command" : "";
+        var invocationEvidence = new List<string>();
+        if (!string.IsNullOrWhiteSpace(tool.invocationRoute))
+            invocationEvidence.Add(tool.invocationRoute);
+        if (!string.IsNullOrWhiteSpace(evidencePath))
+            invocationEvidence.Add(evidencePath);
+        if (!string.IsNullOrWhiteSpace(probeEvidenceKind))
+            invocationEvidence.Add("probeEvidenceKind=" + probeEvidenceKind);
+
+        var beforeEvidence = new List<string>();
+        if (!string.IsNullOrWhiteSpace(tool.evidenceSource))
+            beforeEvidence.Add(tool.evidenceSource);
+        if (probe != null)
+            beforeEvidence.Add("tool-probe status=" + probe.Status);
+
+        var afterEvidence = new List<string>();
+        if (probe?.NewWindowObserved == true)
+            afterEvidence.Add("tool-probe observed a new window/dialog");
+        if (probe?.ProjectCopyHashChanged == true)
+            afterEvidence.Add("tool-probe observed project copy SHA drift");
+        if (probe?.CandidateSafeMutationFunctionalDiff == true)
+            afterEvidence.Add("tool-probe observed a functional normalized candidate diff");
+        if (probe?.CandidateSafeMutationReversibleReturn == true)
+            afterEvidence.Add("tool-probe observed reversible return evidence");
+
+        return new McgsToolClosureRecord
+        {
+            toolId = tool.toolId,
+            name = tool.displayName,
+            uiPath = tool.uiPath,
+            source = McgsToolSource(tool.source),
+            category = category,
+            commandId = tool.commandId?.ToString() ?? "",
+            preconditions = McgsToolPreconditions(tool),
+            candidateOrFixture = evidencePath,
+            beforeEvidence = beforeEvidence.ToArray(),
+            actionEvidence = invocationEvidence.ToArray(),
+            afterEvidence = afterEvidence.ToArray(),
+            expectedEffect = tool.expectedEffect,
+            actualEffect = McgsToolActualEffect(tool, sweepStatus, probed, probe),
+            persistenceEvidence = McgsToolPersistenceEvidence(tool, closureStatus, probe),
+            readbackEvidence = McgsToolReadbackEvidence(tool, closureStatus),
+            internalCanvasEvidence = McgsToolInternalCanvasEvidence(tool, closureStatus, category),
+            collisionAnalysis = new
+            {
+                status = category is "drawing-create" or "drawing-edit"
+                    ? (closureStatus == "closedLoopPass" ? "covered-by-workflow-internal-evidence" : "missing-internal-canvas-closure")
+                    : "notApplicable",
+                source = category is "drawing-create" or "drawing-edit" ? "property-map/canvas-object-map/readback evidence required" : ""
+            },
+            layoutPlanEvidence = McgsToolLayoutPlanEvidence(tool, closureStatus, category),
+            visualEvidence = McgsToolVisualEvidence(tool, closureStatus),
+            projectDiffEvidence = McgsToolProjectDiffEvidence(probe),
+            sideEffects = McgsToolSideEffects(tool, probe),
+            rollbackPath = McgsToolRollbackPath(tool, closureStatus),
+            safetyClass = tool.safetyClass,
+            closureStatus = closureStatus,
+            missingEvidence = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            nextProbe = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" ? "" : nextProbe,
+            geminiReview = ""
+        };
+    }
+
+    private static string McgsToolCategory(McgsToolEntry tool)
+    {
+        if (IsToolbarSeparatorTool(tool))
+            return "layout";
+        var text = string.Join(" ", tool.displayName, tool.uiPath, tool.expectedEffect, tool.invocationRoute);
+        var id = tool.commandId.GetValueOrDefault();
+        if (id == 32785 || text.Contains("property dialog", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("property", StringComparison.OrdinalIgnoreCase))
+            return "property-dialog";
+        if (IsToolboxDrawingCommand(id) || id is 32907 or 32938 or 32941 ||
+            text.Contains("creates", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("drawing tool", StringComparison.OrdinalIgnoreCase))
+            return "drawing-create";
+        if (text.Contains("selected animation canvas object", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("cut", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("paste", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("undo", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("redo", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("arrange", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("transform", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("style", StringComparison.OrdinalIgnoreCase))
+            return "drawing-edit";
+        if (text.Contains("select", StringComparison.OrdinalIgnoreCase))
+            return "selection";
+        if (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("view", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("toggle", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("shows", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("focuses", StringComparison.OrdinalIgnoreCase))
+            return "view-toggle";
+        if (text.Contains("project", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("database", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("device", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("strategy", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("menu", StringComparison.OrdinalIgnoreCase))
+            return "management";
+        return "unknown";
+    }
+
+    private static string McgsToolSource(string source)
+    {
+        if (source.Contains("toolbar", StringComparison.OrdinalIgnoreCase)) return "toolbar";
+        if (source.Contains("toolbox", StringComparison.OrdinalIgnoreCase)) return "toolbox";
+        if (source.Contains("menu", StringComparison.OrdinalIgnoreCase)) return "menu";
+        if (source.Contains("context", StringComparison.OrdinalIgnoreCase)) return "context-menu";
+        if (source.Contains("tree", StringComparison.OrdinalIgnoreCase)) return "project-tree";
+        if (source.Contains("dialog", StringComparison.OrdinalIgnoreCase)) return "dialog";
+        if (source.Contains("accelerator", StringComparison.OrdinalIgnoreCase)) return "accelerator";
+        return string.IsNullOrWhiteSpace(source) ? "unknown" : source;
+    }
+
+    private static bool IsToolbarSeparatorTool(McgsToolEntry tool)
+        => tool.commandId.GetValueOrDefault() == 0 ||
+           tool.displayName.Equals("separator", StringComparison.OrdinalIgnoreCase) ||
+           tool.toolId.Contains(":separator", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSafetyBlockedTool(McgsToolEntry tool)
+    {
+        if (tool.safetyClass is "formal-apply-required" or "hardware-risk" or "external-side-effect")
+            return true;
+        var text = string.Join(" ", tool.displayName, tool.expectedEffect, tool.nextProbe, tool.invocationRoute);
+        return text.Contains("print", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("printer", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("MFCGRUN", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("MCGSRUN", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("hardware", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("official project", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("formal apply", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Do not invoke in unattended", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsReadOnlyClosedLoopImplemented(McgsToolEntry tool)
+    {
+        if (!tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) ||
+            !tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var evidence = tool.evidenceSource;
+        return evidence.Contains("temporary-copy validator", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("project.check", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("clipboard-probe", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("EnterDeviceConfiguration", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("window.button/window.indicator/window.layout workflows", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCandidateSafeClosedLoopImplemented(McgsToolEntry tool)
+    {
+        if (!tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) ||
+            !tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var evidence = tool.evidenceSource;
+        if (evidence.Contains("window.lamp.add-native", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return evidence.Contains("workflow run window.button.add-momentary", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("window.indicator.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.static-text.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("mutating workflow save/readback evidence", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string[] McgsToolMissingClosureEvidence(McgsToolEntry tool, string category, bool probed, McgsToolProbeEvidence? probe)
+    {
+        var missing = new List<string>();
+        if (!probed && !tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase))
+            missing.Add("targeted tool-probe evidence");
+        if (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase))
+        {
+            missing.Add("before/after visible or window-tree evidence");
+            missing.Add("project-copy SHA or normalized diff proving no unintended mutation");
+            missing.Add("restore path if the UI state changes");
+        }
+        else if (tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase))
+        {
+            missing.Add("candidate/throwaway fixture path");
+            missing.Add("expected effect readback after invocation");
+            missing.Add("save/reopen persistence evidence or reversible-return evidence");
+            missing.Add("rollback path");
+            if (category is "drawing-create" or "drawing-edit" or "selection")
+            {
+                missing.Add("internal canvas object/property evidence");
+                missing.Add("collision/occlusion analysis from decoded rectangles and z-order");
+                missing.Add("visual screenshot audit evidence");
+            }
+        }
+        else if (tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase))
+        {
+            missing.Add("risk classification proof before invocation");
+            missing.Add("project hash drift explanation or explicit blocker");
+        }
+        if (probe?.Status.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) == true)
+            missing.Add("replace UNKNOWN probe evidence with PASS proof or concrete safety/human blocker");
+        return missing.ToArray();
+    }
+
+    private static string[] McgsToolPreconditions(McgsToolEntry tool)
+        => tool.supportStatus.Equals("needs-precondition", StringComparison.OrdinalIgnoreCase)
+            ? new[] { tool.nextProbe }
+            : Array.Empty<string>();
+
+    private static string McgsToolActualEffect(McgsToolEntry tool, string sweepStatus, bool probed, McgsToolProbeEvidence? probe)
+    {
+        if (IsSafetyBlockedTool(tool)) return "not invoked; explicit safety boundary";
+        if (tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)) return "implemented route exists; closure depends on category evidence";
+        if (probed && probe?.CandidateSafeMutationFunctionalDiff == true) return "probe observed functional normalized candidate diff";
+        if (probed && probe?.CandidateSafeMutationReversibleReturn == true) return "probe observed reversible return";
+        if (probed && probe?.NewWindowObserved == true) return "probe observed new dialog/window";
+        return sweepStatus;
+    }
+
+    private static string[] McgsToolPersistenceEvidence(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
+    {
+        if (closureStatus == "closedLoopPass")
+            return new[] { tool.evidenceSource };
+        if (probe?.CandidateSafeMutationReversibleReturn == true)
+            return new[] { "tool-probe reversible-return evidence" };
+        return Array.Empty<string>();
+    }
+
+    private static string[] McgsToolReadbackEvidence(McgsToolEntry tool, string closureStatus)
+        => closureStatus == "closedLoopPass" || closureStatus == "readOnlyClosedLoopPass"
+            ? new[] { tool.evidenceSource }
+            : Array.Empty<string>();
+
+    private static string[] McgsToolInternalCanvasEvidence(McgsToolEntry tool, string closureStatus, string category)
+        => category is "drawing-create" or "drawing-edit" or "selection"
+            ? closureStatus == "closedLoopPass"
+                ? new[] { tool.evidenceSource }
+                : Array.Empty<string>()
+            : Array.Empty<string>();
+
+    private static string[] McgsToolLayoutPlanEvidence(McgsToolEntry tool, string closureStatus, string category)
+        => category is "drawing-create" or "drawing-edit"
+            ? closureStatus == "closedLoopPass"
+                ? new[] { "workflow readback/property-map evidence for supported layout objects" }
+                : Array.Empty<string>()
+            : Array.Empty<string>();
+
+    private static string[] McgsToolVisualEvidence(McgsToolEntry tool, string closureStatus)
+        => closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
+            ? new[] { tool.evidenceSource }
+            : Array.Empty<string>();
+
+    private static string[] McgsToolProjectDiffEvidence(McgsToolProbeEvidence? probe)
+    {
+        if (probe == null) return Array.Empty<string>();
+        if (probe.CandidateSafeMutationFunctionalDiff) return new[] { probe.Path };
+        if (probe.CandidateSafeMutationReversibleReturn) return new[] { probe.Path };
+        if (!probe.ProjectCopyHashChanged) return new[] { "tool-probe project copy hash unchanged" };
+        return new[] { "tool-probe project copy hash changed" };
+    }
+
+    private static string[] McgsToolSideEffects(McgsToolEntry tool, McgsToolProbeEvidence? probe)
+    {
+        var sideEffects = new List<string>();
+        if (probe?.NewWindowObserved == true) sideEffects.Add("opened dialog/window");
+        if (probe?.ProjectCopyHashChanged == true) sideEffects.Add("candidate/project copy SHA changed");
+        if (IsSafetyBlockedTool(tool)) sideEffects.Add("not invoked because the expected side effect crosses the safety boundary");
+        return sideEffects.ToArray();
+    }
+
+    private static string McgsToolRollbackPath(McgsToolEntry tool, string closureStatus)
+    {
+        if (closureStatus == "readOnlyClosedLoopPass") return "restore UI state or close transient dialog/window";
+        if (closureStatus == "closedLoopPass") return "discard candidate/throwaway copy or use workflow rollback package when generated";
+        if (tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase))
+            return "discard candidate/throwaway copy; do not apply to official project";
+        return "";
+    }
+
+    private sealed class McgsToolSweepEntry
+    {
+        public string toolId { get; set; } = "";
+        public string displayName { get; set; } = "";
+        public string source { get; set; } = "";
+        public string uiPath { get; set; } = "";
+        public int? commandId { get; set; }
+        public string status { get; set; } = "";
+        public bool invoked { get; set; }
+        public string safetyClass { get; set; } = "";
+        public string invocationEvidence { get; set; } = "";
+        public string probeStatus { get; set; } = "";
+        public string probePath { get; set; } = "";
+        public string equivalentProbePath { get; set; } = "";
+        public string equivalentProbeToolId { get; set; } = "";
+        public string probeEvidenceKind { get; set; } = "";
+        public string closureStatus { get; set; } = "notClosedLoop";
+        public string[] missingEvidence { get; set; } = Array.Empty<string>();
+        public string closureRecordPath { get; set; } = "";
+        public string nextProbe { get; set; } = "";
+    }
+
+    private sealed class McgsToolClosureRecord
+    {
+        public string toolId { get; set; } = "";
+        public string name { get; set; } = "";
+        public string uiPath { get; set; } = "";
+        public string source { get; set; } = "";
+        public string category { get; set; } = "unknown";
+        public string commandId { get; set; } = "";
+        public string[] preconditions { get; set; } = Array.Empty<string>();
+        public string candidateOrFixture { get; set; } = "";
+        public string[] beforeEvidence { get; set; } = Array.Empty<string>();
+        public string[] actionEvidence { get; set; } = Array.Empty<string>();
+        public string[] afterEvidence { get; set; } = Array.Empty<string>();
+        public string expectedEffect { get; set; } = "";
+        public string actualEffect { get; set; } = "";
+        public string[] persistenceEvidence { get; set; } = Array.Empty<string>();
+        public string[] readbackEvidence { get; set; } = Array.Empty<string>();
+        public string[] internalCanvasEvidence { get; set; } = Array.Empty<string>();
+        public object? collisionAnalysis { get; set; }
+        public string[] layoutPlanEvidence { get; set; } = Array.Empty<string>();
+        public string[] visualEvidence { get; set; } = Array.Empty<string>();
+        public string[] projectDiffEvidence { get; set; } = Array.Empty<string>();
+        public string[] sideEffects { get; set; } = Array.Empty<string>();
+        public string rollbackPath { get; set; } = "";
+        public string safetyClass { get; set; } = "";
+        public string closureStatus { get; set; } = "notClosedLoop";
+        public string[] missingEvidence { get; set; } = Array.Empty<string>();
+        public string nextProbe { get; set; } = "";
+        public string geminiReview { get; set; } = "";
     }
 
     private sealed record McgsToolProbeEvidence(string ToolId, string Path, string Status, int CommandId, string SafetyClass,

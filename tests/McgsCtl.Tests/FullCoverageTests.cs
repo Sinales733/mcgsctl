@@ -431,6 +431,128 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
+    public void ToolSweepWritesClosureRecordsAndDoesNotTreatProbePassAsUsability()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-closure");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:7:57635",
+              "displayName": "MFC edit cut",
+              "source": "toolbar",
+              "uiPath": "animation toolbar/button[7]",
+              "commandId": 57635,
+              "enabled": false,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 57635",
+              "expectedEffect": "cuts selected objects",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable object"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "cut-functional-diff");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:7:57635",
+          "commandId": 57635,
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-closure");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["status"]!.GetValue<string>());
+        Assert.Equal("UNKNOWN", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["notClosedLoopCount"]!.GetValue<int>());
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("probed", entry["status"]!.GetValue<string>());
+        Assert.Equal("notClosedLoop", entry["closureStatus"]!.GetValue<string>());
+        Assert.Contains("expected effect readback", string.Join("\n", entry["missingEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+
+        var closurePath = Path.Combine(sweepDir, "tool-closure-records.json");
+        Assert.True(File.Exists(closurePath));
+        var closure = JsonNode.Parse(File.ReadAllText(closurePath, Encoding.UTF8))!.AsObject();
+        Assert.Equal("UNKNOWN", closure["status"]!.GetValue<string>());
+        var record = closure["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("notClosedLoop", record["closureStatus"]!.GetValue<string>());
+        Assert.Equal("drawing-edit", record["category"]!.GetValue<string>());
+        Assert.Contains("internal canvas object/property evidence",
+            string.Join("\n", record["missingEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
+    [Fact]
+    public void ToolSweepClosureKeepsSafetyBlockedToolsOutOfNeedsProbeQueue()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-blocked-safety");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:1:0:57600",
+              "displayName": "MFC file new",
+              "source": "toolbar",
+              "uiPath": "standard toolbar/button[0]",
+              "commandId": 57600,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "blocked",
+              "safetyClass": "formal-apply-required",
+              "invocationRoute": "WM_COMMAND 57600",
+              "expectedEffect": "standard MFC File/New command",
+              "evidenceSource": "test catalog",
+              "nextProbe": "Do not invoke in unattended sweeps."
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-blocked-safety");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["blockedBySafetyCount"]!.GetValue<int>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("blockedBySafety", record["closureStatus"]!.GetValue<string>());
+        Assert.Empty(record["missingEvidence"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolSweepTreatsReversibleUndoReturnAsCandidateSafeEvidence()
     {
         Directory.CreateDirectory(_root);
@@ -654,6 +776,134 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal("needs-precondition", entry["status"]!.GetValue<string>());
         Assert.Equal("PASS", entry["probeStatus"]!.GetValue<string>());
         Assert.False(entry["invoked"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolSweepDoesNotTreatReadOnlyHashDriftAsProbed()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-readonly-drift");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:23:34024",
+              "displayName": "toggle grid display",
+              "source": "toolbar",
+              "uiPath": "animation toolbar/button[23]",
+              "commandId": 34024,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "read-only",
+              "invocationRoute": "WM_COMMAND 34024",
+              "expectedEffect": "toggles animation grid display",
+              "evidenceSource": "test catalog",
+              "nextProbe": "verify project SHA unchanged or prove drift is editor-context-only"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "readonly-drift");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:23:34024",
+          "commandId": 34024,
+          "safetyClass": "read-only",
+          "evidence": {
+            "projectCopyHashChanged": true
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-readonly-drift");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("UNKNOWN", sweep["status"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", entry["status"]!.GetValue<string>());
+        Assert.Equal("PASS", entry["probeStatus"]!.GetValue<string>());
+        Assert.False(entry["invoked"]!.GetValue<bool>());
+        Assert.Equal("needsProbe", entry["closureStatus"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepAcceptsReadOnlyNormalizedEquivalentHashDriftAsProbed()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-readonly-equivalent");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:7:15:32782",
+              "displayName": "workbench small-icon view",
+              "source": "toolbar",
+              "uiPath": "workbench toolbar/button[15]",
+              "commandId": 32782,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "read-only",
+              "invocationRoute": "WM_COMMAND 32782",
+              "expectedEffect": "switches view mode",
+              "evidenceSource": "test catalog",
+              "nextProbe": "verify project SHA unchanged or prove drift is normalized-equivalent"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "readonly-equivalent");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:7:15:32782",
+          "commandId": 32782,
+          "safetyClass": "read-only",
+          "evidence": {
+            "projectCopyHashChanged": true,
+            "readOnlyHashDriftClass": "normalized-equivalent",
+            "normalizedDiff": {
+              "Equivalent": true,
+              "ChangedFileCount": 0
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-readonly-equivalent");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("PASS", sweep["status"]!.GetValue<string>());
+        Assert.Equal("probed", entry["status"]!.GetValue<string>());
+        Assert.True(entry["invoked"]!.GetValue<bool>());
+        Assert.Equal("notClosedLoop", entry["closureStatus"]!.GetValue<string>());
     }
 
     [Fact]

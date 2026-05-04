@@ -203,7 +203,21 @@ tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep `
   --out .mcgsctl-runs\mcgs-tool-sweep
 ```
 
-`tool-catalog.json` and `function-catalog.json` are inventory records, not proof that every MCGS command is understood. A tool is understood only after its purpose, inputs, side effects, safety class, invocation path, and readback/evidence path are recorded. Stage-1 `tool-sweep` therefore leaves unknown-risk commands as `UNKNOWN` instead of clicking them blindly.
+`tool-catalog.json` and `function-catalog.json` are inventory records, not proof that every MCGS command is understood. `mcgs tool-sweep` writes `tool-sweep.json` for stage-1 accounting and `tool-closure-records.json` for the usability gate. A tool is understood only after its purpose, inputs, side effects, safety class, invocation path, readback/evidence path, rollback path, and closure status are recorded. `tool-sweep status=PASS` is therefore only a probe-accounting result; `closureStatus=UNKNOWN` still means more file-safe closure work remains.
+
+Closure statuses are intentionally stricter than probe statuses:
+
+```text
+closedLoopPass          candidate-safe tool proven on candidate/fixture with readback/persistence/rollback
+readOnlyClosedLoopPass  read-only tool proven with before/after evidence and no unintended project mutation
+notClosedLoop           clicked or probed, but evidence is insufficient for usability
+needsProbe              safe next probe is known and must be run
+blockedBySafety         next proof would cross hardware, print/run, formal apply, secret, or irreversible boundary
+blockedNeedsHuman       a human-provided fixture/state/approval is required
+invalidEvidence         existing evidence does not prove the claim
+```
+
+Read-only probes with candidate hash drift are accepted only when normalized-diff evidence proves the drift is `normalized-equivalent` or editor-context-only.
 
 The older canvas diagnostics probe:
 

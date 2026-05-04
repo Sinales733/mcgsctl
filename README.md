@@ -141,7 +141,9 @@ tools\mcgsctl\mcgsctl.ps1 mcgs tool-catalog --project .mcgsctl-work\layout-gui-s
 tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --tool-catalog .mcgsctl-runs\mcgs-tool-catalog\tool-catalog.json --out .mcgsctl-runs\mcgs-tool-sweep
 ```
 
-`mcgs tool-catalog` writes `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` is conservative: it does not click unknown-risk tools until each tool has a candidate-safe classifier, so unresolved tools keep the sweep `UNKNOWN` rather than being treated as understood.
+`mcgs tool-catalog` writes `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` writes both `tool-sweep.json` and `tool-closure-records.json`. The stage-1 `status` only says whether inventory/probe accounting is complete; it is not a usability claim. Full usability is represented by `closureStatus`: candidate-safe tools must reach `closedLoopPass`, read-only tools must reach `readOnlyClosedLoopPass`, and unsafe tools must have `blockedBySafety` or `blockedNeedsHuman`. `notClosedLoop`, `needsProbe`, and `invalidEvidence` are continuation states.
+
+Read-only tool probes are accepted only when the evidence proves no unintended project mutation: either the candidate hash stays unchanged or the normalized diff classifies the drift as `normalized-equivalent` / editor-context-only. A successful click or dialog observation without that proof does not close the tool.
 
 Common blocked summaries:
 
@@ -216,7 +218,7 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `canvas semantic-map-probe`: exports the candidate read-only, resolves target-row MCGS objects into semantic records, and writes `semantic-map.json` plus a semantic `canvas-objects.json`. It uses rect anchors, text/variable/expression anchors, workflow results, and property readback; unresolved objects remain `UNKNOWN` with `nextProbe` rather than becoming final `unknown-mce-object`.
 - `canvas property-map-probe`: expands semantic records into a full-field `property-map.json`. Every required field is present as `value`, `notApplicable`, or `unresolved` with `nextProbe`; unresolved property coverage keeps the probe `UNKNOWN`.
 - `canvas property-readback`: opens an object's MCGS property dialog on a temporary candidate copy, captures all tab controls, and can use `--probe-font` to read the font subdialog without saving changes.
-- `mcgs tool-catalog`, `mcgs inventory`, `mcgs tool-probe`, and `mcgs tool-sweep`: normalize MCGS toolbar/function evidence into machine-readable coverage records. Stage-1 sweeps are read-only and keep unknown-risk command IDs unresolved until candidate-safe probes exist.
+- `mcgs tool-catalog`, `mcgs inventory`, `mcgs tool-probe`, and `mcgs tool-sweep`: normalize MCGS toolbar/function evidence into machine-readable coverage records. `tool-sweep.json` keeps the stage-1 probe accounting, while `tool-closure-records.json` records per-tool closure status and missing evidence so `tool-sweep status=PASS` cannot be confused with closed-loop usability.
 - `canvas mce-blob-diff-probe`: compares two candidate files read-only and writes sanitized blob-diff evidence for decoder experiments. It does not store full raw blobs and does not modify either project.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.
