@@ -1754,6 +1754,8 @@ internal static partial class Program
 
         if (closureStatus is "notClosedLoop" or "needsProbe" or "invalidEvidence")
             missing.AddRange(McgsToolMissingClosureEvidence(tool, category, probed, probe));
+        if (closureStatus == "notClosedLoop" && string.IsNullOrWhiteSpace(nextProbe))
+            nextProbe = DefaultMcgsToolClosureNextProbe(tool, category);
 
         var probeEvidenceKind = exactProbe != null ? "exact-tool" : equivalentProbe != null ? "equivalent-command" : "";
         var invocationEvidence = new List<string>();
@@ -1824,13 +1826,13 @@ internal static partial class Program
             return "layout";
         var text = string.Join(" ", tool.displayName, tool.uiPath, tool.expectedEffect, tool.invocationRoute);
         var id = tool.commandId.GetValueOrDefault();
-        if (id == 32785 || text.Contains("property dialog", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("property", StringComparison.OrdinalIgnoreCase))
-            return "property-dialog";
         if (IsToolboxDrawingCommand(id) || id is 32907 or 32938 or 32941 ||
             text.Contains("creates", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("drawing tool", StringComparison.OrdinalIgnoreCase))
             return "drawing-create";
+        if (id == 32785 || text.Contains("property dialog", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("property", StringComparison.OrdinalIgnoreCase))
+            return "property-dialog";
         if (text.Contains("selected animation canvas object", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("cut", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("paste", StringComparison.OrdinalIgnoreCase) ||
@@ -1948,6 +1950,29 @@ internal static partial class Program
         if (probe?.Status.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) == true)
             missing.Add("replace UNKNOWN probe evidence with PASS proof or concrete safety/human blocker");
         return missing.ToArray();
+    }
+
+    private static string DefaultMcgsToolClosureNextProbe(McgsToolEntry tool, string category)
+    {
+        if (!string.IsNullOrWhiteSpace(tool.nextProbe))
+            return tool.nextProbe;
+        return category switch
+        {
+            "drawing-create" =>
+                "Run mcgs tool-probe on a throwaway candidate with animation-draw-object context, save/reopen, property-map/internal-canvas evidence, collision analysis, visual audit screenshot, and rollback by discarding the candidate.",
+            "drawing-edit" =>
+                "Create and select a known disposable object, invoke the edit command on the throwaway candidate, then prove before/after geometry/order/style/property delta plus save/reopen persistence or reversible return.",
+            "property-dialog" =>
+                "Select a known disposable object, open the property dialog, enumerate every tab/control, change only one safe field when applicable, cancel or save on the throwaway candidate, and read back the same field.",
+            "selection" =>
+                "Create one or more known disposable objects and prove deterministic selection via property-dialog target, clipboard format, window state, or internal canvas object evidence before closing edit tools.",
+            "view-toggle" =>
+                "Probe on a disposable candidate, capture before/after window tree or visible state, restore the UI mode, and prove the project SHA is unchanged or normalized-equivalent.",
+            "management" =>
+                "Run a targeted management-command probe on a disposable candidate with before/action/after evidence, normalized project diff, side-effect accounting, and rollback/discard path.",
+            _ =>
+                "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after evidence, side effects, normalized diff, and a concrete closure decision."
+        };
     }
 
     private static string[] McgsToolPreconditions(McgsToolEntry tool)
