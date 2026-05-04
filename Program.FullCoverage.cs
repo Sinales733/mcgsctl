@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 internal static partial class Program
 {
@@ -66,39 +67,183 @@ internal static partial class Program
         var outDir = FullPath(Required(args, "--out"));
         Directory.CreateDirectory(outDir);
         var catalogPath = Opt(args, "--tool-catalog");
-        object? tool = null;
+        McgsToolEntry? tool = null;
         if (!string.IsNullOrWhiteSpace(catalogPath) && File.Exists(FullPath(catalogPath)))
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(FullPath(catalogPath), Encoding.UTF8));
-            if (doc.RootElement.TryGetProperty("tools", out var tools) && tools.ValueKind == JsonValueKind.Array)
+            tool = ReadMcgsCatalog(project, FullPath(catalogPath)).Tools
+                .FirstOrDefault(t => t.toolId.Equals(toolId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var invokeReadonly = Has(args, "--invoke-readonly");
+        var allowUnknownRisk = Has(args, "--allow-unknown-risk");
+        var canInvoke = tool != null &&
+                        tool.commandId.HasValue &&
+                        (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) ||
+                         (allowUnknownRisk && tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase)));
+
+        if (!invokeReadonly || !canInvoke)
+        {
+            var result = new
             {
-                foreach (var item in tools.EnumerateArray())
+                schemaVersion = 1,
+                status = tool == null ? "UNKNOWN" : tool.supportStatus == "needs-probe" ? "UNKNOWN" : "PASS",
+                project,
+                projectSha256 = Sha256(project),
+                toolId,
+                tool,
+                invoked = false,
+                reason = tool == null
+                    ? "tool-id was not found in the supplied catalog"
+                    : invokeReadonly
+                        ? "tool was not invoked because it is not classified read-only; use a more specific guarded probe for candidate mutations or risky commands"
+                        : "catalog/readback probe only; pass --invoke-readonly to run read-only commands on a temporary copy",
+                safetyClass = tool?.safetyClass ?? "unknown-risk",
+                nextProbe = tool?.nextProbe ?? "Classify this tool by command id, UI context, and expected side effect; then run on throwaway candidate with before/after hash evidence."
+            };
+            File.WriteAllText(Path.Combine(outDir, "tool-probe.json"), JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+            Console.WriteLine("mcgs tool-probe: " + outDir);
+            return result.status == "PASS" ? 0 : 2;
+        }
+
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        CanvasProbeSession? session = null;
+        var commandId = tool!.commandId!.Value;
+        var invocationError = "";
+        var invoked = false;
+        var projectCopy = "";
+        var projectCopySha256Before = "";
+        try
+        {
+            var context = (Opt(args, "--context") ?? "").ToLowerInvariant();
+            if (context == "animation" || tool.uiPath.Contains("动画组态", StringComparison.OrdinalIgnoreCase))
+            {
+                session = OpenCanvasProbeSession(args, outDir, "tool-probe", out process, out main);
+                projectCopy = session.ProjectCopy;
+                projectCopySha256Before = session.ProjectSha256;
+            }
+            else
+            {
+                var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+                var copyDir = Path.Combine(outDir, "tool-probe-copy");
+                Directory.CreateDirectory(copyDir);
+                projectCopy = Path.Combine(copyDir, Path.GetFileNameWithoutExtension(project) + "-tool-probe.MCE");
+                File.Copy(project, projectCopy, overwrite: true);
+                projectCopySha256Before = Sha256(projectCopy);
+                process = Process.Start(new ProcessStartInfo(editor, Quote(projectCopy))
                 {
-                    if ((JsonStringAny(item, "toolId", "ToolId") ?? "").Equals(toolId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        tool = JsonSerializer.Deserialize<object>(item.GetRawText());
-                        break;
-                    }
-                }
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+                }) ?? throw new InvalidOperationException("Failed to start MCGS editor.");
+                main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+                SetDialogEvidenceRoot(outDir);
+                HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+                main = UiAutomation.FindMainWindow(process.Id);
+                if (main == IntPtr.Zero)
+                    throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+            }
+
+            CaptureProcessWindows(process!.Id, Path.Combine(outDir, "before-invoke"));
+            try
+            {
+                UiAutomation.SendCommand(main, (uint)commandId, send: true, hiword: 0);
+                invoked = true;
+            }
+            catch (Exception ex)
+            {
+                invocationError = ex.Message;
+            }
+            Thread.Sleep(800);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-invoke"));
+        }
+        finally
+        {
+            if (process != null && !process.HasExited && main != IntPtr.Zero)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+                try { process.WaitForExit(5000); } catch { }
             }
         }
 
-        var result = new
+        var projectCopySha256After = TrySha256(projectCopy, out var projectCopySha256AfterError);
+        var projectCopyHashChanged = !string.IsNullOrWhiteSpace(projectCopySha256Before) &&
+                                     !string.IsNullOrWhiteSpace(projectCopySha256After) &&
+                                     !string.Equals(projectCopySha256Before, projectCopySha256After, StringComparison.OrdinalIgnoreCase);
+        var readOnlyHashDrift = tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) && projectCopyHashChanged;
+        object? normalizedDiffEvidence = null;
+        var normalizedDiffError = "";
+        var readOnlyHashDriftClass = readOnlyHashDrift ? "unclassified" : "";
+        var baselineExport = Opt(args, "--baseline-export");
+        if (readOnlyHashDrift && !string.IsNullOrWhiteSpace(baselineExport))
+        {
+            try
+            {
+                var normalizedRoot = Path.Combine(outDir, "normalized-diff");
+                var candidateExport = Path.Combine(normalizedRoot, "candidate-export");
+                MceExporter.Export(projectCopy, candidateExport);
+                var diff = WriteMceNormalizedDiff(FullPath(baselineExport), candidateExport, normalizedRoot);
+                readOnlyHashDriftClass = diff.Equivalent
+                    ? "normalized-equivalent"
+                    : diff.EditorContextOnly ? "editor-context-only" : "normalized-functional-diff";
+                normalizedDiffEvidence = new
+                {
+                    baselineExport = FullPath(baselineExport),
+                    candidateExport,
+                    diffPath = Path.Combine(normalizedRoot, "mce-normalized-diff.json"),
+                    diff.Status,
+                    diff.Equivalent,
+                    diff.ChangedFileCount,
+                    diff.EditorContextOnly
+                };
+            }
+            catch (Exception ex)
+            {
+                normalizedDiffError = ex.Message;
+            }
+        }
+        var readOnlyHashDriftExplained = readOnlyHashDrift &&
+                                         (readOnlyHashDriftClass.Equals("editor-context-only", StringComparison.OrdinalIgnoreCase) ||
+                                          readOnlyHashDriftClass.Equals("normalized-equivalent", StringComparison.OrdinalIgnoreCase));
+        var invokedStatus = invoked && string.IsNullOrWhiteSpace(invocationError) &&
+                            (!readOnlyHashDrift || readOnlyHashDriftExplained)
+            ? "PASS"
+            : "UNKNOWN";
+        var invokedResult = new
         {
             schemaVersion = 1,
-            status = "UNKNOWN",
+            status = invokedStatus,
             project,
             projectSha256 = Sha256(project),
             toolId,
             tool,
-            invoked = false,
-            reason = "tool-probe first stage is catalog/readback only; direct invocation requires per-tool candidate-safe classifier.",
-            safetyClass = "unknown-risk",
-            nextProbe = "Classify this tool by command id, UI context, and expected side effect; then run on throwaway candidate with before/after hash evidence."
+            invoked,
+            commandId,
+            context = Opt(args, "--context") ?? "",
+            invocationError,
+            evidence = new
+            {
+                before = "before-invoke",
+                after = "after-invoke",
+                projectCopy,
+                projectCopySha256Before,
+                projectCopySha256After,
+                projectCopySha256AfterError,
+                projectCopyHashChanged,
+                readOnlyHashDrift,
+                readOnlyHashDriftClass,
+                normalizedDiff = normalizedDiffEvidence,
+                normalizedDiffError
+            },
+            safetyClass = tool.safetyClass,
+            nextProbe = readOnlyHashDrift && !readOnlyHashDriftExplained
+                ? "Read-only tool probe changed the disposable copy hash; compare against an open-close baseline or implement normalized MCE diff before marking the invocation understood."
+                : readOnlyHashDriftExplained
+                    ? ""
+                    : invoked ? "" : tool.nextProbe
         };
-        File.WriteAllText(Path.Combine(outDir, "tool-probe.json"), JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(outDir, "tool-probe.json"), JsonSerializer.Serialize(invokedResult, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-probe: " + outDir);
-        return 2;
+        return invokedResult.status == "PASS" ? 0 : 2;
     }
 
     private static int McgsToolSweep(string[] args)
@@ -118,37 +263,99 @@ internal static partial class Program
             WriteMcgsCatalogOutputs(outDir, catalog);
         }
 
-        var entries = catalog.Tools.Select(tool => new
+        var probeRoot = Opt(args, "--probe-root");
+        var probes = LoadMcgsToolProbeEvidence(probeRoot);
+        var entries = catalog.Tools.Select(tool =>
         {
-            tool.toolId,
-            tool.displayName,
-            tool.source,
-            tool.commandId,
-            status = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) ? "implemented" : "needs-probe",
-            invoked = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase),
-            tool.safetyClass,
-            invocationEvidence = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) ? tool.evidenceSource : "",
-            nextProbe = tool.nextProbe
+            probes.TryGetValue(tool.toolId, out var probe);
+            var blocked = tool.supportStatus.Equals("blocked", StringComparison.OrdinalIgnoreCase);
+            var probed = !blocked && probe != null && probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase);
+            var status = probed ? "probed" : tool.supportStatus;
+            return new
+            {
+                tool.toolId,
+                tool.displayName,
+                tool.source,
+                tool.commandId,
+                status,
+                invoked = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase) || probed,
+                tool.safetyClass,
+                invocationEvidence = tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)
+                    ? tool.evidenceSource
+                    : probed ? probe!.Path : "",
+                probeStatus = probe?.Status ?? "",
+                probePath = probe?.Path ?? "",
+                nextProbe = probed ? "" : tool.nextProbe
+            };
         }).ToArray();
+        var needsPreconditionCount = entries.Count(e => string.Equals(e.status, "needs-precondition", StringComparison.OrdinalIgnoreCase));
+        var needsProbeCount = entries.Count(e => string.Equals(e.status, "needs-probe", StringComparison.OrdinalIgnoreCase));
+        var blockedCount = entries.Count(e => string.Equals(e.status, "blocked", StringComparison.OrdinalIgnoreCase));
         var result = new
         {
             schemaVersion = 1,
-            status = entries.Any(e => e.status == "needs-probe") ? "UNKNOWN" : "PASS",
+            status = needsProbeCount > 0 || needsPreconditionCount > 0 ? "UNKNOWN" : "PASS",
             project,
             projectSha256 = Sha256(project),
             createdAt = DateTimeOffset.Now.ToString("O"),
+            probeRoot = string.IsNullOrWhiteSpace(probeRoot) ? "" : FullPath(probeRoot),
+            probeEvidenceCount = probes.Count,
             toolCount = entries.Length,
             invokedCount = entries.Count(e => e.invoked),
+            accountedCount = entries.Count(e => !string.Equals(e.status, "needs-probe", StringComparison.OrdinalIgnoreCase)),
+            needsProbeCount,
+            needsPreconditionCount,
+            blockedCount,
             entries,
             blockedReasons = new[]
             {
-                "Stage-1 tool-sweep does not invoke unknown-risk tools. Use mcgs tool-probe after candidate-safe classification."
+                needsPreconditionCount > 0
+                    ? $"Stage-1 tool-sweep still has {needsPreconditionCount} tools with unmet preconditions; run targeted mcgs tool-probe evidence before treating them as understood."
+                    : "Stage-1 tool-sweep has no unmet preconditions.",
+                blockedCount > 0
+                    ? $"Stage-1 tool-sweep has {blockedCount} blocked tools whose blocker/risk record is explicit."
+                    : "Stage-1 tool-sweep has no blocked tools.",
+                "Stage-1 tool-sweep does not invoke unknown-risk tools. Entries with needs-precondition/blocked are classified from local toolbar state and still require safe follow-up evidence or documented blockers."
             }
         };
         File.WriteAllText(Path.Combine(outDir, "tool-sweep.json"), JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-sweep: " + outDir);
         return result.status == "PASS" ? 0 : 2;
     }
+
+    private static Dictionary<string, McgsToolProbeEvidence> LoadMcgsToolProbeEvidence(string? probeRoot)
+    {
+        var result = new Dictionary<string, McgsToolProbeEvidence>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(probeRoot))
+            return result;
+        var root = FullPath(probeRoot);
+        if (!Directory.Exists(root))
+            return result;
+
+        foreach (var path in Directory.EnumerateFiles(root, "tool-probe.json", SearchOption.AllDirectories)
+                     .OrderByDescending(File.GetLastWriteTimeUtc))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+                var toolId = JsonString(doc.RootElement, "toolId") ?? "";
+                if (string.IsNullOrWhiteSpace(toolId))
+                    continue;
+                var status = JsonString(doc.RootElement, "status") ?? "UNKNOWN";
+                if (result.TryGetValue(toolId, out var existing) &&
+                    existing.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                result[toolId] = new McgsToolProbeEvidence(path, status);
+            }
+            catch
+            {
+                // Corrupt probe evidence should not make the sweep look better.
+            }
+        }
+        return result;
+    }
+
+    private sealed record McgsToolProbeEvidence(string Path, string Status);
 
     private sealed class McgsCatalogBuild
     {
@@ -173,6 +380,7 @@ internal static partial class Program
         public string safetyClass { get; set; } = "unknown-risk";
         public string invocationRoute { get; set; } = "";
         public string expectedEffect { get; set; } = "";
+        public string commandResourceText { get; set; } = "";
         public string evidenceSource { get; set; } = "";
         public string nextProbe { get; set; } = "";
     }
@@ -254,6 +462,22 @@ internal static partial class Program
                 "enters the realtime database editor before adding Data objects on a candidate copy",
                 "workflow run realtime-db.add",
                 ""),
+            57600 => new KnownMcgsCommand(
+                "MFC file new",
+                "needs-precondition",
+                "formal-apply-required",
+                "WM_COMMAND 57600 in an isolated editor instance",
+                "standard MFC File/New command; may replace the active project context or prompt to save",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe only in an isolated disposable editor session with no official project open; capture before/after process state and close without saving."),
+            57601 => new KnownMcgsCommand(
+                "MFC file open",
+                "needs-precondition",
+                "formal-apply-required",
+                "WM_COMMAND 57601 in an isolated editor instance",
+                "standard MFC File/Open command; opens a file dialog and may replace the active project context",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe only in an isolated disposable editor session and cancel the dialog; never invoke against the official project."),
             57603 => new KnownMcgsCommand(
                 "save project",
                 "implemented",
@@ -262,8 +486,197 @@ internal static partial class Program
                 "saves the currently opened candidate project after controlled GUI writes",
                 "mutating workflow save/readback evidence",
                 ""),
+            57607 => new KnownMcgsCommand(
+                "MFC print",
+                "blocked",
+                "unknown-risk",
+                "WM_COMMAND 57607",
+                "standard MFC File/Print command; can interact with OS printer configuration or external devices",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Do not invoke in unattended sweeps; if needed, probe manually in a printer-disabled VM and cancel before printing."),
+            57609 => new KnownMcgsCommand(
+                "MFC print preview",
+                "needs-precondition",
+                "read-only",
+                "WM_COMMAND 57609 on a disposable candidate with preview close handling",
+                "standard MFC Print Preview command; should be read-only but changes editor UI mode until closed",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe in a disposable candidate, capture window tree before/after, then close preview and verify project hash unchanged."),
+            57634 => new KnownMcgsCommand(
+                "MFC edit copy",
+                "implemented",
+                "read-only",
+                "WM_COMMAND 57634 or Ctrl+C after selecting canvas objects",
+                "standard MFC Edit/Copy command; copies the current selection to clipboard",
+                "canvas clipboard-probe captured MCGS_DRAW_OBJ without saving candidate",
+                ""),
+            57635 => new KnownMcgsCommand(
+                "MFC edit cut",
+                "needs-precondition",
+                "candidate-safe-mutation",
+                "WM_COMMAND 57635 after selecting an object on a throwaway candidate",
+                "standard MFC Edit/Cut command; removes the current selection and writes clipboard data",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe only on a throwaway candidate with a known disposable object; verify before/after hash and clipboard formats."),
+            57637 => new KnownMcgsCommand(
+                "MFC edit paste",
+                "needs-precondition",
+                "candidate-safe-mutation",
+                "WM_COMMAND 57637 after seeding clipboard from a disposable object",
+                "standard MFC Edit/Paste command; inserts clipboard content into the active editor surface",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe only on a throwaway candidate with known clipboard seed; verify created object through property-map/readback."),
+            57643 => new KnownMcgsCommand(
+                "MFC edit undo",
+                "needs-precondition",
+                "candidate-safe-mutation",
+                "WM_COMMAND 57643 after a known reversible throwaway edit",
+                "standard MFC Edit/Undo command; changes candidate state only when an undo stack exists",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe after a controlled disposable edit; verify candidate hash returns to the pre-edit value."),
+            57644 => new KnownMcgsCommand(
+                "MFC edit redo",
+                "needs-precondition",
+                "candidate-safe-mutation",
+                "WM_COMMAND 57644 after a known undo on a throwaway candidate",
+                "standard MFC Edit/Redo command; reapplies a reverted candidate edit",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe after a controlled undo; verify candidate hash returns to the post-edit value."),
+            57669 => new KnownMcgsCommand(
+                "MFC context help",
+                "needs-precondition",
+                "read-only",
+                "WM_COMMAND 57669 with help-mode cancellation",
+                "standard MFC context-help command; may switch cursor/help mode or open local help",
+                "MFC standard command id plus toolbar-probe enabled-state evidence",
+                "Probe only with deterministic help-mode cancellation and window-tree evidence; verify project hash unchanged."),
             _ => null
         };
+    }
+
+    private static KnownMcgsCommand? DescribeResourceBackedCommand(int? commandId, string toolbarText, string commandResourceText)
+    {
+        if (commandId.GetValueOrDefault() == 34026 &&
+            toolbarText.Contains("动画组态", StringComparison.OrdinalIgnoreCase))
+        {
+            return new KnownMcgsCommand(
+                "blocked unidentified animation toolbar command 34026",
+                "blocked",
+                "unknown-risk",
+                "WM_COMMAND 34026 is blocked from unattended invocation",
+                "McgsSetE.exe has no RT_STRING text for this command. Workbench-context and active-animation probes showed no visible window-tree/screenshot effect, but MCGS open/close mutates project bytes in this profile, so silent state mutation cannot be ruled out.",
+                "toolbar-probe enabled-state evidence; mcgs-tool-probe active-animation no-visible-effect evidence; Gemini conservative review",
+                "Do not invoke again in unattended sweeps until static handler analysis or a reliable normalized MCE diff can prove the command has no project-state side effect.");
+        }
+
+        if (commandId is null || string.IsNullOrWhiteSpace(commandResourceText))
+            return null;
+
+        var id = commandId.Value;
+        var source = "McgsSetE.exe RT_STRING command resource plus toolbar-probe evidence";
+        return id switch
+        {
+            32781 => ReadOnlyResourceCommand(id, "workbench large-icon view", toolbarText, commandResourceText, source,
+                "switches the workbench object list to large-icon view"),
+            32782 => ReadOnlyResourceCommand(id, "workbench small-icon view", toolbarText, commandResourceText, source,
+                "switches the workbench object list to small-icon view"),
+            32783 => ReadOnlyResourceCommand(id, "workbench list view", toolbarText, commandResourceText, source,
+                "switches the workbench object list to list view"),
+            32784 => ReadOnlyResourceCommand(id, "workbench details view", toolbarText, commandResourceText, source,
+                "switches the workbench object list to details view"),
+            32787 => new KnownMcgsCommand(
+                "run project in MCGSRUN",
+                "blocked",
+                "hardware-risk",
+                "WM_COMMAND 32787",
+                commandResourceText,
+                source,
+                "Do not invoke in unattended coverage; it starts MCGSRUN and can interact with runtime drivers or field hardware."),
+            32790 => ReadOnlyResourceCommand(id, "show workspace", toolbarText, commandResourceText, source,
+                "shows or focuses the workspace pane"),
+            32801 => ReadOnlyResourceCommand(id, "browse realtime database objects", toolbarText, commandResourceText, source,
+                "opens or focuses realtime database object browsing"),
+            32802 => CandidateResourceCommand(id, "move current menu down", toolbarText, commandResourceText, source,
+                "moves the current menu item down in menu configuration"),
+            32803 => CandidateResourceCommand(id, "move current menu up", toolbarText, commandResourceText, source,
+                "moves the current menu item up in menu configuration"),
+            32805 => CandidateResourceCommand(id, "add pull-down menu", toolbarText, commandResourceText, source,
+                "adds a pull-down menu in menu configuration"),
+            32806 => CandidateResourceCommand(id, "add menu item", toolbarText, commandResourceText, source,
+                "adds a menu item in menu configuration"),
+            32807 => CandidateResourceCommand(id, "add menu separator", toolbarText, commandResourceText, source,
+                "adds a menu separator line in menu configuration"),
+            32848 => ReadOnlyResourceCommand(id, "toggle toolbox", toolbarText, commandResourceText, source,
+                "opens or closes the toolbox pane"),
+            32851 => CandidateResourceCommand(id, "add strategy policy line", toolbarText, commandResourceText, source,
+                "adds a policy line in strategy configuration"),
+            33049 => CandidateResourceCommand(id, "move device driver up", toolbarText, commandResourceText, source,
+                "moves the selected device driver up"),
+            33050 => CandidateResourceCommand(id, "move device driver down", toolbarText, commandResourceText, source,
+                "moves the selected device driver down"),
+            33054 => CandidateResourceCommand(id, "move menu left", toolbarText, commandResourceText, source,
+                "moves the current menu left"),
+            33056 => CandidateResourceCommand(id, "move menu right", toolbarText, commandResourceText, source,
+                "moves the current menu right"),
+            33062 => CandidateResourceCommand(id, "move policy line down", toolbarText, commandResourceText, source,
+                "moves the selected policy line down"),
+            33063 => CandidateResourceCommand(id, "move policy line up", toolbarText, commandResourceText, source,
+                "moves the selected policy line up"),
+            33064 => ReadOnlyResourceCommand(id, "show policy notes", toolbarText, commandResourceText, source,
+                "shows or hides policy notes"),
+            33996 => ReadOnlyResourceCommand(id, "toggle animation edit toolbar", toolbarText, commandResourceText, source,
+                "opens or closes the animation edit toolbar"),
+            34024 => ReadOnlyResourceCommand(id, "toggle grid display", toolbarText, commandResourceText, source,
+                "controls animation canvas grid display"),
+            34027 => new KnownMcgsCommand(
+                "select current editing language",
+                "needs-precondition",
+                "unknown-risk",
+                $"WM_COMMAND {id} in a disposable editor session, then cancel/close the dialog",
+                commandResourceText,
+                source,
+                "Probe on a throwaway candidate; capture the language dialog fields, cancel it, and verify project hash unchanged."),
+            34059 => new KnownMcgsCommand(
+                "multi-language configuration dialog",
+                "needs-precondition",
+                "candidate-safe-mutation",
+                $"WM_COMMAND {id} in a disposable editor session, then cancel/close the dialog",
+                commandResourceText,
+                source,
+                "Probe on a throwaway candidate; capture the dialog/window tree, cancel it, and verify project hash unchanged."),
+            _ => null
+        };
+    }
+
+    private static KnownMcgsCommand ReadOnlyResourceCommand(int commandId, string displayName, string toolbarText, string resourceText, string evidenceSource, string effect)
+        => new(
+            displayName,
+            "needs-precondition",
+            "read-only",
+            $"WM_COMMAND {commandId} in {SafeToolbarContext(toolbarText)} with before/after project hash",
+            string.IsNullOrWhiteSpace(resourceText) ? effect : resourceText,
+            evidenceSource,
+            "Probe on a disposable candidate, capture window tree before/after, then verify the project SHA is unchanged.");
+
+    private static KnownMcgsCommand CandidateResourceCommand(int commandId, string displayName, string toolbarText, string resourceText, string evidenceSource, string effect)
+        => new(
+            displayName,
+            "needs-precondition",
+            "candidate-safe-mutation",
+            $"WM_COMMAND {commandId} in {SafeToolbarContext(toolbarText)} on a throwaway candidate",
+            string.IsNullOrWhiteSpace(resourceText) ? effect : resourceText,
+            evidenceSource,
+            "Probe on a throwaway candidate with a minimal matching editor context; record before/after SHA, dialog/window tree, and rollback evidence.");
+
+    private static string SafeToolbarContext(string toolbarText)
+        => string.IsNullOrWhiteSpace(toolbarText) ? "the matching editor context" : toolbarText;
+
+    private static string ShortResourceCommandName(string resourceText, int? commandId)
+    {
+        if (string.IsNullOrWhiteSpace(resourceText))
+            return $"command {commandId}";
+        var text = resourceText.Trim().TrimEnd('.');
+        return text.Length <= 48 ? text : text[..48] + "...";
     }
 
     private static McgsCatalogBuild BuildMcgsCatalog(string project, string? toolbarProbePath, string outDir)
@@ -294,14 +707,17 @@ internal static partial class Program
                             var enabled = JsonBoolAny(button, "Enabled", "enabled") == true;
                             var hidden = JsonBoolAny(button, "Hidden", "hidden") == true;
                             var isSeparator = commandId.GetValueOrDefault() == 0;
-                            var known = DescribeKnownToolbarCommand(commandId);
+                            var commandResourceText = isSeparator ? "" : TryReadMcgsCommandResourceText(commandId.GetValueOrDefault()) ?? "";
+                            var known = DescribeKnownToolbarCommand(commandId) ??
+                                        DescribeResourceBackedCommand(commandId, toolbarText, commandResourceText) ??
+                                        DescribeToolbarContextCommand(commandId, toolbarText, commandResourceText, enabled, hidden);
                             build.Tools.Add(new McgsToolEntry
                             {
                                 toolId = isSeparator
                                     ? $"toolbar:{toolbarIndex}:{index}:separator"
                                     : $"toolbar:{toolbarIndex}:{index}:{commandId}",
                                 displayName = string.IsNullOrWhiteSpace(text)
-                                    ? (isSeparator ? "separator" : known?.DisplayName ?? $"command {commandId}")
+                                    ? (isSeparator ? "separator" : known?.DisplayName ?? ShortResourceCommandName(commandResourceText, commandId))
                                     : text,
                                 source = "toolbar",
                                 uiPath = string.IsNullOrWhiteSpace(toolbarText) ? $"toolbar[{toolbarIndex}]/button[{index}]" : $"{toolbarText}/button[{index}]",
@@ -312,6 +728,7 @@ internal static partial class Program
                                 safetyClass = isSeparator ? "read-only" : known?.SafetyClass ?? "unknown-risk",
                                 invocationRoute = isSeparator ? "" : known?.InvocationRoute ?? $"WM_COMMAND {commandId}",
                                 expectedEffect = isSeparator ? "visual separator" : known?.ExpectedEffect ?? "unknown until candidate-safe probe records before/after evidence",
+                                commandResourceText = commandResourceText,
                                 evidenceSource = known?.EvidenceSource ?? probePath,
                                 nextProbe = isSeparator ? "" : known?.NextProbe ?? "Probe command on throwaway candidate after classifying menu/toolbar context and expected side effect."
                             });
@@ -333,7 +750,66 @@ internal static partial class Program
             build.Functions.Add(workflow);
 
         build.Tools.AddRange(SupportedMcgsCtlTools(project));
+        foreach (var tool in build.Tools)
+            build.Functions.Add(McgsFunctionFromTool(tool));
         return build;
+    }
+
+    private static KnownMcgsCommand? DescribeToolbarContextCommand(int? commandId, string toolbarText, string commandResourceText, bool enabled, bool hidden)
+    {
+        if (commandId.GetValueOrDefault() == 0)
+            return null;
+        if (hidden)
+        {
+            return new KnownMcgsCommand(
+                $"hidden toolbar command {commandId}",
+                "needs-precondition",
+                "unknown-risk",
+                $"WM_COMMAND {commandId} after toolbar button is visible",
+                "toolbar button is hidden in the captured local editor state",
+                "toolbar-probe hidden-state evidence",
+                "Identify the editor mode that shows this command, then rerun tool-catalog/tool-probe on a throwaway candidate.");
+        }
+        if (!enabled)
+        {
+            return new KnownMcgsCommand(
+                $"disabled {toolbarText} command {commandId}",
+                "needs-precondition",
+                "unknown-risk",
+                $"WM_COMMAND {commandId} after its toolbar precondition is met",
+                "toolbar button is present but disabled in the captured local editor state",
+                "toolbar-probe disabled-state evidence",
+                "Identify the selection/editor-mode precondition that enables this command, then rerun on a throwaway candidate.");
+        }
+
+        if (toolbarText.Contains("表格编辑", StringComparison.OrdinalIgnoreCase))
+        {
+            return new KnownMcgsCommand(
+                $"table editor command {commandId}",
+                "needs-precondition",
+                "unknown-risk",
+                $"WM_COMMAND {commandId} only after a concrete table editor context is opened on a throwaway candidate",
+                "table-edit toolbar command captured while no active table editor surface was available",
+                "toolbar-probe table-edit context evidence",
+                "Open a realtime-data/device/table editor context on a throwaway candidate, rerun toolbar-probe, then record before/after candidate hash and table evidence before invoking.");
+        }
+
+        if (toolbarText.Contains("动画组态", StringComparison.OrdinalIgnoreCase) ||
+            toolbarText.Contains("菜单组态", StringComparison.OrdinalIgnoreCase) ||
+            toolbarText.Contains("策略组态", StringComparison.OrdinalIgnoreCase) ||
+            toolbarText.Contains("设备组态", StringComparison.OrdinalIgnoreCase))
+        {
+            return new KnownMcgsCommand(
+                $"{toolbarText} command {commandId}",
+                "needs-probe",
+                "candidate-safe-mutation",
+                $"WM_COMMAND {commandId} on a throwaway candidate in {toolbarText}",
+                string.IsNullOrWhiteSpace(commandResourceText) ? "enabled editor-profile toolbar command; side effect is not yet proven" : commandResourceText,
+                string.IsNullOrWhiteSpace(commandResourceText) ? "toolbar-probe enabled-state evidence" : "McgsSetE.exe RT_STRING command resource plus toolbar-probe evidence",
+                "Run mcgs tool-probe on a throwaway candidate with before/after project hash, window tree, and dialog capture.");
+        }
+
+        return null;
     }
 
     private static McgsCatalogBuild ReadMcgsCatalog(string project, string catalogPath)
@@ -357,6 +833,7 @@ internal static partial class Program
                     safetyClass = JsonStringAny(tool, "safetyClass", "SafetyClass") ?? "unknown-risk",
                     invocationRoute = JsonStringAny(tool, "invocationRoute", "InvocationRoute") ?? "",
                     expectedEffect = JsonStringAny(tool, "expectedEffect", "ExpectedEffect") ?? "",
+                    commandResourceText = JsonStringAny(tool, "commandResourceText", "CommandResourceText") ?? "",
                     evidenceSource = JsonStringAny(tool, "evidenceSource", "EvidenceSource") ?? catalogPath,
                     nextProbe = JsonStringAny(tool, "nextProbe", "NextProbe") ?? ""
                 });
@@ -392,6 +869,7 @@ internal static partial class Program
             status = "PASS",
             createdAt = DateTimeOffset.Now.ToString("O"),
             functionCount = build.FunctionCount,
+            toolBackedFunctionCount = build.Tools.Count,
             functions = build.Functions
         }, JsonOptions()), Encoding.UTF8);
     }
@@ -411,6 +889,100 @@ internal static partial class Program
             .Select(info => info.FullName)
             .FirstOrDefault();
     }
+
+    private static readonly Dictionary<int, string?> McgsCommandResourceTextCache = new();
+
+    private static string? TryReadMcgsCommandResourceText(int commandId)
+    {
+        if (McgsCommandResourceTextCache.TryGetValue(commandId, out var cached))
+            return cached;
+
+        string? value = null;
+        try
+        {
+            var editor = FullPath(EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+            if (File.Exists(editor))
+                value = TryReadStringTableResource(editor, commandId);
+        }
+        catch
+        {
+            value = null;
+        }
+
+        McgsCommandResourceTextCache[commandId] = value;
+        return value;
+    }
+
+    private static string? TryReadStringTableResource(string file, int stringId)
+    {
+        const uint loadLibraryAsDataFile = 0x00000002;
+        var module = LoadLibraryExFullCoverage(file, IntPtr.Zero, loadLibraryAsDataFile);
+        if (module == IntPtr.Zero)
+            return null;
+
+        try
+        {
+            var blockId = (stringId / 16) + 1;
+            var stringIndex = stringId % 16;
+            var resource = FindResourceFullCoverage(module, MakeIntResourceFullCoverage(blockId), MakeIntResourceFullCoverage(6));
+            if (resource == IntPtr.Zero)
+                return null;
+
+            var loaded = LoadResourceFullCoverage(module, resource);
+            var locked = LockResourceFullCoverage(loaded);
+            var size = SizeofResourceFullCoverage(module, resource);
+            if (locked == IntPtr.Zero || size == 0)
+                return null;
+
+            var bytes = new byte[size];
+            Marshal.Copy(locked, bytes, 0, bytes.Length);
+            var offset = 0;
+            for (var i = 0; i < 16; i++)
+            {
+                if (offset + 2 > bytes.Length)
+                    return null;
+                var len = BitConverter.ToUInt16(bytes, offset);
+                offset += 2;
+                var text = "";
+                if (len > 0)
+                {
+                    var byteCount = len * 2;
+                    if (offset + byteCount > bytes.Length)
+                        return null;
+                    text = Encoding.Unicode.GetString(bytes, offset, byteCount);
+                    offset += byteCount;
+                }
+                if (i == stringIndex)
+                    return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+            }
+        }
+        finally
+        {
+            FreeLibraryFullCoverage(module);
+        }
+
+        return null;
+    }
+
+    private static IntPtr MakeIntResourceFullCoverage(int id) => (IntPtr)id;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "LoadLibraryExW")]
+    private static extern IntPtr LoadLibraryExFullCoverage(string lpFileName, IntPtr hFile, uint dwFlags);
+
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "FindResourceW")]
+    private static extern IntPtr FindResourceFullCoverage(IntPtr hModule, IntPtr lpName, IntPtr lpType);
+
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "LoadResource")]
+    private static extern IntPtr LoadResourceFullCoverage(IntPtr hModule, IntPtr hResInfo);
+
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "LockResource")]
+    private static extern IntPtr LockResourceFullCoverage(IntPtr hResData);
+
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SizeofResource")]
+    private static extern uint SizeofResourceFullCoverage(IntPtr hModule, IntPtr hResInfo);
+
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "FreeLibrary")]
+    private static extern bool FreeLibraryFullCoverage(IntPtr hModule);
 
     private static IEnumerable<object> SupportedWorkflowFunctions()
     {
@@ -437,6 +1009,11 @@ internal static partial class Program
                 functionId = "workflow:" + workflow,
                 name = workflow,
                 purpose = WorkflowPurpose(workflow),
+                uiLocations = new[] { "CLI/workflow" },
+                commandRoute = "mcgsctl workflow run " + workflow,
+                inputs = WorkflowInputs(workflow),
+                outputs = WorkflowOutputs(workflow),
+                sideEffects = WorkflowSideEffects(workflow),
                 invocationRoute = "mcgsctl workflow run " + workflow,
                 safetyClass = workflow.Contains("apply", StringComparison.OrdinalIgnoreCase)
                     ? "formal-apply-required"
@@ -444,10 +1021,50 @@ internal static partial class Program
                         ? "formal-apply-required"
                         : "candidate-safe-mutation",
                 supportStatus = "implemented",
+                relatedObjectTypes = WorkflowRelatedObjectTypes(workflow),
+                relatedPropertyDialogs = WorkflowRelatedPropertyDialogs(workflow),
                 evidenceSource = "mcgsctl workflow result schema and existing GUI/readback workflows",
-                validation = "workflow result checks plus candidate summarize/validate where applicable"
+                validation = "workflow result checks plus candidate summarize/validate where applicable",
+                validationReadbackMethod = WorkflowValidationReadback(workflow),
+                confidence = 0.9,
+                nextProbe = ""
             };
         }
+    }
+
+    private static object McgsFunctionFromTool(McgsToolEntry tool)
+    {
+        var commandRoute = string.IsNullOrWhiteSpace(tool.invocationRoute)
+            ? (tool.commandId.HasValue ? $"WM_COMMAND {tool.commandId}" : tool.toolId)
+            : tool.invocationRoute;
+        var purpose = ToolPurpose(tool);
+        var outputs = string.IsNullOrWhiteSpace(tool.expectedEffect)
+            ? "effect is not yet proven; see nextProbe"
+            : tool.expectedEffect;
+
+        return new
+        {
+            functionId = "tool:" + tool.toolId,
+            name = tool.displayName,
+            purpose,
+            uiLocations = new[] { tool.uiPath },
+            commandRoute,
+            inputs = ToolInputs(tool),
+            outputs,
+            sideEffects = ToolSideEffects(tool),
+            relatedObjectTypes = ToolRelatedObjectTypes(tool),
+            relatedPropertyDialogs = ToolRelatedPropertyDialogs(tool),
+            validationReadbackMethod = ToolValidationReadback(tool),
+            safetyClass = tool.safetyClass,
+            supportStatus = tool.supportStatus,
+            commandId = tool.commandId,
+            commandResourceText = tool.commandResourceText,
+            confidence = ToolFunctionConfidence(tool),
+            evidenceSource = tool.evidenceSource,
+            nextProbe = string.IsNullOrWhiteSpace(tool.nextProbe)
+                ? ""
+                : tool.nextProbe
+        };
     }
 
     private static IEnumerable<McgsToolEntry> SupportedMcgsCtlTools(string project)
@@ -499,6 +1116,162 @@ internal static partial class Program
         "project.rollback" => "restore official file from rollback package",
         _ => "mcgsctl workflow"
     };
+
+    private static string[] WorkflowInputs(string workflow) => workflow switch
+    {
+        "realtime-db.add" => new[] { "source/project candidate", "workdir", "name", "type", "initial value" },
+        "window.button.add-momentary" => new[] { "project candidate", "text", "variable", "canvas rectangle" },
+        "window.indicator.add" => new[] { "project candidate", "text", "expression", "canvas rectangle" },
+        "window.static-text.add" => new[] { "project candidate", "text", "canvas rectangle" },
+        "window.lamp.add-native" => new[] { "project candidate", "text", "variable/expression", "canvas rectangle" },
+        "window.layout.apply" => new[] { "source/project candidate", "layout spec", "workdir" },
+        "device.channel.map" => new[] { "source/project candidate", "area", "address", "count", "data-type-index", "connect-base" },
+        "script.edit" => new[] { "source/project candidate", "script text", "button text", "verify token", "check flags" },
+        "project.check" => new[] { "project candidate", "fail-on-warning flag" },
+        "project.check-save" => new[] { "project candidate", "fail-on-warning flag" },
+        "safety.verify" => new[] { "project candidate", "safety spec", "evidence dir", "optional AWL" },
+        "project.apply-candidate" => new[] { "official source", "candidate", "approval" },
+        "project.rollback" => new[] { "rollback package", "target official copy" },
+        _ => new[] { "workflow arguments" }
+    };
+
+    private static string WorkflowOutputs(string workflow) => workflow switch
+    {
+        "window.layout.apply" => "candidate.MCE update plus layout/readback workflow result evidence",
+        "project.check" => "project-check/check-result.json from a same-SHA temporary copy",
+        "safety.verify" => "safety-result.json plus candidate-final snapshot evidence",
+        "project.apply-candidate" => "File.Replace official update plus rollback package",
+        "project.rollback" => "restored target file after rollback metadata checks",
+        _ => "workflow result JSON, candidate SHA chain evidence, and optional GUI/readback artifacts"
+    };
+
+    private static string WorkflowSideEffects(string workflow) => workflow switch
+    {
+        "project.check" => "opens and checks a temporary copy; the real candidate must remain unchanged",
+        "safety.verify" => "may refresh candidate-final evidence under the run directory; does not mutate candidate",
+        "project.apply-candidate" => "replaces the approved official target and creates rollback evidence",
+        "project.rollback" => "replaces the rollback target after metadata checks",
+        _ when workflow.Contains("apply", StringComparison.OrdinalIgnoreCase) => "mutates only the configured candidate/workdir unless formal approval is supplied",
+        _ => "mutates candidate copies only when the workflow is declared mutating"
+    };
+
+    private static string[] WorkflowRelatedObjectTypes(string workflow) => workflow switch
+    {
+        "window.button.add-momentary" => new[] { "standard-button", "momentary-button" },
+        "window.indicator.add" => new[] { "standard-button", "status-button" },
+        "window.static-text.add" => new[] { "native-static-text", "section-title", "static-label" },
+        "window.lamp.add-native" => new[] { "native-lamp", "animation-display" },
+        "window.layout.apply" => new[] { "layout-supported UI objects" },
+        "device.channel.map" => new[] { "Smart200 channel rows", "Data objects" },
+        "script.edit" => new[] { "script button/action properties", "Data objects" },
+        _ => Array.Empty<string>()
+    };
+
+    private static string[] WorkflowRelatedPropertyDialogs(string workflow) => workflow switch
+    {
+        "window.button.add-momentary" => new[] { "button basic/action/script tabs" },
+        "window.indicator.add" => new[] { "button basic/visibility/action/script tabs" },
+        "window.static-text.add" => new[] { "label/static text property tabs" },
+        "window.lamp.add-native" => new[] { "animation display/lamp property tabs" },
+        "window.layout.apply" => new[] { "property dialogs for each object kind in the layout" },
+        "script.edit" => new[] { "script editor/check dialog" },
+        _ => Array.Empty<string>()
+    };
+
+    private static string WorkflowValidationReadback(string workflow) => workflow switch
+    {
+        "window.button.add-momentary" => "reopen candidate, select object, verify label plus press=set1/release=clear0 action pages",
+        "window.indicator.add" => "reopen candidate, select object, verify label, visibility expression, no operation, and empty script",
+        "window.static-text.add" => "reopen candidate, select native label, verify label text",
+        "window.lamp.add-native" => "reopen candidate, select native animation display, verify text and display variable",
+        "window.layout.apply" => "layout readback plus per-object workflow/readback evidence",
+        "device.channel.map" => "reopen Smart200 table and compare smart200Channels with safety spec",
+        "script.edit" => "script token/readback check plus Data delta evidence",
+        "project.check" => "project-check result, same-SHA temporary copy evidence, and candidate unchanged check",
+        "safety.verify" => "safety-result required checks and candidate-final SHA match",
+        _ => "workflow result checks plus candidate summary/validate gates"
+    };
+
+    private static string ToolPurpose(McgsToolEntry tool)
+    {
+        if (!string.IsNullOrWhiteSpace(tool.commandResourceText))
+            return FirstResourceLine(tool.commandResourceText);
+        if (!string.IsNullOrWhiteSpace(tool.expectedEffect) && !tool.expectedEffect.Contains("unknown", StringComparison.OrdinalIgnoreCase))
+            return tool.expectedEffect;
+        return tool.displayName;
+    }
+
+    private static string ToolInputs(McgsToolEntry tool)
+    {
+        if (tool.commandId.HasValue)
+            return $"active MCGS editor context plus WM_COMMAND {tool.commandId}";
+        return tool.source.Equals("mcgsctl", StringComparison.OrdinalIgnoreCase)
+            ? "mcgsctl command arguments"
+            : "UI selection/context";
+    }
+
+    private static string ToolSideEffects(McgsToolEntry tool) => tool.safetyClass switch
+    {
+        "read-only" => "expected to inspect, copy, navigate, or toggle editor UI without saving project content",
+        "candidate-safe-mutation" => "may mutate the active candidate or editor selection; probe only on candidate/throwaway copies",
+        "formal-apply-required" => "can affect official project/open-file state and requires explicit approval or isolated disposable session",
+        "hardware-risk" => "may launch runtime or interact with live system behavior; do not invoke in unattended sweeps",
+        _ => "side effect is unknown until a guarded probe provides before/after evidence"
+    };
+
+    private static string[] ToolRelatedObjectTypes(McgsToolEntry tool)
+    {
+        var text = (tool.displayName + " " + tool.expectedEffect + " " + tool.commandResourceText).ToLowerInvariant();
+        if (text.Contains("button") || text.Contains("鎸夐挳", StringComparison.OrdinalIgnoreCase))
+            return new[] { "button" };
+        if (text.Contains("lamp") || text.Contains("display") || text.Contains("animation"))
+            return new[] { "animation-display", "native-lamp" };
+        if (text.Contains("static text") || text.Contains("label") || text.Contains("text"))
+            return new[] { "static-text", "label" };
+        if (text.Contains("table") || text.Contains("row") || text.Contains("column"))
+            return new[] { "table-editor" };
+        return Array.Empty<string>();
+    }
+
+    private static string[] ToolRelatedPropertyDialogs(McgsToolEntry tool)
+    {
+        if (tool.commandId == 32785)
+            return new[] { "selected object property dialog" };
+        var objectTypes = ToolRelatedObjectTypes(tool);
+        if (objectTypes.Contains("button"))
+            return new[] { "button property dialog" };
+        if (objectTypes.Contains("animation-display") || objectTypes.Contains("native-lamp"))
+            return new[] { "animation display property dialog" };
+        if (objectTypes.Contains("static-text") || objectTypes.Contains("label"))
+            return new[] { "label/static text property dialog" };
+        return Array.Empty<string>();
+    }
+
+    private static string ToolValidationReadback(McgsToolEntry tool) => tool.supportStatus switch
+    {
+        "implemented" when tool.safetyClass == "read-only" => "catalog/resource/window-tree evidence; no candidate mutation expected",
+        "implemented" => "existing workflow/readback evidence referenced by evidenceSource",
+        "blocked" => "not invoked; blocker and nextProbe document why local file-safe validation is not complete",
+        "needs-precondition" => "open the required editor context or controlled throwaway candidate, then run mcgs tool-probe with before/after evidence",
+        _ => "run mcgs tool-probe on a throwaway candidate with before/after hash, screenshots, and window-tree evidence"
+    };
+
+    private static double ToolFunctionConfidence(McgsToolEntry tool) => tool.supportStatus switch
+    {
+        "implemented" when !string.IsNullOrWhiteSpace(tool.evidenceSource) => 0.85,
+        "implemented" => 0.75,
+        "needs-precondition" when !string.IsNullOrWhiteSpace(tool.commandResourceText) => 0.65,
+        "needs-precondition" => 0.55,
+        "blocked" => 0.6,
+        _ => 0.35
+    };
+
+    private static string FirstResourceLine(string value)
+    {
+        return value.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Trim())
+            .FirstOrDefault(s => s.Length > 0) ?? value.Trim();
+    }
 
     private static int CanvasPropertyMapProbe(string[] args)
     {
@@ -608,6 +1381,9 @@ internal static partial class Program
 
             using var session = OpenCanvasProbeSession(args, outDir, "property-readback", out var openedProcess, out main);
             process = openedProcess;
+            var revealOverlap = Has(args, "--reveal-overlap-delete")
+                ? TryRevealOverlapByDelete(process.Id, session.Main, session.Canvas, x, y, width, height, outDir)
+                : null;
             var dialog = OpenCanvasObjectPropertyDialog(process.Id, session.Main, session.Canvas,
                 x, y, width, height, expectedTitle, preferCommand);
 
@@ -646,6 +1422,9 @@ internal static partial class Program
             var fontDialog = Has(args, "--probe-font")
                 ? TryProbeFontDialog(process.Id, dialog, outDir)
                 : null;
+            var permissionDialog = Has(args, "--probe-permissions")
+                ? TryProbePermissionDialog(process.Id, dialog, outDir)
+                : null;
             var displayedText = JsonStringAny(target, "DisplayedText", "displayedText") ?? "";
             var selectionVerified = string.IsNullOrWhiteSpace(displayedText) ||
                 DialogTabsContainText(tabs, displayedText);
@@ -667,6 +1446,8 @@ internal static partial class Program
                 dialog = WindowInfo.FromHandle(dialog),
                 tabs,
                 fontDialog,
+                permissionDialog,
+                revealOverlap,
                 blockedReasons = selectionVerified
                     ? Array.Empty<string>()
                     : new[] { "property dialog content did not contain requested displayedText; coordinate may have selected an overlapping object" },
@@ -782,6 +1563,55 @@ internal static partial class Program
         return controls.ToArray();
     }
 
+    private static object TryRevealOverlapByDelete(int pid, IntPtr main, IntPtr canvas,
+        int x, int y, int width, int height, string outDir)
+    {
+        var cx = x + width / 2;
+        var cy = y + height / 2;
+        TryScreenshot(canvas, Path.Combine(outDir, "reveal-overlap-before-delete.png"));
+
+        Native.SetForegroundWindow(main);
+        Thread.Sleep(150);
+        UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: false, mouse: true);
+        Thread.Sleep(250);
+        SendKeys.SendWait("{DEL}");
+        Thread.Sleep(600);
+
+        var dialogs = new List<object>();
+        foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
+                     Native.GetClass(h) == "#32770" && Native.IsWindowVisible(h)))
+        {
+            var text = DialogText(dialog);
+            var action = "observe";
+            if (ContainsAny(text, "删除", "Delete", "是否"))
+            {
+                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "click-yes", "reveal-overlap-delete.confirm");
+                ClickButtonByNormalizedText(dialog, mouse: true, "是(&Y)", "是", "确定", "确认", "Yes");
+                action = "confirm-delete";
+                Thread.Sleep(300);
+            }
+            dialogs.Add(new
+            {
+                action,
+                window = WindowInfo.FromHandle(dialog),
+                text = ShortenForEvidence(text, 400)
+            });
+        }
+
+        TryScreenshot(canvas, Path.Combine(outDir, "reveal-overlap-after-delete.png"));
+        var evidence = new
+        {
+            status = "attempted",
+            method = "select-topmost-at-target-center-and-delete-on-property-readback-copy",
+            point = new { x = cx, y = cy },
+            mutationScope = "property-readback-copy; editor is closed with saveIntent=false",
+            dialogs
+        };
+        File.WriteAllText(Path.Combine(outDir, "reveal-overlap-delete.json"),
+            JsonSerializer.Serialize(evidence, JsonOptions()), Encoding.UTF8);
+        return evidence;
+    }
+
     private static object TryProbeFontDialog(int pid, IntPtr ownerDialog, string outDir)
     {
         var fontButton = UiAutomation.EnumerateChildren(ownerDialog)
@@ -863,6 +1693,109 @@ internal static partial class Program
         };
     }
 
+    private static object TryProbePermissionDialog(int pid, IntPtr ownerDialog, string outDir)
+    {
+        var permissionButton = UiAutomation.EnumerateChildren(ownerDialog)
+            .FirstOrDefault(h =>
+                Native.IsWindowVisible(h) &&
+                Native.GetClass(h).Contains("Button", StringComparison.OrdinalIgnoreCase) &&
+                CompactLabel(Native.GetText(h)).StartsWith(CompactLabel("权限"), StringComparison.OrdinalIgnoreCase));
+
+        if (permissionButton == IntPtr.Zero)
+            return new
+            {
+                status = "notApplicable",
+                reason = "property dialog has no visible permission button on the current profile/page"
+            };
+
+        var before = UiAutomation.TopWindowsForPid(pid).ToHashSet();
+        var buttonRect = UiAutomation.GetWindowRect(permissionButton);
+        UiAutomation.ClickPoint(permissionButton, Math.Max(1, buttonRect.Width / 2), Math.Max(1, buttonRect.Height / 2),
+            MouseButton.Left, doubleClick: false, mouse: true);
+        Thread.Sleep(400);
+
+        var permissionDialog = WaitForTopWindow(pid,
+            h => h != ownerDialog &&
+                 Native.GetClass(h) == "#32770" &&
+                 Native.IsWindowVisible(h) &&
+                 !before.Contains(h),
+            TimeSpan.FromSeconds(5));
+
+        if (permissionDialog == IntPtr.Zero)
+            return new
+            {
+                status = "UNKNOWN",
+                reason = "permission button was present, but no permission dialog appeared"
+            };
+
+        try
+        {
+            var controls = SnapshotDialogControls(permissionDialog);
+            var extracted = ExtractPermissionDialogSnapshot(controls);
+            File.WriteAllLines(Path.Combine(outDir, "permission-dialog.tree.txt"), UiAutomation.WindowTreeLines(permissionDialog), Encoding.UTF8);
+            TryScreenshot(permissionDialog, Path.Combine(outDir, "permission-dialog.png"));
+            return new
+            {
+                status = "PASS",
+                window = WindowInfo.FromHandle(permissionDialog),
+                controls,
+                extracted
+            };
+        }
+        finally
+        {
+            if (!ClickButtonByNormalizedText(permissionDialog, mouse: true, "取消", "取消(&C)", "关闭", "Cancel"))
+                UiAutomation.CloseWindow(permissionDialog);
+            Thread.Sleep(250);
+        }
+    }
+
+    private static object ExtractPermissionDialogSnapshot(object[] controls)
+    {
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(controls, JsonOptions()));
+        var array = doc.RootElement.ValueKind == JsonValueKind.Array
+            ? doc.RootElement.EnumerateArray().ToArray()
+            : Array.Empty<JsonElement>();
+
+        var checkedButtons = array
+            .Where(c => JsonBoolAny(c, "visible", "Visible") != false)
+            .Where(c => JsonIntAny(c, "checkState", "CheckState") == 1)
+            .Select(c => JsonStringAny(c, "text", "Text") ?? "")
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var currentValues = array
+            .Where(c => JsonBoolAny(c, "visible", "Visible") != false)
+            .Where(c =>
+            {
+                var cls = JsonStringAny(c, "className", "ClassName") ?? "";
+                return cls.Equals("ComboBox", StringComparison.OrdinalIgnoreCase) ||
+                       cls.Contains("ListBox", StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(ControlCurrentText)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var visibleTexts = array
+            .Where(c => JsonBoolAny(c, "visible", "Visible") != false)
+            .Select(c => JsonStringAny(c, "text", "Text") ?? "")
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .Take(16)
+            .ToArray();
+        var summary = string.Join("; ", checkedButtons.Concat(currentValues));
+        if (string.IsNullOrWhiteSpace(summary))
+            summary = string.Join("; ", visibleTexts);
+
+        return new
+        {
+            summary,
+            checkedButtons,
+            currentValues,
+            visibleTexts
+        };
+    }
+
     private static bool DialogTabsContainText(IEnumerable<object> tabs, string text)
     {
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(tabs, JsonOptions()));
@@ -897,6 +1830,12 @@ internal static partial class Program
     private static string FormatFullCoverageHandle(IntPtr hwnd)
         => "0x" + hwnd.ToInt64().ToString("X");
 
+    private static string ShortenForEvidence(string text, int maxLength)
+    {
+        var compact = Regex.Replace(text ?? "", @"\s+", " ").Trim();
+        return compact.Length <= maxLength ? compact : compact[..maxLength] + "...";
+    }
+
     private sealed class PropertyDialogEvidence
     {
         public string ObjectId { get; init; } = "";
@@ -917,9 +1856,14 @@ internal static partial class Program
         public string? DataObjectOperation { get; set; }
         public string? DataObjectVariable { get; set; }
         public string? ScriptText { get; set; }
+        public string? FontDialogStatus { get; set; }
+        public bool? FontButtonPresent { get; set; }
         public string? FontFamily { get; set; }
         public string? FontSize { get; set; }
         public string? FontStyle { get; set; }
+        public string? ForegroundColorSummary { get; set; }
+        public string? BackgroundColorSummary { get; set; }
+        public string? BorderColorSummary { get; set; }
         public string? NumericMin { get; set; }
         public string? NumericMax { get; set; }
         public string? NumericBase { get; set; }
@@ -931,6 +1875,11 @@ internal static partial class Program
         public string? DecimalDigits { get; set; }
         public string? UnitText { get; set; }
         public bool? NaturalDecimalPlaces { get; set; }
+        public string? DisplayExampleInput { get; set; }
+        public string? DisplayExampleOutput { get; set; }
+        public bool? PermissionButtonPresent { get; set; }
+        public string? PermissionDialogStatus { get; set; }
+        public string? PermissionSummary { get; set; }
     }
 
     private static Dictionary<string, PropertyDialogEvidence> LoadPropertyDialogReadbacks(string[] args)
@@ -945,7 +1894,12 @@ internal static partial class Program
                     continue;
                 var evidence = ParsePropertyDialogEvidence(path, doc.RootElement);
                 if (!string.IsNullOrWhiteSpace(evidence.ObjectId))
-                    result[evidence.ObjectId] = evidence;
+                {
+                    if (result.TryGetValue(evidence.ObjectId, out var existing))
+                        result[evidence.ObjectId] = MergePropertyDialogEvidence(existing, evidence);
+                    else
+                        result[evidence.ObjectId] = evidence;
+                }
             }
             catch
             {
@@ -953,6 +1907,63 @@ internal static partial class Program
             }
         }
         return result;
+    }
+
+    private static PropertyDialogEvidence MergePropertyDialogEvidence(PropertyDialogEvidence first, PropertyDialogEvidence second)
+    {
+        return new PropertyDialogEvidence
+        {
+            ObjectId = first.ObjectId,
+            DialogTitle = !string.IsNullOrWhiteSpace(second.DialogTitle) ? second.DialogTitle : first.DialogTitle,
+            EvidencePath = first.EvidencePath + ";" + second.EvidencePath,
+            FontFamily = second.FontFamily ?? first.FontFamily,
+            FontSize = second.FontSize ?? first.FontSize,
+            FontStyle = second.FontStyle ?? first.FontStyle,
+            HorizontalAlignment = second.HorizontalAlignment ?? first.HorizontalAlignment,
+            VerticalAlignment = second.VerticalAlignment ?? first.VerticalAlignment,
+            TextOrientation = second.TextOrientation ?? first.TextOrientation,
+            ForegroundColorSummary = second.ForegroundColorSummary ?? first.ForegroundColorSummary,
+            BackgroundColorSummary = second.BackgroundColorSummary ?? first.BackgroundColorSummary,
+            BorderColorSummary = second.BorderColorSummary ?? first.BorderColorSummary,
+            BorderStyle = second.BorderStyle ?? first.BorderStyle,
+            ButtonType = second.ButtonType ?? first.ButtonType,
+            TextEffect = second.TextEffect ?? first.TextEffect,
+            UsesVector = second.UsesVector ?? first.UsesVector,
+            UsesBitmap = second.UsesBitmap ?? first.UsesBitmap,
+            DataObjectOperationEnabled = second.DataObjectOperationEnabled ?? first.DataObjectOperationEnabled,
+            DataObjectOperation = second.DataObjectOperation ?? first.DataObjectOperation,
+            DataObjectVariable = second.DataObjectVariable ?? first.DataObjectVariable,
+            ScriptText = second.ScriptText ?? first.ScriptText,
+            VisibilityUsesExpression = second.VisibilityUsesExpression ?? first.VisibilityUsesExpression,
+            VisibilityExpression = second.VisibilityExpression ?? first.VisibilityExpression,
+            VisibilityWhenNonZero = second.VisibilityWhenNonZero ?? first.VisibilityWhenNonZero,
+            NumericMin = second.NumericMin ?? first.NumericMin,
+            NumericMax = second.NumericMax ?? first.NumericMax,
+            IntegerDigits = second.IntegerDigits ?? first.IntegerDigits,
+            DecimalDigits = second.DecimalDigits ?? first.DecimalDigits,
+            UnitText = second.UnitText ?? first.UnitText,
+            NumericBase = second.NumericBase ?? first.NumericBase,
+            LeadingZero = second.LeadingZero ?? first.LeadingZero,
+            Rounding = second.Rounding ?? first.Rounding,
+            Password = second.Password ?? first.Password,
+            UnitEnabled = second.UnitEnabled ?? first.UnitEnabled,
+            NaturalDecimalPlaces = second.NaturalDecimalPlaces ?? first.NaturalDecimalPlaces,
+            DisplayExampleInput = second.DisplayExampleInput ?? first.DisplayExampleInput,
+            DisplayExampleOutput = second.DisplayExampleOutput ?? first.DisplayExampleOutput,
+            FontButtonPresent = (first.FontButtonPresent == true || second.FontButtonPresent == true)
+                ? true
+                : second.FontButtonPresent ?? first.FontButtonPresent,
+            FontDialogStatus = string.Equals(second.FontDialogStatus, "PASS", StringComparison.OrdinalIgnoreCase)
+                ? second.FontDialogStatus
+                : first.FontDialogStatus ?? second.FontDialogStatus,
+            PermissionButtonPresent = (first.PermissionButtonPresent == true || second.PermissionButtonPresent == true)
+                ? true
+                : second.PermissionButtonPresent ?? first.PermissionButtonPresent,
+            PermissionDialogStatus = string.Equals(second.PermissionDialogStatus, "PASS", StringComparison.OrdinalIgnoreCase)
+                ? second.PermissionDialogStatus
+                : first.PermissionDialogStatus ?? second.PermissionDialogStatus,
+            PermissionSummary = second.PermissionSummary ?? first.PermissionSummary
+        };
     }
 
     private static IEnumerable<string> PropertyReadbackPaths(string[] args)
@@ -984,17 +1995,19 @@ internal static partial class Program
             return evidence;
 
         if (root.TryGetProperty("fontDialog", out var fontDialog) &&
-            fontDialog.ValueKind == JsonValueKind.Object &&
-            string.Equals(JsonStringAny(fontDialog, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase))
+            fontDialog.ValueKind == JsonValueKind.Object)
         {
-            if (fontDialog.TryGetProperty("extracted", out var extracted) && extracted.ValueKind == JsonValueKind.Object)
+            evidence.FontDialogStatus = JsonStringAny(fontDialog, "status", "Status");
+            if (string.Equals(evidence.FontDialogStatus, "PASS", StringComparison.OrdinalIgnoreCase) &&
+                fontDialog.TryGetProperty("extracted", out var extracted) && extracted.ValueKind == JsonValueKind.Object)
             {
                 evidence.FontFamily = JsonStringAny(extracted, "fontFamily", "FontFamily");
                 evidence.FontSize = JsonStringAny(extracted, "fontSize", "FontSize");
                 evidence.FontStyle = JsonStringAny(extracted, "fontStyle", "FontStyle");
             }
 
-            if (fontDialog.TryGetProperty("controls", out var fontControls) && fontControls.ValueKind == JsonValueKind.Array)
+            if (string.Equals(evidence.FontDialogStatus, "PASS", StringComparison.OrdinalIgnoreCase) &&
+                fontDialog.TryGetProperty("controls", out var fontControls) && fontControls.ValueKind == JsonValueKind.Array)
             {
                 var controls = fontControls.EnumerateArray().ToArray();
                 evidence.FontFamily ??= TextValueAfterLabel(controls, "字体", "字体名", "Font");
@@ -1003,15 +2016,35 @@ internal static partial class Program
             }
         }
 
+        if (root.TryGetProperty("permissionDialog", out var permissionDialog) &&
+            permissionDialog.ValueKind == JsonValueKind.Object)
+        {
+            evidence.PermissionDialogStatus = JsonStringAny(permissionDialog, "status", "Status");
+            if (string.Equals(evidence.PermissionDialogStatus, "PASS", StringComparison.OrdinalIgnoreCase) &&
+                permissionDialog.TryGetProperty("extracted", out var extracted) &&
+                extracted.ValueKind == JsonValueKind.Object)
+            {
+                evidence.PermissionSummary = JsonStringAny(extracted, "summary", "Summary");
+            }
+        }
+
         foreach (var tab in tabs.EnumerateArray())
         {
             var tabName = JsonStringAny(tab, "Text", "text") ?? "";
-            var controls = tab.TryGetProperty("controls", out var controlArray) && controlArray.ValueKind == JsonValueKind.Array
+            var allControls = tab.TryGetProperty("controls", out var controlArray) && controlArray.ValueKind == JsonValueKind.Array
                 ? controlArray.EnumerateArray().ToArray()
                 : Array.Empty<JsonElement>();
-            controls = controls
+            var controls = allControls
                 .Where(c => JsonBoolAny(c, "visible", "Visible") != false)
                 .ToArray();
+            evidence.FontButtonPresent = HasAnyText(controls, "字体") || evidence.FontButtonPresent == true;
+            evidence.PermissionButtonPresent = HasAnyText(controls, "权限(&A)", "权限") || evidence.PermissionButtonPresent == true;
+            evidence.ForegroundColorSummary ??= ColorSettingSummary(allControls, "文本颜色", "字符颜色", "字符颜色连接");
+            evidence.BackgroundColorSummary ??= ColorSettingSummary(allControls, "背景色", "背景颜色", "填充颜色", "填充颜色连接");
+            evidence.BorderColorSummary ??= ColorSettingSummary(allControls, "边线色", "边线颜色", "边线颜色连接");
+            evidence.UsesVector ??= IsChecked(controls, "矢量图");
+            evidence.UsesBitmap ??= IsChecked(controls, "位图");
+            ParseVisibilityControls(allControls, evidence);
 
             if (tabName.Contains("基本", StringComparison.OrdinalIgnoreCase))
             {
@@ -1061,6 +2094,11 @@ internal static partial class Program
                 evidence.Password = IsChecked(controls, "密码");
                 evidence.UnitEnabled = IsChecked(controls, "使用单位");
                 evidence.NaturalDecimalPlaces = IsChecked(controls, "自然小数位");
+                evidence.DisplayExampleInput = TextAfterLabel(controls, "显示效果-例:");
+                evidence.DisplayExampleOutput = EditTextAfterLabel(controls, "显示效果-例:");
+                if (string.IsNullOrWhiteSpace(evidence.NumericBase) &&
+                    LooksLikeDecimalFormatExample(evidence.DisplayExampleInput, evidence.DisplayExampleOutput))
+                    evidence.NumericBase = "decimal-inferred-from-display-example";
             }
             else if (tabName.Contains("脚本", StringComparison.OrdinalIgnoreCase))
             {
@@ -1071,25 +2109,68 @@ internal static partial class Program
             }
             else if (tabName.Contains("可见", StringComparison.OrdinalIgnoreCase))
             {
-                evidence.VisibilityUsesExpression = IsChecked(controls, "表达式");
-                var edit = controls.FirstOrDefault(c =>
-                    (JsonStringAny(c, "className", "ClassName") ?? "").Equals("Edit", StringComparison.OrdinalIgnoreCase));
-                evidence.VisibilityExpression = edit.ValueKind == JsonValueKind.Undefined
-                    ? ""
-                    : JsonStringAny(edit, "text", "Text") ?? "";
-                if (IsChecked(controls, "按钮可见") == true ||
-                    IsChecked(controls, "对应图符可见") == true ||
-                    IsChecked(controls, "输入框构件可见") == true)
-                    evidence.VisibilityWhenNonZero = "visible";
-                else if (IsChecked(controls, "按钮不可见") == true ||
-                         IsChecked(controls, "对应图符不可见") == true ||
-                         IsChecked(controls, "输入框构件不可见") == true)
-                    evidence.VisibilityWhenNonZero = "hidden";
+                ParseVisibilityControls(controls, evidence);
             }
         }
 
         return evidence;
     }
+
+    private static void ParseVisibilityControls(JsonElement[] controls, PropertyDialogEvidence evidence)
+    {
+        if (!HasAnyText(controls, "按钮可见", "按钮不可见", "对应图符可见", "对应图符不可见", "输入框构件可见", "输入框构件不可见"))
+            return;
+        evidence.VisibilityUsesExpression ??= IsChecked(controls, "表达式");
+        var edit = controls.FirstOrDefault(c =>
+            (JsonStringAny(c, "className", "ClassName") ?? "").Equals("Edit", StringComparison.OrdinalIgnoreCase));
+        evidence.VisibilityExpression ??= edit.ValueKind == JsonValueKind.Undefined
+            ? ""
+            : JsonStringAny(edit, "text", "Text") ?? "";
+        if (IsChecked(controls, "按钮可见") == true ||
+            IsChecked(controls, "对应图符可见") == true ||
+            IsChecked(controls, "输入框构件可见") == true)
+            evidence.VisibilityWhenNonZero = "visible";
+        else if (IsChecked(controls, "按钮不可见") == true ||
+                 IsChecked(controls, "对应图符不可见") == true ||
+                 IsChecked(controls, "输入框构件不可见") == true)
+            evidence.VisibilityWhenNonZero = "hidden";
+    }
+
+    private static bool HasAnyText(JsonElement[] controls, params string[] labels)
+        => controls.Any(c => labels.Contains(JsonStringAny(c, "text", "Text") ?? "", StringComparer.Ordinal));
+
+    private static string? ColorSettingSummary(JsonElement[] controls, params string[] labelsAndOptionalAnimationLabel)
+    {
+        if (labelsAndOptionalAnimationLabel.Length == 0)
+            return null;
+        var labels = labelsAndOptionalAnimationLabel.Take(labelsAndOptionalAnimationLabel.Length - 1).ToArray();
+        var animationLabel = labelsAndOptionalAnimationLabel.Last();
+        if (!HasAnyText(controls, labels))
+            return null;
+        var animation = IsChecked(controls, animationLabel);
+        return animation switch
+        {
+            true => "configured; animationLink=enabled; rgb=unread",
+            false => "configured; animationLink=disabled; rgb=unread",
+            null => "configured; animationLink=not-exposed; rgb=unread"
+        };
+    }
+
+    private static string? TextAfterLabel(JsonElement[] controls, string label)
+    {
+        var sequence = LayoutJsonIntAny(controls.FirstOrDefault(c => (JsonStringAny(c, "text", "Text") ?? "").Equals(label, StringComparison.Ordinal)), "sequence") ?? -1;
+        if (sequence < 0) return null;
+        return controls
+            .Where(c => (LayoutJsonIntAny(c, "sequence") ?? 0) > sequence)
+            .Where(c => (JsonStringAny(c, "className", "ClassName") ?? "").Equals("Static", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => LayoutJsonIntAny(c, "sequence") ?? 0)
+            .Select(c => JsonStringAny(c, "text", "Text") ?? "")
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static bool LooksLikeDecimalFormatExample(string? input, string? output)
+        => (!string.IsNullOrWhiteSpace(input) && input.Contains('.', StringComparison.Ordinal)) ||
+           (!string.IsNullOrWhiteSpace(output) && output.Contains('.', StringComparison.Ordinal));
 
     private static string? CheckedByRelativeOrder(JsonElement[] controls, params string[] labels)
     {
@@ -1239,14 +2320,23 @@ internal static partial class Program
                     : ValueProperty(new { status = scriptStatus, summary = scriptSummary }, "mce-anchor/workflow-readback", confidence),
             ["fontFamily"] = !string.IsNullOrWhiteSpace(readback?.FontFamily)
                 ? ValueProperty(readback!.FontFamily, "property-dialog-font-readback:" + readback.EvidencePath, 0.9)
+                : string.Equals(readback?.FontDialogStatus, "notApplicable", StringComparison.OrdinalIgnoreCase) ||
+                  readback?.FontButtonPresent == false
+                    ? NotApplicableProperty("property dialog exposes no font selector for this MCGS object/profile")
                 : string.IsNullOrWhiteSpace(fontFamily)
                     ? UnresolvedProperty(id, "fontFamily", "Open property dialog text/style tab or run single-font diff.", unresolved)
                     : ValueProperty(fontFamily, "mce-text-anchor", 0.7),
             ["fontSize"] = !string.IsNullOrWhiteSpace(readback?.FontSize)
                 ? ValueProperty(readback!.FontSize, "property-dialog-font-readback:" + readback.EvidencePath, 0.9)
+                : string.Equals(readback?.FontDialogStatus, "notApplicable", StringComparison.OrdinalIgnoreCase) ||
+                  readback?.FontButtonPresent == false
+                    ? NotApplicableProperty("property dialog exposes no font-size selector for this MCGS object/profile")
                 : UnresolvedProperty(id, "fontSize", "Run single-font-size diff or property-dialog text tab readback.", unresolved),
             ["fontStyle"] = !string.IsNullOrWhiteSpace(readback?.FontStyle)
                 ? ValueProperty(readback!.FontStyle, "property-dialog-font-readback:" + readback.EvidencePath, 0.9)
+                : string.Equals(readback?.FontDialogStatus, "notApplicable", StringComparison.OrdinalIgnoreCase) ||
+                  readback?.FontButtonPresent == false
+                    ? NotApplicableProperty("property dialog exposes no font-style selector for this MCGS object/profile")
                 : UnresolvedProperty(id, "fontStyle", "Run property-dialog text tab readback for bold/italic/underline flags.", unresolved),
             ["alignment"] = readback?.HorizontalAlignment != null || readback?.VerticalAlignment != null
                 ? ValueProperty(new
@@ -1255,13 +2345,27 @@ internal static partial class Program
                     vertical = readback?.VerticalAlignment ?? "unread"
                 }, "property-dialog-readback:" + readback!.EvidencePath, 0.9)
                 : UnresolvedProperty(id, "alignment", "Run property-dialog text/alignment tab readback or single-alignment diff.", unresolved),
-            ["foregroundColor"] = UnresolvedProperty(id, "foregroundColor", "Run single-color diff or property-dialog color tab readback.", unresolved),
-            ["backgroundColor"] = UnresolvedProperty(id, "backgroundColor", "Run single-color diff or property-dialog fill/background readback.", unresolved),
+            ["foregroundColor"] = !string.IsNullOrWhiteSpace(readback?.ForegroundColorSummary)
+                ? ValueProperty(new { summary = readback!.ForegroundColorSummary, actualRgbStatus = "unread" },
+                    "property-dialog-readback:" + readback.EvidencePath, 0.55)
+                : UnresolvedProperty(id, "foregroundColor", "Run single-color diff or property-dialog color tab readback.", unresolved),
+            ["backgroundColor"] = !string.IsNullOrWhiteSpace(readback?.BackgroundColorSummary)
+                ? ValueProperty(new { summary = readback!.BackgroundColorSummary, actualRgbStatus = "unread" },
+                    "property-dialog-readback:" + readback.EvidencePath, 0.55)
+                : UnresolvedProperty(id, "backgroundColor", "Run single-color diff or property-dialog fill/background readback.", unresolved),
             ["borderColor"] = IsTextOnlyCanvasKind(kind)
                 ? NotApplicableProperty("CDrawLabel/text-only object has no evidenced border property in the target row")
+                : kind.Equals("numeric-input", StringComparison.OrdinalIgnoreCase) && readback != null &&
+                  string.IsNullOrWhiteSpace(readback.BorderColorSummary)
+                    ? NotApplicableProperty("numeric input property dialog exposes border type but no border-color selector in this profile")
+                : !string.IsNullOrWhiteSpace(readback?.BorderColorSummary)
+                    ? ValueProperty(new { summary = readback!.BorderColorSummary, actualRgbStatus = "unread" },
+                        "property-dialog-readback:" + readback.EvidencePath, 0.55)
                 : UnresolvedProperty(id, "borderColor", "Run property-dialog border tab readback or line-color diff.", unresolved),
             ["borderStyle"] = !string.IsNullOrWhiteSpace(readback?.BorderStyle)
                 ? ValueProperty(readback!.BorderStyle, "property-dialog-readback:" + readback.EvidencePath, 0.9)
+                : IsButtonLikeKind(kind) && !string.IsNullOrWhiteSpace(readback?.ButtonType)
+                ? ValueProperty(new { mode = "intrinsic-button-frame", buttonType = readback!.ButtonType }, "property-dialog-readback:" + readback.EvidencePath, 0.8)
                 : IsTextOnlyCanvasKind(kind)
                 ? NotApplicableProperty("CDrawLabel/text-only object has no evidenced border style in the target row")
                 : UnresolvedProperty(id, "borderStyle", "Run property-dialog border/line tab readback.", unresolved),
@@ -1288,7 +2392,10 @@ internal static partial class Program
                 ? ValueProperty(new { status = "conditional", expressionKnown = false, summary = expression }, "mce-visible-anchor", confidence)
                 : UnresolvedProperty(id, "visibility", "Confirm default visibility or condition page with property-dialog readback.", unresolved),
             ["enableCondition"] = IsInteractiveKind(kind)
-                ? UnresolvedProperty(id, "enableCondition", "Read operation/security tab for enable condition.", unresolved)
+                ? readback != null
+                    ? ValueProperty(new { status = "default-enabled", condition = "", evidence = "no enable-condition field exposed in captured property tabs" },
+                        "property-dialog-readback:" + readback.EvidencePath, 0.7)
+                    : UnresolvedProperty(id, "enableCondition", "Read operation/security tab for enable condition.", unresolved)
                 : NotApplicableProperty("static/non-interactive object has no operation enable condition"),
             ["displayRules"] = readback?.VisibilityUsesExpression == true
                 ? ValueProperty(new { kind = "visibility", expression = readback.VisibilityExpression ?? "", whenExpressionNonZero = readback.VisibilityWhenNonZero ?? "" }, "property-dialog-readback:" + readback.EvidencePath, 0.95)
@@ -1303,7 +2410,9 @@ internal static partial class Program
                     rounding = readback.Rounding,
                     password = readback.Password,
                     unitEnabled = readback.UnitEnabled,
-                    naturalDecimalPlaces = readback.NaturalDecimalPlaces
+                    naturalDecimalPlaces = readback.NaturalDecimalPlaces,
+                    displayExampleInput = readback.DisplayExampleInput,
+                    displayExampleOutput = readback.DisplayExampleOutput
                 }, "property-dialog-readback:" + readback.EvidencePath, 0.95)
                 : kind.Equals("numeric-input", StringComparison.OrdinalIgnoreCase)
                 ? UnresolvedProperty(id, "inputFormat", "Read numeric input/display format property page.", unresolved)
@@ -1326,7 +2435,13 @@ internal static partial class Program
                 ? UnresolvedProperty(id, "range", "Read numeric range/up-down limit property fields.", unresolved)
                 : NotApplicableProperty("not a numeric input/display object"),
             ["permissions"] = IsInteractiveKind(kind)
-                ? UnresolvedProperty(id, "permissions", "Read operation/security tab for permission level.", unresolved)
+                ? !string.IsNullOrWhiteSpace(readback?.PermissionSummary)
+                    ? ValueProperty(new { summary = readback!.PermissionSummary }, "property-dialog-permission-readback:" + readback.EvidencePath, 0.85)
+                    : readback?.PermissionButtonPresent == true
+                        ? UnresolvedProperty(id, "permissions", "Open read-only permission subdialog and capture permission level without saving.", unresolved)
+                        : readback != null
+                        ? NotApplicableProperty("no permission button exposed in captured property tabs")
+                        : UnresolvedProperty(id, "permissions", "Read operation/security tab for permission level.", unresolved)
                 : NotApplicableProperty("static/non-interactive object"),
             ["navigationTarget"] = kind.Equals("navigation-button", StringComparison.OrdinalIgnoreCase)
                 ? string.IsNullOrWhiteSpace(navigationTarget)
@@ -1406,6 +2521,9 @@ internal static partial class Program
     private static bool IsInteractiveKind(string kind)
         => kind.Contains("button", StringComparison.OrdinalIgnoreCase) ||
            kind.Contains("input", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsButtonLikeKind(string kind)
+        => kind.Contains("button", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTextOnlyCanvasKind(string kind)
         => kind.Equals("static-label", StringComparison.OrdinalIgnoreCase) ||

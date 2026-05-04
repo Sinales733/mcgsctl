@@ -142,6 +142,7 @@ Commands:
   mcgsctl run --file <actions.json> [--pid <pid>]
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
+  mcgsctl mce normalized-diff --baseline <export-dir> --candidate <export-dir> --out <dir>
   mcgsctl verify --project <mce> --spec <json>
   mcgsctl mcgs inventory --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
   mcgsctl mcgs tool-catalog --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
@@ -153,7 +154,7 @@ Commands:
   mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>]
   mcgsctl canvas mce-geometry-probe --project <candidate.mce> --out <dir>
   mcgsctl canvas property-map-probe --project <candidate.mce> --row-key <key> --out <dir> [--semantic-map <semantic-map.json>] [--property-readback-dir <dir>]
-  mcgsctl canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font]
+  mcgsctl canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font] [--probe-permissions] [--reveal-overlap-delete]
   mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy] [--out <file-or-dir>]
   mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir> [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
@@ -956,8 +957,14 @@ Commands:
 
     private static int Mce(string[] args)
     {
-        if (args.Length < 2 || !args[1].Equals("export", StringComparison.OrdinalIgnoreCase))
-            return Fail("Usage: mcgsctl mce export --project <mce> [--out <dir>]");
+        if (args.Length < 2)
+            return Fail("Usage: mcgsctl mce export --project <mce> [--out <dir>] | mce normalized-diff --baseline <export-dir> --candidate <export-dir> --out <dir>");
+
+        if (args[1].Equals("normalized-diff", StringComparison.OrdinalIgnoreCase))
+            return MceNormalizedDiff(args);
+
+        if (!args[1].Equals("export", StringComparison.OrdinalIgnoreCase))
+            return Fail("Usage: mcgsctl mce export --project <mce> [--out <dir>] | mce normalized-diff --baseline <export-dir> --candidate <export-dir> --out <dir>");
 
         var project = RequiredPath(args, "--project");
         var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "mce-" + Timestamp()));
@@ -3744,11 +3751,16 @@ Commands:
     private static IntPtr OpenCanvasObjectPropertyDialog(int pid, IntPtr main, IntPtr canvas,
         int x, int y, int width, int height, string expectedTitle, bool preferCommand)
     {
+        bool MatchesExpected(IntPtr dialog)
+            => string.IsNullOrWhiteSpace(expectedTitle) ||
+               Native.GetText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase) ||
+               DialogText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase);
+
         IntPtr TryExpected(TimeSpan timeout)
             => WaitForTopWindow(pid,
                 h => Native.GetClass(h) == "#32770" &&
                      Native.IsWindowVisible(h) &&
-                     Native.GetText(h).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase),
+                     MatchesExpected(h),
                 timeout);
 
         void CloseWrongDialogs(string state)
@@ -3756,7 +3768,7 @@ Commands:
             foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
                          Native.GetClass(h) == "#32770" &&
                          Native.IsWindowVisible(h) &&
-                         !Native.GetText(h).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase)))
+                         !MatchesExpected(h)))
             {
                 RecordDialogEvidence("dialogs.jsonl", pid, dialog, "close-unexpected", state);
                 UiAutomation.CloseWindow(dialog);

@@ -671,7 +671,7 @@ public final class MceExport {
         case '\r' -> sb.append("\\r");
         case '\t' -> sb.append("\\t");
         default -> {
-          if (ch < 0x20 || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
+          if (Character.isISOControl(ch) || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
           else sb.append(ch);
         }
       }
@@ -864,7 +864,7 @@ final class MceBlobDiff {
         case '\r' -> sb.append("\\r");
         case '\t' -> sb.append("\\t");
         default -> {
-          if (ch < 0x20 || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
+          if (Character.isISOControl(ch) || ch == '\u2028' || ch == '\u2029') sb.append(String.format("\\u%04x", (int) ch));
           else sb.append(ch);
         }
       }
