@@ -646,17 +646,20 @@ internal static partial class Program
             y = Math.Max(2, Math.Min(y, Math.Max(2, canvasRect.Height - height - 2)));
         }
 
-        var dragError = "";
+        var drawGesture = (Opt(args, "--draw-gesture") ?? "drag").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(drawGesture))
+            drawGesture = "drag";
+        var drawError = "";
         var activated = false;
         try
         {
             if (autoSafeSlotRequested && safeSlot == null)
             {
-                dragError = "auto safe slot was requested but no reliable internal canvas slot was available";
+                drawError = "auto safe slot was requested but no reliable internal canvas slot was available";
             }
             else
             {
-                UiAutomation.DragPoint(session.Canvas, x, y, x + width, y + height, mouse: true);
+                ApplyDrawingGesture(session.Canvas, drawGesture, x, y, width, height);
                 Thread.Sleep(900);
                 if (Has(args, "--activate-drawn-object"))
                 {
@@ -669,7 +672,7 @@ internal static partial class Program
         }
         catch (Exception ex)
         {
-            dragError = ex.Message;
+            drawError = ex.Message;
         }
 
         CaptureProcessWindows(pid, Path.Combine(actionDir, "after-draw"));
@@ -677,18 +680,43 @@ internal static partial class Program
         {
             schemaVersion = 1,
             context,
-            action = "drag after selecting drawing tool",
+            action = drawGesture + " after selecting drawing tool",
             canvas = WindowInfo.FromHandle(session.Canvas),
             rect = new { x, y, width, height },
+            drawGesture,
             placementSource = safeSlot != null ? "internal-occupancy" : autoSafeSlotRequested ? "unknown" : "explicit-or-default",
             autoSafeSlotRequested,
             safeSlotPlan,
             activated,
-            dragError
+            dragError = drawError
         };
         File.WriteAllText(Path.Combine(actionDir, "post-command-action.json"),
             JsonSerializer.Serialize(evidence, JsonOptions()), Encoding.UTF8);
         return evidence;
+    }
+
+    private static void ApplyDrawingGesture(IntPtr canvas, string drawGesture, int x, int y, int width, int height)
+    {
+        var endX = x + width;
+        var endY = y + height;
+        switch (drawGesture)
+        {
+            case "drag":
+                UiAutomation.DragPoint(canvas, x, y, endX, endY, mouse: true);
+                break;
+            case "click-click":
+                UiAutomation.ClickPoint(canvas, x, y, MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(180);
+                UiAutomation.ClickPoint(canvas, endX, endY, MouseButton.Left, doubleClick: false, mouse: true);
+                break;
+            case "click-click-double":
+                UiAutomation.ClickPoint(canvas, x, y, MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(180);
+                UiAutomation.ClickPoint(canvas, endX, endY, MouseButton.Left, doubleClick: true, mouse: true);
+                break;
+            default:
+                throw new InvalidOperationException("Unsupported --draw-gesture: " + drawGesture);
+        }
     }
 
     private static CanvasOccupiedRect? BuildToolProbeDrawingSlot(string[] args, int canvasWidth, int canvasHeight,
@@ -835,6 +863,7 @@ internal static partial class Program
         {
             var classDelta = CompareDrawingClassEvidence(FullPath(baselineExport), candidateExport, evidence.ExpectedClasses);
             evidence.ExpectedClassAdded = classDelta.ExpectedClassAdded;
+            evidence.ExpectedClassEvidencePass = classDelta.ExpectedClassEvidencePass;
             evidence.ClassDelta = classDelta.Evidence;
         }
         else
@@ -844,8 +873,9 @@ internal static partial class Program
 
         if (planned != null && Directory.Exists(candidateExport))
         {
-            var rectEvidence = FindDrawingRectEvidence(candidateExport, planned);
+            var rectEvidence = FindDrawingRectEvidence(FullPath(baselineExport ?? ""), candidateExport, planned, commandId);
             evidence.CandidateRectNearPlanned = rectEvidence.RectNearPlanned;
+            evidence.CandidateRectNewNearPlanned = rectEvidence.RectNewNearPlanned;
             evidence.RectEvidence = rectEvidence.Evidence;
         }
 
@@ -867,8 +897,8 @@ internal static partial class Program
             evidence.BlockedReasons.Add("canvas object map is required for internal collision analysis");
         }
 
-        evidence.Status = evidence.ExpectedClassAdded &&
-                          evidence.CandidateRectNearPlanned &&
+        evidence.Status = evidence.ExpectedClassEvidencePass &&
+                          evidence.CandidateRectNewNearPlanned &&
                           evidence.NoCollision &&
                           evidence.InternalCanvasReliableGeometry &&
                           evidence.BlockedReasons.Count == 0
@@ -941,6 +971,8 @@ internal static partial class Program
         var baseline = CountBlobGeometryClasses(Path.Combine(baselineExport, "blob_geometry.json"), expected);
         var candidate = CountBlobGeometryClasses(Path.Combine(candidateExport, "blob_geometry.json"), expected);
         var added = expected.Any(cls => candidate.GetValueOrDefault(cls) > baseline.GetValueOrDefault(cls));
+        var present = expected.Length > 0 && expected.Any(cls => candidate.GetValueOrDefault(cls) > 0);
+        var evidencePass = added || present;
         var deltas = expected.Select(cls => new
         {
             className = cls,
@@ -948,10 +980,12 @@ internal static partial class Program
             candidate = candidate.GetValueOrDefault(cls),
             delta = candidate.GetValueOrDefault(cls) - baseline.GetValueOrDefault(cls)
         }).ToArray();
-        return new DrawingClassDelta(added, new
+        return new DrawingClassDelta(added, evidencePass, new
         {
-            status = added ? "PASS" : "UNKNOWN",
+            status = evidencePass ? "PASS" : "UNKNOWN",
             expectedClasses = expected,
+            expectedClassAdded = added,
+            expectedClassPresentInCandidate = present,
             deltas
         });
     }
@@ -978,66 +1012,91 @@ internal static partial class Program
         return result;
     }
 
-    private static DrawingRectEvidence FindDrawingRectEvidence(string candidateExport, CanvasOccupiedRect planned)
+    private static DrawingRectEvidence FindDrawingRectEvidence(string baselineExport, string candidateExport, CanvasOccupiedRect planned, int commandId)
     {
-        var path = Path.Combine(candidateExport, "blob_geometry.json");
-        var matches = new List<object>();
-        var near = false;
-        if (File.Exists(path))
+        var baselineMatches = FindDrawingRectMatches(Path.Combine(baselineExport, "blob_geometry.json"), planned, commandId);
+        var candidateMatches = FindDrawingRectMatches(Path.Combine(candidateExport, "blob_geometry.json"), planned, commandId);
+        var baselineNear = baselineMatches.Any(m => m.IsPositiveMatch);
+        var candidateNear = candidateMatches.Any(m => m.IsPositiveMatch);
+        var newNear = candidateNear && !baselineNear;
+        return new DrawingRectEvidence(candidateNear, newNear, new
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
-            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            status = newNear ? "PASS" : candidateNear ? "UNKNOWN-existing-near-planned-rect" : "UNKNOWN",
+            plannedRect = new { planned.X, planned.Y, planned.Width, planned.Height },
+            baselineNearPlanned = baselineNear,
+            candidateNearPlanned = candidateNear,
+            candidateNewNearPlanned = newNear,
+            baselineMatches = baselineMatches.Take(20).Select(m => m.Evidence).ToArray(),
+            candidateMatches = candidateMatches.Take(20).Select(m => m.Evidence).ToArray()
+        });
+    }
+
+    private static List<DrawingRectMatch> FindDrawingRectMatches(string path, CanvasOccupiedRect planned, int commandId)
+    {
+        var matches = new List<DrawingRectMatch>();
+        if (!File.Exists(path))
+            return matches;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return matches;
+        foreach (var entry in doc.RootElement.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("candidateRectangles", out var rects) || rects.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var rect in rects.EnumerateArray())
             {
-                foreach (var entry in doc.RootElement.EnumerateArray())
+                var x = LayoutJsonIntAny(rect, "x", "X");
+                var y = LayoutJsonIntAny(rect, "y", "Y");
+                var width = LayoutJsonIntAny(rect, "width", "Width");
+                var height = LayoutJsonIntAny(rect, "height", "Height");
+                if (x == null || y == null || width == null || height == null)
+                    continue;
+                var dx = Math.Abs(x.Value - planned.X);
+                var dy = Math.Abs(y.Value - planned.Y);
+                var dw = Math.Abs(width.Value - planned.Width);
+                var dh = Math.Abs(height.Value - planned.Height);
+                var total = dx + dy + dw + dh;
+                var exactOrNear = dx <= 8 && dy <= 8 && dw <= 12 && dh <= 12;
+                var endpointNear = Math.Abs(x.Value - (planned.X + planned.Width)) <= 8 &&
+                                   Math.Abs(y.Value - (planned.Y + planned.Height)) <= 8;
+                var flowFootprintNear = commandId == 32937 &&
+                                        dx <= 8 &&
+                                        dy <= 8 &&
+                                        dw <= 12 &&
+                                        height.Value >= 8 &&
+                                        height.Value <= 40;
+                var tableFootprintNear = (commandId is 32946 or 32947) &&
+                                         dx <= 8 &&
+                                         dy <= 8 &&
+                                         width.Value >= planned.Width &&
+                                         width.Value <= planned.Width + 100 &&
+                                         height.Value >= planned.Height &&
+                                         height.Value <= planned.Height + 60;
+                if (!exactOrNear && !endpointNear && !flowFootprintNear && !tableFootprintNear && total > 180)
+                    continue;
+                var matchKind = exactOrNear ? "rect" : flowFootprintNear ? "flow-footprint" : tableFootprintNear ? "table-footprint" : endpointNear ? "endpoint" : "candidate";
+                matches.Add(new DrawingRectMatch(exactOrNear, endpointNear, flowFootprintNear, tableFootprintNear, new
                 {
-                    if (!entry.TryGetProperty("candidateRectangles", out var rects) || rects.ValueKind != JsonValueKind.Array)
-                        continue;
-                    foreach (var rect in rects.EnumerateArray())
-                    {
-                        var x = LayoutJsonIntAny(rect, "x", "X");
-                        var y = LayoutJsonIntAny(rect, "y", "Y");
-                        var width = LayoutJsonIntAny(rect, "width", "Width");
-                        var height = LayoutJsonIntAny(rect, "height", "Height");
-                        if (x == null || y == null || width == null || height == null)
-                            continue;
-                        var dx = Math.Abs(x.Value - planned.X);
-                        var dy = Math.Abs(y.Value - planned.Y);
-                        var dw = Math.Abs(width.Value - planned.Width);
-                        var dh = Math.Abs(height.Value - planned.Height);
-                        var total = dx + dy + dw + dh;
-                        var exactOrNear = dx <= 8 && dy <= 8 && dw <= 12 && dh <= 12;
-                        var endpointNear = Math.Abs(x.Value - (planned.X + planned.Width)) <= 8 &&
-                                           Math.Abs(y.Value - (planned.Y + planned.Height)) <= 8;
-                        if (!exactOrNear && !endpointNear && total > 180)
-                            continue;
-                        if (exactOrNear || endpointNear)
-                            near = true;
-                        matches.Add(new
-                        {
-                            table = JsonString(entry, "table"),
-                            column = JsonString(entry, "column"),
-                            rowKey = JsonString(entry, "rowKey"),
-                            offset = JsonString(rect, "offset"),
-                            encoding = JsonString(rect, "encoding"),
-                            pattern = JsonString(rect, "pattern"),
-                            x = x.Value,
-                            y = y.Value,
-                            width = width.Value,
-                            height = height.Value,
-                            totalDelta = total,
-                            exactOrNear,
-                            endpointNear
-                        });
-                    }
-                }
+                    table = JsonString(entry, "table"),
+                    column = JsonString(entry, "column"),
+                    rowKey = JsonString(entry, "rowKey"),
+                    offset = JsonString(rect, "offset"),
+                    encoding = JsonString(rect, "encoding"),
+                    pattern = JsonString(rect, "pattern"),
+                    x = x.Value,
+                    y = y.Value,
+                    width = width.Value,
+                    height = height.Value,
+                    totalDelta = total,
+                    exactOrNear,
+                    endpointNear,
+                    flowFootprintNear,
+                    tableFootprintNear,
+                    matchKind
+                }));
             }
         }
-        return new DrawingRectEvidence(near, new
-        {
-            status = near ? "PASS" : "UNKNOWN",
-            plannedRect = new { planned.X, planned.Y, planned.Width, planned.Height },
-            matches = matches.Take(20).ToArray()
-        });
+        return matches;
     }
 
     private static string[] ExpectedDrawingCreateClasses(int commandId) => commandId switch
@@ -1047,14 +1106,26 @@ internal static partial class Program
         32903 => new[] { "CDrawRect" },
         32904 => new[] { "CDrawRoundRect" },
         32905 => new[] { "CDrawEllipse" },
-        32906 => new[] { "CDrawPolyLine", "CDrawPolygon" },
+        32906 => new[] { "CDrawPoly", "CDrawPolyLine", "CDrawPolygon" },
         32907 => new[] { "CDrawLabel" },
         32908 => new[] { "CDrawBitmap" },
         32936 => new[] { "CDrawEdit" },
+        32937 => new[] { "CDrawFlow" },
         32938 => new[] { "CDrawButton" },
-        32941 => new[] { "CDrawButton", "CDrawLabel" },
-        32946 or 32947 => new[] { "CDrawTable" },
-        32948 => new[] { "CDrawPercent" },
+        32939 => new[] { "CDrawMulBtn" },
+        32940 => new[] { "CDrawSlider" },
+        32941 => new[] { "CDrawMulDis" },
+        32942 => new[] { "CDrawRotateBtn" },
+        32943 => new[] { "CDrawAlm" },
+        32944 => new[] { "CDrawPic" },
+        32945 => new[] { "CDrawHisPic" },
+        32946 => new[] { "CDrawGrid" },
+        32947 => new[] { "CDrawHisGrid" },
+        32948 => new[] { "CDrawSliderFill" },
+        32949 => new[] { "CDrawRotateTbl" },
+        32950 => new[] { "CDrawSaveData" },
+        32955 => new[] { "CDrawPlanPic" },
+        32956 => new[] { "CDrawComboBox" },
         _ => Array.Empty<string>()
     };
 
@@ -2588,7 +2659,9 @@ internal static partial class Program
         public bool CandidateSafeMutationFunctionalDiff { get; set; }
         public List<string> ExpectedClasses { get; } = new();
         public bool ExpectedClassAdded { get; set; }
+        public bool ExpectedClassEvidencePass { get; set; }
         public bool CandidateRectNearPlanned { get; set; }
+        public bool CandidateRectNewNearPlanned { get; set; }
         public bool NoCollision { get; set; }
         public string InternalCanvasEvidenceStatus { get; set; } = "";
         public bool InternalCanvasReliableGeometry { get; set; }
@@ -2599,8 +2672,12 @@ internal static partial class Program
         public List<string> BlockedReasons { get; } = new();
     }
 
-    private sealed record DrawingClassDelta(bool ExpectedClassAdded, object Evidence);
-    private sealed record DrawingRectEvidence(bool RectNearPlanned, object Evidence);
+    private sealed record DrawingClassDelta(bool ExpectedClassAdded, bool ExpectedClassEvidencePass, object Evidence);
+    private sealed record DrawingRectEvidence(bool RectNearPlanned, bool RectNewNearPlanned, object Evidence);
+    private sealed record DrawingRectMatch(bool ExactOrNear, bool EndpointNear, bool FlowFootprintNear, bool TableFootprintNear, object Evidence)
+    {
+        public bool IsPositiveMatch => ExactOrNear || EndpointNear || FlowFootprintNear || TableFootprintNear;
+    }
 
     private sealed record McgsToolProbeEvidence(string ToolId, string Path, string Status, int CommandId, string SafetyClass,
         bool CandidateSafeMutation, bool CandidateSafeMutationFunctionalDiff, bool CandidateSafeMutationReversibleReturn,
