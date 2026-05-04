@@ -262,6 +262,9 @@ internal static partial class Program
                                      !string.Equals(projectCopySha256Before, projectCopySha256After, StringComparison.OrdinalIgnoreCase);
         var readOnlyHashDrift = tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) && projectCopyHashChanged;
         object? normalizedDiffEvidence = null;
+        object? drawingCreateClosure = null;
+        var drawingCreateClosurePass = false;
+        var drawingCreateClosureError = "";
         var normalizedDiffError = "";
         var normalizedDiffEquivalent = false;
         var normalizedDiffEditorContextOnly = false;
@@ -313,6 +316,22 @@ internal static partial class Program
             catch (Exception ex)
             {
                 normalizedDiffError = ex.Message;
+            }
+        }
+        if (candidateSafeCommand &&
+            requestedContext is "animation-draw-object" or "animation-draw-table" &&
+            postCommandAction != null)
+        {
+            try
+            {
+                var drawingClosure = BuildDrawingCreateClosureEvidence(args, outDir, commandId, requestedContext,
+                    projectCopy, effectiveBaselineExport, candidateSafeMutationFunctionalDiff);
+                drawingCreateClosure = drawingClosure;
+                drawingCreateClosurePass = drawingClosure.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                drawingCreateClosureError = ex.Message;
             }
         }
         if (candidateSafeCommand &&
@@ -402,10 +421,13 @@ internal static partial class Program
                 unknownRiskHashDriftFunctional,
                 normalizedDiff = normalizedDiffEvidence,
                 normalizedDiffError,
+                drawingCreateClosurePass,
+                drawingCreateClosureError,
                 forcedProcessKill,
                 forcedProcessKillError
             },
             postCommandAction,
+            drawingCreateClosure,
             safetyClass = tool.safetyClass,
             nextProbe = candidateSafePreconditionUnmet
                 ? "Candidate-safe command produced no modal/dialog evidence, reversible-return evidence, or normalized candidate diff; open the required editor selection/context before treating this tool as probed."
@@ -601,27 +623,48 @@ internal static partial class Program
         CaptureProcessWindows(pid, Path.Combine(actionDir, "before-draw"));
 
         var canvasRect = UiAutomation.GetWindowRect(session.Canvas);
-        var x = ParseInt(args, "--draw-x", Math.Max(20, Math.Min(620, Math.Max(20, canvasRect.Width - 220))));
-        var y = ParseInt(args, "--draw-y", Math.Max(20, Math.Min(360, Math.Max(20, canvasRect.Height - 140))));
         var width = ParseInt(args, "--draw-width", context == "animation-draw-table" ? 180 : 120);
         var height = ParseInt(args, "--draw-height", context == "animation-draw-table" ? 100 : 70);
-        width = Math.Max(20, Math.Min(width, Math.Max(20, canvasRect.Width - x - 5)));
-        height = Math.Max(20, Math.Min(height, Math.Max(20, canvasRect.Height - y - 5)));
-        x = Math.Max(2, Math.Min(x, Math.Max(2, canvasRect.Width - width - 2)));
-        y = Math.Max(2, Math.Min(y, Math.Max(2, canvasRect.Height - height - 2)));
+        width = Math.Max(20, Math.Min(width, Math.Max(20, canvasRect.Width - 10)));
+        height = Math.Max(20, Math.Min(height, Math.Max(20, canvasRect.Height - 10)));
+
+        var autoSafeSlotRequested = Has(args, "--auto-safe-slot");
+        var safeSlot = BuildToolProbeDrawingSlot(args, canvasRect.Width, canvasRect.Height, width, height,
+            autoSafeSlotRequested, out var safeSlotPlan);
+        var x = safeSlot?.X ?? ParseInt(args, "--draw-x", Math.Max(20, Math.Min(620, Math.Max(20, canvasRect.Width - 220))));
+        var y = safeSlot?.Y ?? ParseInt(args, "--draw-y", Math.Max(20, Math.Min(360, Math.Max(20, canvasRect.Height - 140))));
+        if (safeSlot != null)
+        {
+            width = safeSlot.Width;
+            height = safeSlot.Height;
+        }
+        else
+        {
+            width = Math.Max(20, Math.Min(width, Math.Max(20, canvasRect.Width - x - 5)));
+            height = Math.Max(20, Math.Min(height, Math.Max(20, canvasRect.Height - y - 5)));
+            x = Math.Max(2, Math.Min(x, Math.Max(2, canvasRect.Width - width - 2)));
+            y = Math.Max(2, Math.Min(y, Math.Max(2, canvasRect.Height - height - 2)));
+        }
 
         var dragError = "";
         var activated = false;
         try
         {
-            UiAutomation.DragPoint(session.Canvas, x, y, x + width, y + height, mouse: true);
-            Thread.Sleep(900);
-            if (Has(args, "--activate-drawn-object"))
+            if (autoSafeSlotRequested && safeSlot == null)
             {
-                UiAutomation.ClickPoint(session.Canvas, x + width / 2, y + height / 2, MouseButton.Left,
-                    doubleClick: context == "animation-draw-table", mouse: true);
-                activated = true;
-                Thread.Sleep(500);
+                dragError = "auto safe slot was requested but no reliable internal canvas slot was available";
+            }
+            else
+            {
+                UiAutomation.DragPoint(session.Canvas, x, y, x + width, y + height, mouse: true);
+                Thread.Sleep(900);
+                if (Has(args, "--activate-drawn-object"))
+                {
+                    UiAutomation.ClickPoint(session.Canvas, x + width / 2, y + height / 2, MouseButton.Left,
+                        doubleClick: context == "animation-draw-table", mouse: true);
+                    activated = true;
+                    Thread.Sleep(500);
+                }
             }
         }
         catch (Exception ex)
@@ -637,6 +680,9 @@ internal static partial class Program
             action = "drag after selecting drawing tool",
             canvas = WindowInfo.FromHandle(session.Canvas),
             rect = new { x, y, width, height },
+            placementSource = safeSlot != null ? "internal-occupancy" : autoSafeSlotRequested ? "unknown" : "explicit-or-default",
+            autoSafeSlotRequested,
+            safeSlotPlan,
             activated,
             dragError
         };
@@ -644,6 +690,373 @@ internal static partial class Program
             JsonSerializer.Serialize(evidence, JsonOptions()), Encoding.UTF8);
         return evidence;
     }
+
+    private static CanvasOccupiedRect? BuildToolProbeDrawingSlot(string[] args, int canvasWidth, int canvasHeight,
+        int requestedWidth, int requestedHeight, bool autoSafeSlotRequested, out object safeSlotPlan)
+    {
+        var canvasObjects = OptionalFullPath(Opt(args, "--canvas-objects") ?? Opt(args, "--object-map") ??
+                                            Opt(args, "--property-map") ?? Opt(args, "--semantic-map"));
+        var margin = Math.Max(0, ParseInt(args, "--safe-slot-margin", 20));
+        var grid = Math.Max(1, ParseInt(args, "--safe-slot-grid", 10));
+        var plan = new DrawingSafeSlotPlan
+        {
+            Status = "NOT_REQUESTED",
+            PlacementSource = autoSafeSlotRequested ? "internal-occupancy" : "explicit-or-default",
+            CanvasObjects = canvasObjects ?? "",
+            Margin = margin,
+            Grid = grid,
+            RequestedRect = new { width = requestedWidth, height = requestedHeight },
+            CanvasSize = new { width = canvasWidth, height = canvasHeight }
+        };
+        safeSlotPlan = plan;
+
+        if (!autoSafeSlotRequested)
+            return null;
+        if (string.IsNullOrWhiteSpace(canvasObjects))
+        {
+            plan.Status = "UNKNOWN";
+            plan.UnknownReasons.Add("auto safe slot requires --canvas-objects, --object-map, --property-map, or --semantic-map");
+            return null;
+        }
+        if (!File.Exists(canvasObjects))
+        {
+            plan.Status = "UNKNOWN";
+            plan.UnknownReasons.Add("canvas object map not found: " + canvasObjects);
+            return null;
+        }
+
+        var map = LoadCanvasObjectMap(canvasObjects);
+        plan.ObjectProvider = map.ObjectProvider;
+        plan.ReliableGeometry = map.ReliableGeometry;
+        plan.OccupiedRectangles.AddRange(map.OccupiedRectangles);
+        if (!map.ReliableGeometry || !map.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            plan.Status = "UNKNOWN";
+            var reason = "canvas object map is not reliable for auto safe slot";
+            if (map.BlockedReasons.Count > 0) reason += ": " + string.Join("; ", map.BlockedReasons);
+            plan.UnknownReasons.Add(reason);
+            return null;
+        }
+
+        var inflated = map.OccupiedRectangles
+            .Select(r => new CanvasOccupiedRect
+            {
+                Id = r.Id,
+                Kind = r.Kind,
+                Text = r.Text,
+                X = Math.Max(0, r.X - margin),
+                Y = Math.Max(0, r.Y - margin),
+                Width = r.Width + margin * 2,
+                Height = r.Height + margin * 2,
+                Source = r.Source,
+                Confidence = r.Confidence
+            })
+            .ToArray();
+
+        var edgeMargin = Math.Max(grid, Math.Min(Math.Max(margin, grid), Math.Min(canvasWidth, canvasHeight) / 4));
+        for (var y = edgeMargin; y <= canvasHeight - requestedHeight - edgeMargin; y += grid)
+        {
+            for (var x = edgeMargin; x <= canvasWidth - requestedWidth - edgeMargin; x += grid)
+            {
+                var candidate = new CanvasOccupiedRect
+                {
+                    Id = "tool-probe-safe-slot",
+                    Kind = "drawing-probe-slot",
+                    X = x,
+                    Y = y,
+                    Width = requestedWidth,
+                    Height = requestedHeight,
+                    Source = "internal-occupancy-safe-slot",
+                    Confidence = "high"
+                };
+                if (inflated.Any(r => RectsOverlap(candidate, r))) continue;
+                plan.Status = "PASS";
+                plan.PlannedRect = new { candidate.X, candidate.Y, candidate.Width, candidate.Height };
+                plan.CollisionAnalysis = new
+                {
+                    status = "PASS",
+                    source = "internal-occupancy",
+                    occupiedRectangles = map.OccupiedRectangles.Count,
+                    inflatedMargin = margin
+                };
+                return candidate;
+            }
+        }
+
+        plan.Status = "UNKNOWN";
+        plan.BlockedReasons.Add("no free rectangle large enough for drawing probe after applying internal occupancy");
+        return null;
+    }
+
+    private static DrawingCreateClosureEvidence BuildDrawingCreateClosureEvidence(string[] args, string outDir,
+        int commandId, string context, string projectCopy, string? baselineExport, bool candidateSafeMutationFunctionalDiff)
+    {
+        var closureDir = Path.Combine(outDir, "drawing-create-closure");
+        Directory.CreateDirectory(closureDir);
+        var evidence = new DrawingCreateClosureEvidence
+        {
+            Context = context,
+            CommandId = commandId,
+            ProjectCopy = projectCopy,
+            ProjectCopySha256 = TrySha256(projectCopy, out _) ?? "",
+            BaselineExport = string.IsNullOrWhiteSpace(baselineExport) ? "" : FullPath(baselineExport),
+            CandidateSafeMutationFunctionalDiff = candidateSafeMutationFunctionalDiff
+        };
+        evidence.ExpectedClasses.AddRange(ExpectedDrawingCreateClasses(commandId));
+        evidence.PostCommandActionPath = Path.Combine(outDir, "post-command-" + context, "post-command-action.json");
+
+        var planned = TryReadPostCommandActionRect(evidence.PostCommandActionPath, out var placementSource, out var dragError);
+        evidence.PlacementSource = placementSource;
+        evidence.DragError = dragError;
+        if (planned != null)
+            evidence.PlannedRect = new { planned.X, planned.Y, planned.Width, planned.Height };
+        else
+            evidence.BlockedReasons.Add("post-command-action did not contain a readable drawing rectangle");
+        if (!string.IsNullOrWhiteSpace(dragError))
+            evidence.BlockedReasons.Add("draw action reported an error: " + dragError);
+        if (!candidateSafeMutationFunctionalDiff)
+            evidence.BlockedReasons.Add("normalized MCE diff did not prove a functional candidate mutation");
+        if (!string.Equals(placementSource, "internal-occupancy", StringComparison.OrdinalIgnoreCase))
+            evidence.BlockedReasons.Add("drawing probe was not placed by internal-occupancy safe-slot evidence");
+
+        var candidateExport = Path.Combine(closureDir, "candidate-export");
+        try
+        {
+            MceExporter.Export(projectCopy, candidateExport);
+            evidence.CandidateExport = candidateExport;
+        }
+        catch (Exception ex)
+        {
+            evidence.BlockedReasons.Add("candidate export failed after drawing: " + ex.Message);
+        }
+
+        if (!string.IsNullOrWhiteSpace(baselineExport) && Directory.Exists(FullPath(baselineExport)) &&
+            Directory.Exists(candidateExport))
+        {
+            var classDelta = CompareDrawingClassEvidence(FullPath(baselineExport), candidateExport, evidence.ExpectedClasses);
+            evidence.ExpectedClassAdded = classDelta.ExpectedClassAdded;
+            evidence.ClassDelta = classDelta.Evidence;
+        }
+        else
+        {
+            evidence.BlockedReasons.Add("baseline export is required for class-delta evidence");
+        }
+
+        if (planned != null && Directory.Exists(candidateExport))
+        {
+            var rectEvidence = FindDrawingRectEvidence(candidateExport, planned);
+            evidence.CandidateRectNearPlanned = rectEvidence.RectNearPlanned;
+            evidence.RectEvidence = rectEvidence.Evidence;
+        }
+
+        var canvasObjectsPath = OptionalFullPath(Opt(args, "--canvas-objects") ?? Opt(args, "--object-map") ??
+                                                Opt(args, "--property-map") ?? Opt(args, "--semantic-map"));
+        evidence.CanvasObjects = canvasObjectsPath ?? "";
+        if (planned != null && !string.IsNullOrWhiteSpace(canvasObjectsPath) && File.Exists(canvasObjectsPath))
+        {
+            var map = LoadCanvasObjectMap(canvasObjectsPath);
+            evidence.InternalCanvasEvidenceStatus = map.Status;
+            evidence.InternalCanvasReliableGeometry = map.ReliableGeometry;
+            evidence.CollisionAnalysis = BuildDrawingCollisionEvidence(planned, map, ParseInt(args, "--safe-slot-margin", 20));
+            var collisionJson = JsonSerializer.Serialize(evidence.CollisionAnalysis, JsonOptions());
+            evidence.NoCollision = collisionJson.Contains("\"status\": \"PASS\"", StringComparison.OrdinalIgnoreCase) ||
+                                   collisionJson.Contains("\"Status\": \"PASS\"", StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            evidence.BlockedReasons.Add("canvas object map is required for internal collision analysis");
+        }
+
+        evidence.Status = evidence.ExpectedClassAdded &&
+                          evidence.CandidateRectNearPlanned &&
+                          evidence.NoCollision &&
+                          evidence.InternalCanvasReliableGeometry &&
+                          evidence.BlockedReasons.Count == 0
+            ? "PASS"
+            : "UNKNOWN";
+
+        File.WriteAllText(Path.Combine(closureDir, "drawing-create-closure.json"),
+            JsonSerializer.Serialize(evidence, JsonOptions()), Encoding.UTF8);
+        return evidence;
+    }
+
+    private static CanvasOccupiedRect? TryReadPostCommandActionRect(string path, out string placementSource, out string dragError)
+    {
+        placementSource = "";
+        dragError = "";
+        if (!File.Exists(path))
+            return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        var root = doc.RootElement;
+        placementSource = JsonStringAny(root, "placementSource", "PlacementSource") ?? "";
+        dragError = JsonStringAny(root, "dragError", "DragError") ?? "";
+        if (!root.TryGetProperty("rect", out var rect) && !root.TryGetProperty("Rect", out rect))
+            return null;
+        var x = LayoutJsonIntAny(rect, "x", "X");
+        var y = LayoutJsonIntAny(rect, "y", "Y");
+        var width = LayoutJsonIntAny(rect, "width", "Width");
+        var height = LayoutJsonIntAny(rect, "height", "Height");
+        if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0)
+            return null;
+        return new CanvasOccupiedRect { X = x.Value, Y = y.Value, Width = width.Value, Height = height.Value };
+    }
+
+    private static object BuildDrawingCollisionEvidence(CanvasOccupiedRect planned, CanvasObjectMap map, int margin)
+    {
+        var collisions = map.OccupiedRectangles
+            .Where(r => RectsOverlap(planned, new CanvasOccupiedRect
+            {
+                X = Math.Max(0, r.X - margin),
+                Y = Math.Max(0, r.Y - margin),
+                Width = r.Width + margin * 2,
+                Height = r.Height + margin * 2
+            }))
+            .Select(r => new
+            {
+                r.Id,
+                r.Kind,
+                r.Text,
+                rect = new { r.X, r.Y, r.Width, r.Height },
+                r.Source,
+                r.Confidence
+            })
+            .ToArray();
+        return new
+        {
+            status = map.ReliableGeometry && collisions.Length == 0 ? "PASS" : "UNKNOWN",
+            source = "canvas-object-map",
+            mapStatus = map.Status,
+            reliableGeometry = map.ReliableGeometry,
+            objectProvider = map.ObjectProvider,
+            plannedRect = new { planned.X, planned.Y, planned.Width, planned.Height },
+            margin,
+            occupiedCount = map.OccupiedRectangles.Count,
+            collisions
+        };
+    }
+
+    private static DrawingClassDelta CompareDrawingClassEvidence(string baselineExport, string candidateExport, IEnumerable<string> expectedClasses)
+    {
+        var expected = expectedClasses.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var baseline = CountBlobGeometryClasses(Path.Combine(baselineExport, "blob_geometry.json"), expected);
+        var candidate = CountBlobGeometryClasses(Path.Combine(candidateExport, "blob_geometry.json"), expected);
+        var added = expected.Any(cls => candidate.GetValueOrDefault(cls) > baseline.GetValueOrDefault(cls));
+        var deltas = expected.Select(cls => new
+        {
+            className = cls,
+            baseline = baseline.GetValueOrDefault(cls),
+            candidate = candidate.GetValueOrDefault(cls),
+            delta = candidate.GetValueOrDefault(cls) - baseline.GetValueOrDefault(cls)
+        }).ToArray();
+        return new DrawingClassDelta(added, new
+        {
+            status = added ? "PASS" : "UNKNOWN",
+            expectedClasses = expected,
+            deltas
+        });
+    }
+
+    private static Dictionary<string, int> CountBlobGeometryClasses(string path, string[] expectedClasses)
+    {
+        var result = expectedClasses.ToDictionary(cls => cls, _ => 0, StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(path))
+            return result;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return result;
+        foreach (var entry in doc.RootElement.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("classOccurrences", out var classes) || classes.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var cls in classes.EnumerateArray())
+            {
+                var name = JsonString(cls, "className") ?? "";
+                if (result.ContainsKey(name))
+                    result[name]++;
+            }
+        }
+        return result;
+    }
+
+    private static DrawingRectEvidence FindDrawingRectEvidence(string candidateExport, CanvasOccupiedRect planned)
+    {
+        var path = Path.Combine(candidateExport, "blob_geometry.json");
+        var matches = new List<object>();
+        var near = false;
+        if (File.Exists(path))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in doc.RootElement.EnumerateArray())
+                {
+                    if (!entry.TryGetProperty("candidateRectangles", out var rects) || rects.ValueKind != JsonValueKind.Array)
+                        continue;
+                    foreach (var rect in rects.EnumerateArray())
+                    {
+                        var x = LayoutJsonIntAny(rect, "x", "X");
+                        var y = LayoutJsonIntAny(rect, "y", "Y");
+                        var width = LayoutJsonIntAny(rect, "width", "Width");
+                        var height = LayoutJsonIntAny(rect, "height", "Height");
+                        if (x == null || y == null || width == null || height == null)
+                            continue;
+                        var dx = Math.Abs(x.Value - planned.X);
+                        var dy = Math.Abs(y.Value - planned.Y);
+                        var dw = Math.Abs(width.Value - planned.Width);
+                        var dh = Math.Abs(height.Value - planned.Height);
+                        var total = dx + dy + dw + dh;
+                        var exactOrNear = dx <= 8 && dy <= 8 && dw <= 12 && dh <= 12;
+                        var endpointNear = Math.Abs(x.Value - (planned.X + planned.Width)) <= 8 &&
+                                           Math.Abs(y.Value - (planned.Y + planned.Height)) <= 8;
+                        if (!exactOrNear && !endpointNear && total > 180)
+                            continue;
+                        if (exactOrNear || endpointNear)
+                            near = true;
+                        matches.Add(new
+                        {
+                            table = JsonString(entry, "table"),
+                            column = JsonString(entry, "column"),
+                            rowKey = JsonString(entry, "rowKey"),
+                            offset = JsonString(rect, "offset"),
+                            encoding = JsonString(rect, "encoding"),
+                            pattern = JsonString(rect, "pattern"),
+                            x = x.Value,
+                            y = y.Value,
+                            width = width.Value,
+                            height = height.Value,
+                            totalDelta = total,
+                            exactOrNear,
+                            endpointNear
+                        });
+                    }
+                }
+            }
+        }
+        return new DrawingRectEvidence(near, new
+        {
+            status = near ? "PASS" : "UNKNOWN",
+            plannedRect = new { planned.X, planned.Y, planned.Width, planned.Height },
+            matches = matches.Take(20).ToArray()
+        });
+    }
+
+    private static string[] ExpectedDrawingCreateClasses(int commandId) => commandId switch
+    {
+        32901 => new[] { "CDrawLine" },
+        32902 => new[] { "CDrawArc" },
+        32903 => new[] { "CDrawRect" },
+        32904 => new[] { "CDrawRoundRect" },
+        32905 => new[] { "CDrawEllipse" },
+        32906 => new[] { "CDrawPolyLine", "CDrawPolygon" },
+        32907 => new[] { "CDrawLabel" },
+        32908 => new[] { "CDrawBitmap" },
+        32936 => new[] { "CDrawEdit" },
+        32938 => new[] { "CDrawButton" },
+        32941 => new[] { "CDrawButton", "CDrawLabel" },
+        32946 or 32947 => new[] { "CDrawTable" },
+        32948 => new[] { "CDrawPercent" },
+        _ => Array.Empty<string>()
+    };
 
     private static bool IsCandidateSafeReversibleReturnProbe(int commandId, string context)
         => commandId == 57643 && context is "animation-after-cut" or "animation-single-after-cut" or
@@ -1567,6 +1980,7 @@ internal static partial class Program
                 var candidateSafeMutationNotFunctional = false;
                 var projectCopyHashChanged = false;
                 var unknownRiskHashDriftExplained = false;
+                var drawingCreateClosurePass = false;
                 var context = JsonString(doc.RootElement, "context") ?? "";
                 if (doc.RootElement.TryGetProperty("evidence", out var evidence) &&
                     evidence.ValueKind == JsonValueKind.Object)
@@ -1589,6 +2003,14 @@ internal static partial class Program
                     {
                         unknownRiskHashDriftExplained = true;
                     }
+                    drawingCreateClosurePass = JsonBoolAny(evidence, "drawingCreateClosurePass", "DrawingCreateClosurePass") == true;
+                }
+                if (!drawingCreateClosurePass &&
+                    doc.RootElement.TryGetProperty("drawingCreateClosure", out var drawingClosure) &&
+                    drawingClosure.ValueKind == JsonValueKind.Object)
+                {
+                    drawingCreateClosurePass = string.Equals(JsonStringAny(drawingClosure, "Status", "status"), "PASS",
+                        StringComparison.OrdinalIgnoreCase);
                 }
                 var newWindowObserved = JsonBoolAny(doc.RootElement, "newWindowObserved", "NewWindowObserved") == true ||
                                         (doc.RootElement.TryGetProperty("commandObservedWindows", out var windows) &&
@@ -1597,7 +2019,8 @@ internal static partial class Program
                 result[toolId] = new McgsToolProbeEvidence(toolId, path, status, commandId, safetyClass, candidateSafeMutation,
                     candidateSafeMutationFunctionalDiff, candidateSafeMutationReversibleReturn,
                     candidateSafeMutationUnexpectedFunctionalDiff, candidateSafeMutationNotFunctional,
-                    newWindowObserved, projectCopyHashChanged, context, unknownRiskHashDriftExplained);
+                    newWindowObserved, projectCopyHashChanged, context, unknownRiskHashDriftExplained,
+                    drawingCreateClosurePass);
             }
             catch
             {
@@ -1650,7 +2073,8 @@ internal static partial class Program
     }
 
     private static bool ProbeHasCandidateSafeEvidence(McgsToolProbeEvidence probe)
-        => probe.CandidateSafeMutationFunctionalDiff ||
+        => probe.DrawingCreateClosurePass ||
+           probe.CandidateSafeMutationFunctionalDiff ||
            probe.CandidateSafeMutationReversibleReturn ||
            probe.NewWindowObserved;
 
@@ -1747,6 +2171,11 @@ internal static partial class Program
             closureStatus = "closedLoopPass";
             nextProbe = "";
         }
+        else if (category == "drawing-create" && probed && probe?.DrawingCreateClosurePass == true)
+        {
+            closureStatus = "closedLoopPass";
+            nextProbe = "";
+        }
         else if (probed)
         {
             closureStatus = "notClosedLoop";
@@ -1781,6 +2210,8 @@ internal static partial class Program
             afterEvidence.Add("tool-probe observed a functional normalized candidate diff");
         if (probe?.CandidateSafeMutationReversibleReturn == true)
             afterEvidence.Add("tool-probe observed reversible return evidence");
+        if (probe?.DrawingCreateClosurePass == true)
+            afterEvidence.Add("tool-probe drawing-create closure evidence PASS");
 
         return new McgsToolClosureRecord
         {
@@ -1798,17 +2229,25 @@ internal static partial class Program
             expectedEffect = tool.expectedEffect,
             actualEffect = McgsToolActualEffect(tool, sweepStatus, probed, probe),
             persistenceEvidence = McgsToolPersistenceEvidence(tool, closureStatus, probe),
-            readbackEvidence = McgsToolReadbackEvidence(tool, closureStatus),
-            internalCanvasEvidence = McgsToolInternalCanvasEvidence(tool, closureStatus, category),
+            readbackEvidence = McgsToolReadbackEvidence(tool, closureStatus, probe),
+            internalCanvasEvidence = McgsToolInternalCanvasEvidence(tool, closureStatus, category, probe),
             collisionAnalysis = new
             {
                 status = category is "drawing-create" or "drawing-edit"
-                    ? (closureStatus == "closedLoopPass" ? "covered-by-workflow-internal-evidence" : "missing-internal-canvas-closure")
+                    ? (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true
+                        ? "covered-by-tool-probe-drawing-create-closure"
+                        : closureStatus == "closedLoopPass"
+                            ? "covered-by-workflow-internal-evidence"
+                            : "missing-internal-canvas-closure")
                     : "notApplicable",
-                source = category is "drawing-create" or "drawing-edit" ? "property-map/canvas-object-map/readback evidence required" : ""
+                source = category is "drawing-create" or "drawing-edit"
+                    ? probe?.DrawingCreateClosurePass == true
+                        ? "tool-probe drawing-create-closure.json"
+                        : "property-map/canvas-object-map/readback evidence required"
+                    : ""
             },
             layoutPlanEvidence = McgsToolLayoutPlanEvidence(tool, closureStatus, category),
-            visualEvidence = McgsToolVisualEvidence(tool, closureStatus),
+            visualEvidence = McgsToolVisualEvidence(tool, closureStatus, probe),
             projectDiffEvidence = McgsToolProjectDiffEvidence(probe),
             sideEffects = McgsToolSideEffects(tool, probe),
             rollbackPath = McgsToolRollbackPath(tool, closureStatus),
@@ -1984,6 +2423,7 @@ internal static partial class Program
     {
         if (IsSafetyBlockedTool(tool)) return "not invoked; explicit safety boundary";
         if (tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)) return "implemented route exists; closure depends on category evidence";
+        if (probed && probe?.DrawingCreateClosurePass == true) return "probe created a drawing object with internal occupancy, class-delta, rectangle, collision, and export evidence";
         if (probed && probe?.CandidateSafeMutationFunctionalDiff == true) return "probe observed functional normalized candidate diff";
         if (probed && probe?.CandidateSafeMutationReversibleReturn == true) return "probe observed reversible return";
         if (probed && probe?.NewWindowObserved == true) return "probe observed new dialog/window";
@@ -1992,6 +2432,8 @@ internal static partial class Program
 
     private static string[] McgsToolPersistenceEvidence(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
     {
+        if (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true)
+            return new[] { probe.Path, "tool-probe drawing-create-closure/drawing-create-closure.json" };
         if (closureStatus == "closedLoopPass")
             return new[] { tool.evidenceSource };
         if (probe?.CandidateSafeMutationReversibleReturn == true)
@@ -1999,15 +2441,21 @@ internal static partial class Program
         return Array.Empty<string>();
     }
 
-    private static string[] McgsToolReadbackEvidence(McgsToolEntry tool, string closureStatus)
-        => closureStatus == "closedLoopPass" || closureStatus == "readOnlyClosedLoopPass"
+    private static string[] McgsToolReadbackEvidence(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
+    {
+        if (closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true)
+            return new[] { probe.Path, "tool-probe candidate export/blob_geometry class and rectangle evidence" };
+        return closureStatus == "closedLoopPass" || closureStatus == "readOnlyClosedLoopPass"
             ? new[] { tool.evidenceSource }
             : Array.Empty<string>();
+    }
 
-    private static string[] McgsToolInternalCanvasEvidence(McgsToolEntry tool, string closureStatus, string category)
+    private static string[] McgsToolInternalCanvasEvidence(McgsToolEntry tool, string closureStatus, string category, McgsToolProbeEvidence? probe)
         => category is "drawing-create" or "drawing-edit" or "selection"
             ? closureStatus == "closedLoopPass"
-                ? new[] { tool.evidenceSource }
+                ? probe?.DrawingCreateClosurePass == true
+                    ? new[] { probe.Path, "tool-probe post-command safeSlotPlan and drawing-create-closure collisionAnalysis" }
+                    : new[] { tool.evidenceSource }
                 : Array.Empty<string>()
             : Array.Empty<string>();
 
@@ -2018,8 +2466,10 @@ internal static partial class Program
                 : Array.Empty<string>()
             : Array.Empty<string>();
 
-    private static string[] McgsToolVisualEvidence(McgsToolEntry tool, string closureStatus)
-        => closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
+    private static string[] McgsToolVisualEvidence(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
+        => closureStatus == "closedLoopPass" && probe?.DrawingCreateClosurePass == true
+            ? new[] { probe.Path, "tool-probe screenshot/window capture evidence for audit only" }
+            : closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
             ? new[] { tool.evidenceSource }
             : Array.Empty<string>();
 
@@ -2103,10 +2553,60 @@ internal static partial class Program
         public string geminiReview { get; set; } = "";
     }
 
+    private sealed class DrawingSafeSlotPlan
+    {
+        public string Status { get; set; } = "UNKNOWN";
+        public string PlacementSource { get; set; } = "internal-occupancy";
+        public string CanvasObjects { get; set; } = "";
+        public string ObjectProvider { get; set; } = "none";
+        public bool ReliableGeometry { get; set; }
+        public int Margin { get; set; }
+        public int Grid { get; set; }
+        public object? RequestedRect { get; set; }
+        public object? CanvasSize { get; set; }
+        public object? PlannedRect { get; set; }
+        public object? CollisionAnalysis { get; set; }
+        public List<CanvasOccupiedRect> OccupiedRectangles { get; } = new();
+        public List<string> BlockedReasons { get; } = new();
+        public List<string> UnknownReasons { get; } = new();
+    }
+
+    private sealed class DrawingCreateClosureEvidence
+    {
+        public int SchemaVersion { get; set; } = 1;
+        public string Status { get; set; } = "UNKNOWN";
+        public string Context { get; set; } = "";
+        public int CommandId { get; set; }
+        public string ProjectCopy { get; set; } = "";
+        public string ProjectCopySha256 { get; set; } = "";
+        public string BaselineExport { get; set; } = "";
+        public string CandidateExport { get; set; } = "";
+        public string CanvasObjects { get; set; } = "";
+        public string PlacementSource { get; set; } = "";
+        public string PostCommandActionPath { get; set; } = "";
+        public string DragError { get; set; } = "";
+        public bool CandidateSafeMutationFunctionalDiff { get; set; }
+        public List<string> ExpectedClasses { get; } = new();
+        public bool ExpectedClassAdded { get; set; }
+        public bool CandidateRectNearPlanned { get; set; }
+        public bool NoCollision { get; set; }
+        public string InternalCanvasEvidenceStatus { get; set; } = "";
+        public bool InternalCanvasReliableGeometry { get; set; }
+        public object? PlannedRect { get; set; }
+        public object? ClassDelta { get; set; }
+        public object? RectEvidence { get; set; }
+        public object? CollisionAnalysis { get; set; }
+        public List<string> BlockedReasons { get; } = new();
+    }
+
+    private sealed record DrawingClassDelta(bool ExpectedClassAdded, object Evidence);
+    private sealed record DrawingRectEvidence(bool RectNearPlanned, object Evidence);
+
     private sealed record McgsToolProbeEvidence(string ToolId, string Path, string Status, int CommandId, string SafetyClass,
         bool CandidateSafeMutation, bool CandidateSafeMutationFunctionalDiff, bool CandidateSafeMutationReversibleReturn,
         bool CandidateSafeMutationUnexpectedFunctionalDiff, bool CandidateSafeMutationNotFunctional,
-        bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained);
+        bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained,
+        bool DrawingCreateClosurePass);
 
     private sealed class McgsCatalogBuild
     {
