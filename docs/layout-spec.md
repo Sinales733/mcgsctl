@@ -112,6 +112,12 @@ tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe `
   --canvas-width 800 `
   --canvas-height 480
 
+tools\mcgsctl\mcgsctl.ps1 canvas property-map-probe `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --out .mcgsctl-runs\canvas-property-map `
+  --semantic-map .mcgsctl-runs\canvas-semantic-map\semantic-map.json `
+  --row-key 2
+
 tools\mcgsctl\mcgsctl.ps1 layout preview `
   --layout layouts\ptz-basic.json `
   --out .mcgsctl-runs\layout-preview-auto `
@@ -147,6 +153,40 @@ evidenceChain
 ```
 
 The evidence chain may include MCE rect offsets, text/variable/expression anchors, workflow result paths, and property readback paths. For mcgsctl-created controls, workflow results and GUI readback are used to override ambiguous MCE payloads. For existing legacy controls, the probe uses control anchors plus decoded text/script anchors and returns `UNKNOWN` with `nextProbe` when an object cannot be resolved. A final semantic map must not silently leave `unknown-mce-object` records.
+
+`canvas property-map-probe` is the full-coverage follow-up to semantic mapping. It writes:
+
+```text
+property-map.json
+property-map-probe.json
+semantic-map-source/       # only when the probe generated a semantic map itself
+```
+
+Every object record carries a `properties` object with stable keys for geometry, semantic kind, displayed text, variable/expression bindings, operations, script, font, alignment, colors, borders, visibility, input/display format, permissions, navigation, animation/alarm rules, grouping, and z-order. The value contract is deliberately strict:
+
+```text
+status=value          # value is supported by an evidence source
+status=notApplicable  # the object kind makes the property irrelevant
+status=unresolved     # the property is relevant or unknown and needs nextProbe
+```
+
+Unresolved properties keep the probe status `UNKNOWN`. This is intentional: property coverage is not complete until the missing fields are proved by property-dialog readback, one-property MCE/clipboard diff experiments, or another internal evidence source. Layout planning may use property maps for preserving known semantic groups, but it must not treat unresolved style/action fields as understood.
+
+Full MCGS editor coverage uses a separate tool inventory layer:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-catalog `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --toolbar-probe .mcgsctl-runs\canvas-toolbar\toolbar-probe.json `
+  --out .mcgsctl-runs\mcgs-tool-catalog
+
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep `
+  --project .mcgsctl-work\layout-gui-smoke\candidate.MCE `
+  --tool-catalog .mcgsctl-runs\mcgs-tool-catalog\tool-catalog.json `
+  --out .mcgsctl-runs\mcgs-tool-sweep
+```
+
+`tool-catalog.json` and `function-catalog.json` are inventory records, not proof that every MCGS command is understood. A tool is understood only after its purpose, inputs, side effects, safety class, invocation path, and readback/evidence path are recorded. Stage-1 `tool-sweep` therefore leaves unknown-risk commands as `UNKNOWN` instead of clicking them blindly.
 
 The older canvas diagnostics probe:
 

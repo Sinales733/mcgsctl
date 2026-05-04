@@ -118,6 +118,7 @@ tools\mcgsctl\mcgsctl.ps1 canvas toolbar-probe --project .mcgsctl-work\layout-gu
 tools\mcgsctl\mcgsctl.ps1 canvas mce-geometry-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-geometry
 tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-mce-object-map --row-key 2 --canvas-width 800 --canvas-height 480
 tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-semantic-map --workflow-results .mcgsctl-work\layout-gui-smoke\workflow-results --row-key 2 --canvas-width 800 --canvas-height 480
+tools\mcgsctl\mcgsctl.ps1 canvas property-map-probe --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-property-map --semantic-map .mcgsctl-runs\canvas-semantic-map\semantic-map.json --row-key 2
 ```
 
 `canvas inspect` writes `canvas-inspect.json` and `canvas-objects.json` from UIA, MSAA/IAccessible, `WM_GETOBJECT`, and `OBJID_NATIVEOM` probes. If those internal channels do not expose reliable object geometry, `canvas-objects.json` is `UNKNOWN`. In that case `layout preview --placement internal-occupancy --canvas-objects ...` and `window.layout.apply --placement internal-occupancy --canvas-objects ...` stay blocked; the tool does not use screenshots as a hidden automatic layout source. Screenshots remain evidence only.
@@ -126,7 +127,18 @@ tools\mcgsctl\mcgsctl.ps1 canvas semantic-map-probe --project .mcgsctl-work\layo
 
 `canvas semantic-map-probe` builds on the same read-only export and adds object semantics for the target row. It combines decoded rect anchors, GBK/text anchors, workflow `createdUiObjects`, and GUI property readback evidence when available. Its `semantic-map.json` records each object rectangle, semantic kind, displayed text, variable/expression, press/release operations, script status/summary, confidence, and evidence chain. It also writes a semantic `canvas-objects.json` with `ObjectProvider=mce-semantic-map`, so `layout preview --placement internal-occupancy` can protect existing grouped controls without falling back to screenshot guessing. If an object cannot be resolved, the probe returns `UNKNOWN` and includes `nextProbe` evidence guidance instead of emitting a final `unknown-mce-object`.
 
+`canvas property-map-probe` is the next coverage layer. It expands each semantic object into a `property-map.json` record with explicit fields for geometry, text, variable/expression bindings, operations, scripts, font, alignment, colors, visibility, input format, permissions, navigation, animation/alarm rules, grouping, and z-order. A property is never silently omitted: each field is either `value`, `notApplicable`, or `unresolved` with a concrete `nextProbe`. The command returns `UNKNOWN` while any target-scope property remains unresolved.
+
 For decoder work, `canvas mce-blob-diff-probe --before <a.MCE> --after <b.MCE> --out <dir>` writes sanitized changed ranges and bounded hex windows only. It is evidence for field reverse engineering and must not be treated as permission to raw-patch the private object blobs.
+
+For full editor coverage, build tool and function inventories from MCGS toolbar/context evidence:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-catalog --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --toolbar-probe .mcgsctl-runs\canvas-toolbar\toolbar-probe.json --out .mcgsctl-runs\mcgs-tool-catalog
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --tool-catalog .mcgsctl-runs\mcgs-tool-catalog\tool-catalog.json --out .mcgsctl-runs\mcgs-tool-sweep
+```
+
+`mcgs tool-catalog` writes `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` is conservative: it does not click unknown-risk tools until each tool has a candidate-safe classifier, so unresolved tools keep the sweep `UNKNOWN` rather than being treated as understood.
 
 Common blocked summaries:
 
@@ -199,6 +211,8 @@ tools\mcgsctl\mcgsctl.ps1 strings --file E:\MCGSE\Program\McgsSetE.exe --filter 
 - `canvas mce-geometry-probe`: exports the candidate read-only and scans private object blobs for class/string/geometry candidates. It is evidence only; unreliable inferred geometry remains `UNKNOWN` and cannot drive internal occupancy placement.
 - `canvas mce-object-map-probe`: exports the candidate read-only, decodes high-confidence object occupancy rectangles from MCGS object blobs, and writes a reliable `canvas-objects.json` for internal-occupancy placement when the evidence is sufficient. It can match mcgsctl-created objects from workflow results and can also emit generic occupied rectangles for existing objects.
 - `canvas semantic-map-probe`: exports the candidate read-only, resolves target-row MCGS objects into semantic records, and writes `semantic-map.json` plus a semantic `canvas-objects.json`. It uses rect anchors, text/variable/expression anchors, workflow results, and property readback; unresolved objects remain `UNKNOWN` with `nextProbe` rather than becoming final `unknown-mce-object`.
+- `canvas property-map-probe`: expands semantic records into a full-field `property-map.json`. Every required field is present as `value`, `notApplicable`, or `unresolved` with `nextProbe`; unresolved property coverage keeps the probe `UNKNOWN`.
+- `mcgs tool-catalog`, `mcgs inventory`, `mcgs tool-probe`, and `mcgs tool-sweep`: normalize MCGS toolbar/function evidence into machine-readable coverage records. Stage-1 sweeps are read-only and keep unknown-risk command IDs unresolved until candidate-safe probes exist.
 - `canvas mce-blob-diff-probe`: compares two candidate files read-only and writes sanitized blob-diff evidence for decoder experiments. It does not store full raw blobs and does not modify either project.
 - `layout validate`: checks a declarative HMI layout spec offline for duplicate IDs, bad geometry, unsupported object kinds, missing control bindings, and optional safety-spec mismatches.
 - `layout preview`: renders the layout to SVG/HTML/JSON evidence without opening MCGS.

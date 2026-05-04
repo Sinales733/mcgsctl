@@ -82,6 +82,7 @@ internal static partial class Program
                 "mce" => Mce(args),
                 "verify" => Verify(args),
                 "canvas" => Canvas(args),
+                "mcgs" => Mcgs(args),
                 "layout" => Layout(args),
                 "workflow" => Workflow(args),
                 "candidate" => Candidate(args),
@@ -142,11 +143,16 @@ Commands:
   mcgsctl snapshot [--project <mce>] [--pid <pid>] [--out <dir>]
   mcgsctl mce export --project <mce> [--out <dir>]
   mcgsctl verify --project <mce> --spec <json>
+  mcgsctl mcgs inventory --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
+  mcgsctl mcgs tool-catalog --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
+  mcgsctl mcgs tool-probe --project <candidate.mce> --tool-id <id> --out <dir> [--tool-catalog <tool-catalog.json>]
+  mcgsctl mcgs tool-sweep --project <candidate.mce> --out <dir> [--tool-catalog <tool-catalog.json>]
   mcgsctl canvas inspect --project <candidate.mce> --out <dir> [--window-index <n>]
   mcgsctl canvas context-menu-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--x <n> --y <n>]
   mcgsctl canvas clipboard-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--select-all]
   mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>]
   mcgsctl canvas mce-geometry-probe --project <candidate.mce> --out <dir>
+  mcgsctl canvas property-map-probe --project <candidate.mce> --row-key <key> --out <dir> [--semantic-map <semantic-map.json>]
   mcgsctl layout validate --layout <layout.json> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy] [--out <file-or-dir>]
   mcgsctl layout preview --layout <layout.json> --out <dir> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl layout readback --project <candidate.mce> --layout <layout.json> --out <dir> [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]

@@ -250,7 +250,7 @@ internal static partial class Program
     private static int Canvas(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
+            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe|property-map-probe --project <candidate.mce> --out <dir> OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -261,6 +261,7 @@ internal static partial class Program
             "mce-geometry-probe" => CanvasMceGeometryProbe(args),
             "mce-object-map-probe" => CanvasMceObjectMapProbe(args),
             "semantic-map-probe" => CanvasSemanticMapProbe(args),
+            "property-map-probe" => CanvasPropertyMapProbe(args),
             "mce-blob-diff-probe" => CanvasMceBlobDiffProbe(args),
             _ => Fail("Unknown canvas command: " + args[1])
         };

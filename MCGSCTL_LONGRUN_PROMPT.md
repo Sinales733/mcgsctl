@@ -20,6 +20,12 @@ this project, real drawing means using MCGS itself as the writer and proving the
 created objects through exported evidence, screenshots, property readback, and
 candidate validation.
 
+The current mission also includes full MCGS editor coverage. Geometry maps and
+semantic summaries are intermediate stages only. `mcgsctl` must grow toward a
+complete local understanding of the MCGS editor: every discoverable tool, every
+tool's purpose and invocation route, every canvas element, and every relevant
+property needed to reason about, modify, and plan HMI screens.
+
 ## Compression-Resistant Startup
 
 At the start of every new run, after any context compression, or whenever the
@@ -27,11 +33,13 @@ thread looks stale, do this before making decisions:
 
 1. Read `AGENTS.md`.
 2. Read this file: `tools/mcgsctl/MCGSCTL_LONGRUN_PROMPT.md`.
-3. Run `git status --short` from `E:\myproject\FG2`.
-4. Read `tools/mcgsctl/README.md` and `docs\operator-runbook.md` if the task
+3. Read `tools/mcgsctl/MCGSCTL_FULL_COVERAGE_PROMPT.md` when the task touches
+   full MCGS understanding, tool traversal, or property maps.
+4. Run `git status --short` from `E:\myproject\FG2`.
+5. Read `tools/mcgsctl/README.md` and `docs\operator-runbook.md` if the task
    touches workflow behavior, release gates, or GUI writes.
-5. Inspect current code and tests before assuming which features already exist.
-6. Do not trust compressed chat memory over current files and command output.
+6. Inspect current code and tests before assuming which features already exist.
+7. Do not trust compressed chat memory over current files and command output.
 
 If progress state is unclear, reconstruct it from:
 
@@ -39,6 +47,7 @@ If progress state is unclear, reconstruct it from:
 - `git diff -- tools/mcgsctl`
 - `tools/mcgsctl\README.md`
 - `tools/mcgsctl\docs\operator-runbook.md`
+- `tools/mcgsctl\MCGSCTL_FULL_COVERAGE_PROMPT.md`
 - `tools/mcgsctl\tests\McgsCtl.Tests`
 - recent evidence under `.mcgsctl-work` and `.mcgsctl-runs`
 
@@ -91,8 +100,10 @@ Treat every blocker as a new engineering task:
 - If the first path fails, try a different evidence source or implementation
   route: UIA, MSAA, `WM_GETOBJECT`, clipboard, toolbar command discovery,
   read-only MCE geometry, GUI readback, screenshots, or Gemini review.
-- If Gemini is available, ask Gemini a bounded question with sanitized evidence,
-  convert the answer into a local test or code change, and continue.
+- If Gemini is available, ask Gemini a bounded question with sanitized evidence
+  whenever it can accelerate UI/tool/property understanding. Do not wait for a
+  milestone; use it as a continuous collaborator, then convert the answer into
+  a local test, probe, code change, or rejected hypothesis.
 - If Gemini is unavailable, continue from local evidence and public/known
   Windows automation patterns instead of stopping.
 - Keep a local work log in generated evidence or the final summary so a later
@@ -188,6 +199,12 @@ Use Gemini for bounded questions, not open-ended delegation. Good prompts:
 - "Review this layout JSON and preview screenshot for HMI usability issues."
 - "Compare these before/after screenshots and list likely GUI automation
   mistakes."
+- "Given this property dialog screenshot/window tree, name each field and infer
+  what property-map key it should populate."
+- "Given this sanitized MCE/clipboard offset summary, which field hypothesis
+  should I test next?"
+- "Given this tool catalog fragment, which commands are likely read-only,
+  candidate-safe, or risky?"
 
 Rules for Gemini collaboration:
 
@@ -203,6 +220,9 @@ Rules for Gemini collaboration:
   evidence images under `.mcgsctl-work` / `.mcgsctl-runs`.
 - If multimodal/image input through the bridge fails, continue with text-only
   summaries and local evidence. Do not block the core `mcgsctl` work on Gemini.
+- Gemini may be consulted at any time during tool inventory, property-dialog
+  traversal, screenshot interpretation, offset-diff review, and failure triage.
+  There is no requirement to wait for a specific stage before asking.
 
 ## Unattended Git Update Mode
 
@@ -569,6 +589,62 @@ Completion target for semantic mapping:
   verified, and what file-safe evidence would be needed before expanding beyond
   the current target scope.
 
+### Full Property Map And Tool Coverage Stage
+
+The semantic map is not the final property target. After semantic mapping, add a
+full property-map and full MCGS tool-coverage stage. Use
+`tools/mcgsctl/MCGSCTL_FULL_COVERAGE_PROMPT.md` as the detailed contract.
+
+Target command surface or equivalent behavior:
+
+```powershell
+tools\mcgsctl\mcgsctl.ps1 mcgs inventory --project <candidate.MCE> --out <dir>
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-catalog --project <candidate.MCE> --out <dir>
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-probe --project <candidate.MCE> --tool-id <id> --out <dir>
+tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep --project <candidate.MCE> --out <dir>
+tools\mcgsctl\mcgsctl.ps1 canvas property-map-probe --project <candidate.MCE> --row-key <key> --out <dir>
+tools\mcgsctl\mcgsctl.ps1 canvas property-readback --project <candidate.MCE> --object-id <id> --out <dir>
+```
+
+Required outputs:
+
+- `tool-catalog.json`: every discovered menu item, toolbar button, toolbox tool,
+  context-menu command, project-tree action, dialog command, and known shortcut.
+- `function-catalog.json`: what every tool/function does, its inputs, outputs,
+  side effects, safety class, invocation route, and evidence source.
+- `tool-sweep.json`: one-by-one traversal status for every tool, including
+  preconditions, mutation risk, candidate evidence, and next probe.
+- `property-map.json`: every target-scope canvas element with geometry,
+  semantic kind, displayed text, variable bindings, expression bindings,
+  operations/actions, scripts, style, visibility, animation/display settings,
+  input/display formats, navigation targets, grouping/layer evidence, and
+  confidence/evidence per property.
+
+Rules:
+
+- Do not equate semantic map with full property map. `semanticKind`, text,
+  variable, press/release, and script-empty status are useful but incomplete.
+- Every discoverable MCGS tool must be inventoried. Every candidate-safe tool
+  must be probed on a throwaway/candidate copy.
+- Every property-dialog tab/control for supported elements must be traversed.
+- Missing property fields are not silently acceptable. Mark `notApplicable`
+  only with evidence; otherwise keep an unresolved record with `nextProbe`.
+- Use the local help/manual HTML and Gemini continuously to understand tool
+  names, field meanings, and likely next probes, while keeping final decisions
+  grounded in local evidence.
+- Unknown/risky tools do not become PASS. They remain blocked with a concrete
+  precondition, risk class, and next file-safe probe.
+
+Completion target:
+
+- The selected target row/window has no final hidden unknowns in its property
+  map.
+- The local MCGS editor profile has a tool catalog and function catalog.
+- Candidate-safe tools have reversible probe evidence.
+- Layout planning consumes property-map information, not only occupied
+  rectangles or semantic summaries.
+- README/runbook/schema/tests explain and enforce the new catalogs/maps.
+
 ### Automatic Layout Planner
 
 Do not advertise "automatic visual planning" until the tool can produce a
@@ -595,9 +671,9 @@ Rules:
   bottom-edge unstable zones, size labels from text length, avoid overlap with
   existing controls, and keep related controls grouped.
 
-## First Supported Object Set
+## Earlier Drawing Layer And Superseded Scope Limits
 
-Start small. The first useful drawing layer should support:
+The earlier drawing layer started small and supported:
 
 - `section-title`: static text used as a readable area header.
 - `static-label`: static explanatory text.
@@ -606,7 +682,10 @@ Start small. The first useful drawing layer should support:
 - `status-button`: standard-button style indicator with visibility expression
   evidence.
 
-Defer these until the small set is stable:
+Those limits are no longer the full mission. The full-coverage stage must
+continue past this first set and systematically inventory/probe every
+discoverable MCGS tool and property. Treat the following as later coverage
+targets rather than permanent exclusions:
 
 - native MCGS lamps
 - complex vector graphics
@@ -721,10 +800,22 @@ Proceed in this order unless current code shows a better safe path:
    when available. Geometry-only avoidance is allowed as an intermediate
    experiment, but final semantic completion requires no target-scope
    `unknown-mce-object` records.
-12. Release integration: connect layout evidence to candidate summary and
+12. Full property map: implement `canvas property-map-probe` and property
+   readback so every target-scope object has geometry, semantic kind, bindings,
+   operations, scripts, style, visibility, animation/display settings,
+   input/display formats, and evidence/confidence per property.
+13. Full tool inventory: implement MCGS menu/toolbar/toolbox/context/project
+   tree inventory and emit `tool-catalog.json`.
+14. Tool traversal: implement a one-by-one safe sweep for all discovered tools,
+   recording purpose, invocation route, preconditions, side effects, mutation
+   risk, evidence, support status, and next probes.
+15. Function catalog: produce `function-catalog.json` that explains each tool's
+   purpose, inputs, outputs, safety class, and verification/readback method.
+16. Release integration: connect layout/property/tool evidence to candidate
+   summary and
    `safety.verify`.
-13. Documentation: update README, operator runbook, examples, and schemas.
-14. Publish check: run build, tests, and publish script when the implementation
+17. Documentation: update README, operator runbook, examples, and schemas.
+18. Publish check: run build, tests, and publish script when the implementation
    is ready for release packaging.
 
 ## Definition Of Done
@@ -755,6 +846,18 @@ The task is not done when code merely compiles. A useful completion must include
 - no target-scope `UNKNOWN` / `unknown-mce-object` remains in the final
   semantic-map success path; any such record keeps the task open and must list
   the next file-safe probe to run
+- property-map output exists for the selected target row/window and includes
+  geometry, semantic kind, displayed text, bindings, expressions, operations,
+  scripts, style, visibility, animation/display settings, input/display formats,
+  navigation/grouping evidence where applicable, and confidence/evidence per
+  property
+- no final target-scope property field is silently missing; fields are valued,
+  evidenced as not applicable, or kept open with `nextProbe`
+- `tool-catalog.json`, `function-catalog.json`, and `tool-sweep.json` exist for
+  discovered MCGS menus, toolbars, toolbox tools, context menus, project-tree
+  actions, and dialog commands
+- every candidate-safe discovered tool has a reversible probe or a documented
+  blocker/precondition/risk class
 - candidate summary sees layout workflow results
 - release gates block `FAIL` and `UNKNOWN`
 - README/runbook explain the workflow and limitations
@@ -788,6 +891,25 @@ The user can paste this to start an unattended run:
 如果 GUI 条件不满足，不要停工；继续完成离线 schema、验证、预览、测试和文档。只有会影响正式 MCE、PLC 安全、真实硬件行为或不可逆图形写入时才停下来问我。
 
 每完成一个阶段，检查 git diff 和最小相关验证。最后给我一份中文总结：改了哪些文件、实现了哪些命令、验证命令和结果、哪些 GUI/硬件检查没做、下一步最小风险路线。
+```
+
+## Full-Coverage Startup Addendum
+
+Append this to any unattended startup prompt when the next run should continue
+past semantic mapping into full MCGS understanding:
+
+```text
+当前目标继续升级：不要停在 semantic-map-probe，也不要只读出变量、按下置 1、释放清 0、脚本为空这些摘要字段。下一阶段必须做完整 property-map 和完整 MCGS 工具覆盖。
+
+启动后除了 AGENTS.md 和 MCGSCTL_LONGRUN_PROMPT.md，还必须读取 tools/mcgsctl/MCGSCTL_FULL_COVERAGE_PROMPT.md。这个文件是全覆盖阶段的硬合同。
+
+你要把 MCGS 组态软件当成一个完整软件系统吃透：明白每个功能的作用，能够调用每一个可发现工具，并且逐个遍历检查菜单、工具栏、工具箱、右键菜单、项目树动作、属性页 tab 和对话框按钮。每个工具都要有 tool-catalog / function-catalog / tool-sweep 记录，包含 UI 路径、命令 ID、前置条件、输入、输出、是否改项目、候选副本证据、风险等级、支持状态和下一步探针。
+
+你还要把目标画面/目标 row 里的每个元件及其属性都读出来。property-map 不能只包含 rect、semanticKind、text、variable、expression、operation。它还要继续读取字体、字号、颜色、边框、对齐、可见性、动画/显示规则、输入格式、上下限、小数位、权限、导航目标、脚本内容或结构化脚本摘要、分组/层级/z-order 等能从属性页、MCE anchor、clipboard diff、候选差分和 readback 中证明的属性。任何缺失属性都不能静默跳过；要么有值，要么证明 notApplicable，要么保留 unresolved + nextProbe 并继续做文件安全探针。
+
+Gemini 可以随时参与，不需要等到某个固定节点。遇到 UI 字段命名、截图理解、工具用途判断、属性页结构、MCE/clipboard offset 假设、下一步探针优先级，都可以立即通过 E:\googlecli\bridge 问 Gemini 3.1 Pro Preview。禁止发送 .env、密钥、完整 .MCE、完整私有 blob；只能发送截图、窗口树、摘要、bounded hex window、schema、错误片段和小段代码。Gemini 只是顾问，最终以本地证据、build/test、readback、candidate validate 为准。
+
+完成标准：目标范围内没有最终 UNKNOWN，没有未解释的元件，没有静默缺失的属性；每个可发现工具都有记录，每个候选安全工具都有可逆 probe 或明确 blocker；property-map 能服务布局规划和后续修改；build/test 通过；文档/schema/runbook 同步；可验证里程碑 commit/push。
 ```
 
 ## Final Reporting Contract
