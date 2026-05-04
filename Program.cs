@@ -5527,13 +5527,9 @@ internal static class MceExporter
         var toolRoot = ToolPaths.FindToolRoot();
         EnsureCompiled(toolRoot);
         Directory.CreateDirectory(outDir);
-        var beforeCopy = Path.Combine(outDir, "_before.MCE");
-        var afterCopy = Path.Combine(outDir, "_after.MCE");
-        File.Copy(before, beforeCopy, overwrite: true);
-        File.Copy(after, afterCopy, overwrite: true);
         var cache = JavaCache(toolRoot);
         var classPath = string.Join(";", ToolPaths.JackcessJars(toolRoot).Concat(new[] { cache }).Select(Quote));
-        var args = $"-cp {classPath} MceBlobDiff {Quote(beforeCopy)} {Quote(afterCopy)} {Quote(outDir)}";
+        var args = $"-cp {classPath} MceBlobDiff {Quote(before)} {Quote(after)} {Quote(outDir)}";
         var result = ProcessRunner.Run("java", args, toolRoot, 120000);
         if (result.ExitCode != 0)
             throw new InvalidOperationException("MCE blob diff failed: " + result.StdErr + result.StdOut);
