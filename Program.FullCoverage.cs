@@ -75,13 +75,22 @@ internal static partial class Program
         }
 
         var invokeReadonly = Has(args, "--invoke-readonly");
+        var invokeCandidateSafe = Has(args, "--invoke-candidate-safe");
         var allowUnknownRisk = Has(args, "--allow-unknown-risk");
+        var saveAfterInvoke = Has(args, "--save-after-invoke");
+        var baselineAfterPrecondition = Has(args, "--baseline-after-precondition");
+        if (saveAfterInvoke && !invokeCandidateSafe)
+            return Fail("--save-after-invoke is only allowed with --invoke-candidate-safe on a disposable project copy.");
+        if (baselineAfterPrecondition && !invokeCandidateSafe)
+            return Fail("--baseline-after-precondition is only allowed with --invoke-candidate-safe on a disposable project copy.");
+        var safetyClass = tool?.safetyClass ?? "unknown-risk";
         var canInvoke = tool != null &&
                         tool.commandId.HasValue &&
-                        (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) ||
-                         (allowUnknownRisk && tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase)));
+                        ((invokeReadonly && safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase)) ||
+                         (invokeCandidateSafe && safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase)) ||
+                         (allowUnknownRisk && safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase)));
 
-        if (!invokeReadonly || !canInvoke)
+        if ((!invokeReadonly && !invokeCandidateSafe && !allowUnknownRisk) || !canInvoke)
         {
             var result = new
             {
@@ -94,10 +103,10 @@ internal static partial class Program
                 invoked = false,
                 reason = tool == null
                     ? "tool-id was not found in the supplied catalog"
-                    : invokeReadonly
-                        ? "tool was not invoked because it is not classified read-only; use a more specific guarded probe for candidate mutations or risky commands"
-                        : "catalog/readback probe only; pass --invoke-readonly to run read-only commands on a temporary copy",
-                safetyClass = tool?.safetyClass ?? "unknown-risk",
+                    : invokeReadonly || invokeCandidateSafe || allowUnknownRisk
+                        ? "tool was not invoked because its safety class does not match the requested guarded invocation mode"
+                        : "catalog/readback probe only; pass --invoke-readonly or --invoke-candidate-safe for guarded disposable-copy invocation",
+                safetyClass,
                 nextProbe = tool?.nextProbe ?? "Classify this tool by command id, UI context, and expected side effect; then run on throwaway candidate with before/after hash evidence."
             };
             File.WriteAllText(Path.Combine(outDir, "tool-probe.json"), JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
@@ -113,14 +122,35 @@ internal static partial class Program
         var invoked = false;
         var projectCopy = "";
         var projectCopySha256Before = "";
+        var projectCopySha256Initial = "";
+        var forcedProcessKill = false;
+        var forcedProcessKillError = "";
+        var commandObserved = false;
+        var newWindowObserved = false;
+        var commandObservedWindows = Array.Empty<string>();
+        object? postCommandAction = null;
+        var requestedContext = (Opt(args, "--context") ?? "").ToLowerInvariant();
+        var baselineAfterPreconditionExport = "";
+        var baselineAfterPreconditionError = "";
+        BaselineReferenceResult? baselineAfterPreconditionReference = null;
         try
         {
-            var context = (Opt(args, "--context") ?? "").ToLowerInvariant();
+            var context = requestedContext;
+            if (requestedContext is "animation-select-all" or "animation-clipboard-seed" or
+                "animation-after-cut" or "animation-after-cut-undo" or
+                "animation-after-paste" or "animation-after-paste-undo" or
+                "animation-single-object" or "animation-single-after-cut" or
+                "animation-single-after-cut-undo" or "animation-single-after-paste" or
+                "animation-single-after-paste-undo" or "animation-draw-object" or
+                "animation-draw-table")
+                context = "animation";
             if (context == "animation" || tool.uiPath.Contains("动画组态", StringComparison.OrdinalIgnoreCase))
             {
                 session = OpenCanvasProbeSession(args, outDir, "tool-probe", out process, out main);
                 projectCopy = session.ProjectCopy;
                 projectCopySha256Before = session.ProjectSha256;
+                projectCopySha256Initial = projectCopySha256Before;
+                ApplyAnimationToolProbePrecondition(args, requestedContext, outDir, process.Id, session);
             }
             else
             {
@@ -130,6 +160,7 @@ internal static partial class Program
                 projectCopy = Path.Combine(copyDir, Path.GetFileNameWithoutExtension(project) + "-tool-probe.MCE");
                 File.Copy(project, projectCopy, overwrite: true);
                 projectCopySha256Before = Sha256(projectCopy);
+                projectCopySha256Initial = projectCopySha256Before;
                 process = Process.Start(new ProcessStartInfo(editor, Quote(projectCopy))
                 {
                     UseShellExecute = true,
@@ -141,13 +172,33 @@ internal static partial class Program
                 main = UiAutomation.FindMainWindow(process.Id);
                 if (main == IntPtr.Zero)
                     throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+                ApplyWorkbenchToolProbePrecondition(args, outDir, requestedContext, process.Id, main);
             }
 
+            if (baselineAfterPrecondition)
+            {
+                try
+                {
+                    UiAutomation.SendCommand(main, 57603, send: true);
+                    Thread.Sleep(800);
+                    projectCopySha256Before = Sha256(projectCopy);
+                    baselineAfterPreconditionExport = Path.Combine(outDir, "baseline-after-precondition-export");
+                    MceExporter.Export(projectCopy, baselineAfterPreconditionExport);
+                }
+                catch (Exception ex)
+                {
+                    baselineAfterPreconditionError = ex.Message;
+                }
+            }
+
+            var beforeWindows = UiAutomation.TopWindowsForPid(process!.Id).Select(WindowInfo.FromHandle).ToArray();
             CaptureProcessWindows(process!.Id, Path.Combine(outDir, "before-invoke"));
             try
             {
                 UiAutomation.SendCommand(main, (uint)commandId, send: true, hiword: 0);
                 invoked = true;
+                if (session != null)
+                    postCommandAction = ApplyAnimationToolProbePostCommandAction(args, requestedContext, outDir, process!.Id, session);
             }
             catch (Exception ex)
             {
@@ -155,13 +206,53 @@ internal static partial class Program
             }
             Thread.Sleep(800);
             CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-invoke"));
+            var beforeHandles = beforeWindows.Select(w => w.Handle).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var afterWindows = UiAutomation.TopWindowsForPid(process.Id).Select(WindowInfo.FromHandle).ToArray();
+            var newWindows = afterWindows.Where(w => !beforeHandles.Contains(w.Handle)).ToArray();
+            newWindowObserved = newWindows.Length > 0;
+            commandObserved = invoked || newWindowObserved;
+            commandObservedWindows = newWindows.Select(w => $"{w.Handle} {w.ClassName} {w.Text}").ToArray();
         }
         finally
         {
             if (process != null && !process.HasExited && main != IntPtr.Zero)
             {
-                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+                try { CloseEditorProcess(process.Id, main, saveIntent: saveAfterInvoke); } catch { }
                 try { process.WaitForExit(5000); } catch { }
+                if (!process.HasExited)
+                {
+                    try
+                    {
+                        forcedProcessKill = true;
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(5000);
+                    }
+                    catch (Exception ex)
+                    {
+                        forcedProcessKillError = ex.Message;
+                    }
+                }
+            }
+        }
+
+        if (baselineAfterPrecondition && string.IsNullOrWhiteSpace(baselineAfterPreconditionExport))
+        {
+            baselineAfterPreconditionReference = TryCreateToolProbePreconditionReferenceBaseline(args, project, outDir, requestedContext, tool);
+            if (baselineAfterPreconditionReference.Success)
+            {
+                baselineAfterPreconditionExport = baselineAfterPreconditionReference.ExportDir;
+                projectCopySha256Before = baselineAfterPreconditionReference.ProjectSha256;
+                if (!string.IsNullOrWhiteSpace(baselineAfterPreconditionError))
+                    baselineAfterPreconditionError += " ; ";
+                baselineAfterPreconditionError += "same-precondition reference baseline was created after the primary in-session export failed";
+            }
+            else if (string.IsNullOrWhiteSpace(baselineAfterPreconditionError))
+            {
+                baselineAfterPreconditionError = baselineAfterPreconditionReference.Error;
+            }
+            else
+            {
+                baselineAfterPreconditionError += " ; reference baseline failed: " + baselineAfterPreconditionReference.Error;
             }
         }
 
@@ -172,22 +263,41 @@ internal static partial class Program
         var readOnlyHashDrift = tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase) && projectCopyHashChanged;
         object? normalizedDiffEvidence = null;
         var normalizedDiffError = "";
+        var normalizedDiffEquivalent = false;
+        var normalizedDiffEditorContextOnly = false;
         var readOnlyHashDriftClass = readOnlyHashDrift ? "unclassified" : "";
+        var candidateSafeMutationFunctionalDiff = false;
+        var candidateSafeMutationReversibleReturn = false;
         var baselineExport = Opt(args, "--baseline-export");
-        if (readOnlyHashDrift && !string.IsNullOrWhiteSpace(baselineExport))
+        var effectiveBaselineExport = !string.IsNullOrWhiteSpace(baselineAfterPreconditionExport)
+            ? baselineAfterPreconditionExport
+            : baselineExport;
+        var candidateSafeCommand = tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase);
+        var candidateSafeMutation = candidateSafeCommand && projectCopyHashChanged;
+        var unknownRiskHashDrift = tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase) && projectCopyHashChanged;
+        if ((readOnlyHashDrift || candidateSafeMutation || unknownRiskHashDrift) && !string.IsNullOrWhiteSpace(effectiveBaselineExport))
         {
             try
             {
                 var normalizedRoot = Path.Combine(outDir, "normalized-diff");
                 var candidateExport = Path.Combine(normalizedRoot, "candidate-export");
                 MceExporter.Export(projectCopy, candidateExport);
-                var diff = WriteMceNormalizedDiff(FullPath(baselineExport), candidateExport, normalizedRoot);
+                var diff = WriteMceNormalizedDiff(FullPath(effectiveBaselineExport!), candidateExport, normalizedRoot);
+                normalizedDiffEquivalent = diff.Equivalent;
+                normalizedDiffEditorContextOnly = diff.EditorContextOnly;
                 readOnlyHashDriftClass = diff.Equivalent
                     ? "normalized-equivalent"
                     : diff.EditorContextOnly ? "editor-context-only" : "normalized-functional-diff";
+                candidateSafeMutationFunctionalDiff = candidateSafeMutation &&
+                                                      !diff.Equivalent &&
+                                                      !diff.EditorContextOnly &&
+                                                      diff.ChangedFileCount > 0;
                 normalizedDiffEvidence = new
                 {
-                    baselineExport = FullPath(baselineExport),
+                    baselineExport = FullPath(effectiveBaselineExport!),
+                    baselineExportSource = !string.IsNullOrWhiteSpace(baselineAfterPreconditionExport)
+                        ? "after-precondition"
+                        : "argument",
                     candidateExport,
                     diffPath = Path.Combine(normalizedRoot, "mce-normalized-diff.json"),
                     diff.Status,
@@ -195,17 +305,55 @@ internal static partial class Program
                     diff.ChangedFileCount,
                     diff.EditorContextOnly
                 };
+                candidateSafeMutationReversibleReturn =
+                    candidateSafeCommand &&
+                    IsCandidateSafeReversibleReturnProbe(commandId, requestedContext) &&
+                    (diff.Equivalent || diff.EditorContextOnly);
             }
             catch (Exception ex)
             {
                 normalizedDiffError = ex.Message;
             }
         }
+        if (candidateSafeCommand &&
+            IsCandidateSafeReversibleReturnProbe(commandId, requestedContext) &&
+            (!projectCopyHashChanged || normalizedDiffEquivalent || normalizedDiffEditorContextOnly))
+        {
+            candidateSafeMutationReversibleReturn = true;
+        }
+        var candidateSafeMutationUnexpectedFunctionalDiff =
+            candidateSafeCommand &&
+            IsCandidateSafeReversibleReturnProbe(commandId, requestedContext) &&
+            candidateSafeMutationFunctionalDiff &&
+            !candidateSafeMutationReversibleReturn;
         var readOnlyHashDriftExplained = readOnlyHashDrift &&
                                          (readOnlyHashDriftClass.Equals("editor-context-only", StringComparison.OrdinalIgnoreCase) ||
                                           readOnlyHashDriftClass.Equals("normalized-equivalent", StringComparison.OrdinalIgnoreCase));
-        var invokedStatus = invoked && string.IsNullOrWhiteSpace(invocationError) &&
-                            (!readOnlyHashDrift || readOnlyHashDriftExplained)
+        var unknownRiskHashDriftExplained = unknownRiskHashDrift &&
+                                            (readOnlyHashDriftClass.Equals("editor-context-only", StringComparison.OrdinalIgnoreCase) ||
+                                             readOnlyHashDriftClass.Equals("normalized-equivalent", StringComparison.OrdinalIgnoreCase));
+        var unknownRiskHashDriftUnclassified = unknownRiskHashDrift && normalizedDiffEvidence == null;
+        var unknownRiskHashDriftFunctional = unknownRiskHashDrift &&
+                                             normalizedDiffEvidence != null &&
+                                             !unknownRiskHashDriftExplained;
+        var candidateSafeMutationUnclassified = candidateSafeMutation && normalizedDiffEvidence == null;
+        var candidateSafeMutationNotFunctional = candidateSafeMutation &&
+                                                 normalizedDiffEvidence != null &&
+                                                 !candidateSafeMutationFunctionalDiff &&
+                                                 !candidateSafeMutationReversibleReturn;
+        var candidateSafePreconditionUnmet = candidateSafeCommand &&
+                                             !candidateSafeMutation &&
+                                             !newWindowObserved &&
+                                             !candidateSafeMutationReversibleReturn;
+        var invocationBlockingError = (!string.IsNullOrWhiteSpace(invocationError) && !commandObserved);
+        var invokedStatus = commandObserved && !invocationBlockingError &&
+                            (!readOnlyHashDrift || readOnlyHashDriftExplained) &&
+                            !candidateSafeMutationUnexpectedFunctionalDiff &&
+                            !candidateSafeMutationUnclassified &&
+                            !candidateSafeMutationNotFunctional &&
+                            !candidateSafePreconditionUnmet &&
+                            !unknownRiskHashDriftUnclassified &&
+                            !unknownRiskHashDriftFunctional
             ? "PASS"
             : "UNKNOWN";
         var invokedResult = new
@@ -220,22 +368,58 @@ internal static partial class Program
             commandId,
             context = Opt(args, "--context") ?? "",
             invocationError,
+            invocationBlockingError,
+            commandObserved,
+            newWindowObserved,
+            commandObservedWindows,
             evidence = new
             {
                 before = "before-invoke",
                 after = "after-invoke",
                 projectCopy,
+                projectCopySha256Initial,
                 projectCopySha256Before,
                 projectCopySha256After,
                 projectCopySha256AfterError,
+                baselineAfterPrecondition,
+                baselineAfterPreconditionExport,
+                baselineAfterPreconditionError,
+                baselineAfterPreconditionReference,
                 projectCopyHashChanged,
+                saveAfterInvoke,
                 readOnlyHashDrift,
                 readOnlyHashDriftClass,
+                candidateSafeMutation,
+                candidateSafeMutationFunctionalDiff,
+                candidateSafeMutationReversibleReturn,
+                candidateSafeMutationUnexpectedFunctionalDiff,
+                candidateSafeMutationUnclassified,
+                candidateSafeMutationNotFunctional,
+                candidateSafePreconditionUnmet,
+                unknownRiskHashDrift,
+                unknownRiskHashDriftExplained,
+                unknownRiskHashDriftUnclassified,
+                unknownRiskHashDriftFunctional,
                 normalizedDiff = normalizedDiffEvidence,
-                normalizedDiffError
+                normalizedDiffError,
+                forcedProcessKill,
+                forcedProcessKillError
             },
+            postCommandAction,
             safetyClass = tool.safetyClass,
-            nextProbe = readOnlyHashDrift && !readOnlyHashDriftExplained
+            nextProbe = candidateSafePreconditionUnmet
+                ? "Candidate-safe command produced no modal/dialog evidence, reversible-return evidence, or normalized candidate diff; open the required editor selection/context before treating this tool as probed."
+                : candidateSafeMutationUnexpectedFunctionalDiff
+                ? "Undo probe produced a functional normalized diff instead of returning to the pre-edit baseline; rerun with a controlled paste/undo context and compare normalized MCE evidence."
+                : unknownRiskHashDriftUnclassified
+                ? "Unknown-risk tool changed the disposable copy hash; rerun with --baseline-export so normalized MCE diff can prove whether the drift is editor-context-only."
+                : unknownRiskHashDriftFunctional
+                ? "Unknown-risk tool produced a functional normalized MCE diff; keep it unresolved until a dedicated reversible candidate-safe probe and readback evidence explain the side effect."
+                : candidateSafeMutationUnclassified
+                ? "Candidate-safe tool changed the disposable copy hash; rerun with --baseline-export so normalized MCE diff records the candidate mutation."
+                : candidateSafeMutationNotFunctional
+                ? "Candidate-safe tool changed only editor-context or normalized-equivalent evidence; rerun in the exact editor precondition and require a functional normalized MCE diff before treating it as probed."
+                : readOnlyHashDrift && !readOnlyHashDriftExplained
                 ? "Read-only tool probe changed the disposable copy hash; compare against an open-close baseline or implement normalized MCE diff before marking the invocation understood."
                 : readOnlyHashDriftExplained
                     ? ""
@@ -244,6 +428,940 @@ internal static partial class Program
         File.WriteAllText(Path.Combine(outDir, "tool-probe.json"), JsonSerializer.Serialize(invokedResult, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-probe: " + outDir);
         return invokedResult.status == "PASS" ? 0 : 2;
+    }
+
+    private static BaselineReferenceResult TryCreateToolProbePreconditionReferenceBaseline(string[] args, string project, string outDir, string requestedContext, McgsToolEntry tool)
+    {
+        if (requestedContext.StartsWith("animation-", StringComparison.OrdinalIgnoreCase) ||
+            requestedContext.Equals("animation", StringComparison.OrdinalIgnoreCase) ||
+            tool.uiPath.Contains("\u52A8\u753B\u7EC4\u6001", StringComparison.OrdinalIgnoreCase))
+        {
+            return new BaselineReferenceResult(false, "", "", "", "after-precondition reference baseline is not implemented for animation canvas contexts");
+        }
+
+        Process? process = null;
+        var main = IntPtr.Zero;
+        var copyDir = Path.Combine(outDir, "baseline-after-precondition-copy");
+        var exportDir = Path.Combine(outDir, "baseline-after-precondition-export");
+        var projectCopy = "";
+        try
+        {
+            Directory.CreateDirectory(copyDir);
+            projectCopy = Path.Combine(copyDir, Path.GetFileNameWithoutExtension(project) + "-baseline-precondition.MCE");
+            File.Copy(project, projectCopy, overwrite: true);
+            var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+            process = Process.Start(new ProcessStartInfo(editor, Quote(projectCopy))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            }) ?? throw new InvalidOperationException("Failed to start MCGS editor for after-precondition reference baseline.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            SetDialogEvidenceRoot(outDir);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero)
+                throw new TimeoutException("MCGS main window disappeared while creating after-precondition reference baseline.");
+
+            ApplyWorkbenchToolProbePrecondition(args, Path.Combine(outDir, "baseline-after-precondition-reference"), requestedContext, process.Id, main);
+            UiAutomation.SendCommand(main, 57603, send: true);
+            Thread.Sleep(1000);
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process.WaitForExit(7000);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+                throw new InvalidOperationException("MCGS editor did not exit cleanly after reference baseline creation.");
+            }
+
+            var sha = Sha256(projectCopy);
+            MceExporter.Export(projectCopy, exportDir);
+            return new BaselineReferenceResult(true, projectCopy, sha, exportDir, "");
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                if (process != null && !process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+            }
+            catch { }
+            return new BaselineReferenceResult(false, projectCopy, "", exportDir, ex.Message);
+        }
+    }
+
+    private sealed record BaselineReferenceResult(bool Success, string ProjectCopy, string ProjectSha256, string ExportDir, string Error);
+
+    private static void ApplyAnimationToolProbePrecondition(string[] args, string context, string outDir, int pid, CanvasProbeSession session)
+    {
+        if (string.IsNullOrWhiteSpace(context) || context == "animation")
+            return;
+        if (context is not ("animation-select-all" or "animation-clipboard-seed" or
+            "animation-after-cut" or "animation-after-cut-undo" or
+            "animation-after-paste" or "animation-after-paste-undo" or
+            "animation-single-object" or "animation-single-after-cut" or
+            "animation-single-after-cut-undo" or "animation-single-after-paste" or
+            "animation-single-after-paste-undo"))
+            return;
+
+        var contextDir = Path.Combine(outDir, "precondition-" + context);
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before"));
+        var rect = UiAutomation.GetWindowRect(session.Canvas);
+        var selectedAll = true;
+        object? selectedObject = null;
+        if (context.StartsWith("animation-single-", StringComparison.OrdinalIgnoreCase) &&
+            TryReadAnimationSelection(args, out var sx, out var sy, out selectedObject))
+        {
+            UiAutomation.ClickPoint(session.Canvas, Math.Max(5, sx), Math.Max(5, sy),
+                MouseButton.Left, doubleClick: false, mouse: true);
+            selectedAll = false;
+        }
+        else
+        {
+            UiAutomation.ClickPoint(session.Canvas, Math.Max(5, rect.Width / 2), Math.Max(5, rect.Height / 2),
+                MouseButton.Left, doubleClick: false, mouse: true);
+        }
+        Thread.Sleep(150);
+        if (selectedAll)
+        {
+            SendKeys.SendWait("^a");
+            Thread.Sleep(250);
+        }
+        var clipboardSeeded = false;
+        var cutApplied = false;
+        var pasteApplied = false;
+        var undoApplied = false;
+        var clipboardFormatsAfterSeed = new List<object>();
+        if (context is "animation-clipboard-seed" or "animation-after-paste" or "animation-after-paste-undo" or
+            "animation-single-after-paste" or "animation-single-after-paste-undo")
+        {
+            UiAutomation.SendCommand(session.Main, 57634, send: true);
+            clipboardSeeded = true;
+            Thread.Sleep(500);
+            var data = Clipboard.GetDataObject();
+            if (data != null)
+            {
+                foreach (var format in data.GetFormats(false))
+                    clipboardFormatsAfterSeed.Add(DescribeClipboardFormat(data, format, rect).Summary);
+            }
+        }
+        if (context is "animation-after-cut" or "animation-after-cut-undo" or
+            "animation-single-after-cut" or "animation-single-after-cut-undo")
+        {
+            UiAutomation.SendCommand(session.Main, 57635, send: true);
+            cutApplied = true;
+            Thread.Sleep(500);
+        }
+        if (context is "animation-after-paste" or "animation-after-paste-undo" or
+            "animation-single-after-paste" or "animation-single-after-paste-undo")
+        {
+            UiAutomation.SendCommand(session.Main, 57637, send: true);
+            pasteApplied = true;
+            Thread.Sleep(500);
+        }
+        if (context is "animation-after-cut-undo" or "animation-single-after-cut-undo")
+        {
+            UiAutomation.SendCommand(session.Main, 57643, send: true);
+            undoApplied = true;
+            Thread.Sleep(500);
+        }
+        if (context is "animation-after-paste-undo" or "animation-single-after-paste-undo")
+        {
+            UiAutomation.SendCommand(session.Main, 57643, send: true);
+            undoApplied = true;
+            Thread.Sleep(500);
+        }
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after"));
+        File.WriteAllText(Path.Combine(contextDir, "precondition.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            context,
+            canvas = WindowInfo.FromHandle(session.Canvas),
+            selectedAll,
+            selectedObject,
+            clipboardSeeded,
+            clipboardFormatsAfterSeed,
+            cutApplied,
+            pasteApplied,
+            undoApplied
+        }, JsonOptions()), Encoding.UTF8);
+    }
+
+    private static object? ApplyAnimationToolProbePostCommandAction(string[] args, string context, string outDir, int pid, CanvasProbeSession session)
+    {
+        if (context is not ("animation-draw-object" or "animation-draw-table"))
+            return null;
+
+        var actionDir = Path.Combine(outDir, "post-command-" + context);
+        Directory.CreateDirectory(actionDir);
+        CaptureProcessWindows(pid, Path.Combine(actionDir, "before-draw"));
+
+        var canvasRect = UiAutomation.GetWindowRect(session.Canvas);
+        var x = ParseInt(args, "--draw-x", Math.Max(20, Math.Min(620, Math.Max(20, canvasRect.Width - 220))));
+        var y = ParseInt(args, "--draw-y", Math.Max(20, Math.Min(360, Math.Max(20, canvasRect.Height - 140))));
+        var width = ParseInt(args, "--draw-width", context == "animation-draw-table" ? 180 : 120);
+        var height = ParseInt(args, "--draw-height", context == "animation-draw-table" ? 100 : 70);
+        width = Math.Max(20, Math.Min(width, Math.Max(20, canvasRect.Width - x - 5)));
+        height = Math.Max(20, Math.Min(height, Math.Max(20, canvasRect.Height - y - 5)));
+        x = Math.Max(2, Math.Min(x, Math.Max(2, canvasRect.Width - width - 2)));
+        y = Math.Max(2, Math.Min(y, Math.Max(2, canvasRect.Height - height - 2)));
+
+        var dragError = "";
+        var activated = false;
+        try
+        {
+            UiAutomation.DragPoint(session.Canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(900);
+            if (Has(args, "--activate-drawn-object"))
+            {
+                UiAutomation.ClickPoint(session.Canvas, x + width / 2, y + height / 2, MouseButton.Left,
+                    doubleClick: context == "animation-draw-table", mouse: true);
+                activated = true;
+                Thread.Sleep(500);
+            }
+        }
+        catch (Exception ex)
+        {
+            dragError = ex.Message;
+        }
+
+        CaptureProcessWindows(pid, Path.Combine(actionDir, "after-draw"));
+        var evidence = new
+        {
+            schemaVersion = 1,
+            context,
+            action = "drag after selecting drawing tool",
+            canvas = WindowInfo.FromHandle(session.Canvas),
+            rect = new { x, y, width, height },
+            activated,
+            dragError
+        };
+        File.WriteAllText(Path.Combine(actionDir, "post-command-action.json"),
+            JsonSerializer.Serialize(evidence, JsonOptions()), Encoding.UTF8);
+        return evidence;
+    }
+
+    private static bool IsCandidateSafeReversibleReturnProbe(int commandId, string context)
+        => commandId == 57643 && context is "animation-after-cut" or "animation-single-after-cut" or
+            "animation-after-paste" or "animation-single-after-paste" or "strategy-after-add";
+
+    private static bool TryReadAnimationSelection(string[] args, out int centerX, out int centerY, out object? selectedObject)
+    {
+        centerX = 0;
+        centerY = 0;
+        selectedObject = null;
+        var mapPath = Opt(args, "--object-map") ?? Opt(args, "--property-map") ?? Opt(args, "--semantic-map");
+        if (string.IsNullOrWhiteSpace(mapPath))
+            return false;
+        var fullPath = FullPath(mapPath);
+        if (!File.Exists(fullPath))
+            return false;
+        var wantedId = Opt(args, "--object-id") ?? "";
+        using var doc = JsonDocument.Parse(File.ReadAllText(fullPath, Encoding.UTF8));
+        if (!doc.RootElement.TryGetProperty("objects", out var objects) || objects.ValueKind != JsonValueKind.Array)
+            return false;
+
+        JsonElement? chosen = null;
+        foreach (var obj in objects.EnumerateArray())
+        {
+            var objectId = JsonStringAny(obj, "objectId", "id", "ObjectId", "Id") ?? "";
+            if (!string.IsNullOrWhiteSpace(wantedId) &&
+                objectId.Equals(wantedId, StringComparison.OrdinalIgnoreCase))
+            {
+                chosen = obj;
+                break;
+            }
+            if (string.IsNullOrWhiteSpace(wantedId) && chosen == null)
+            {
+                var kind = JsonStringAny(obj, "semanticKind", "kind", "SemanticKind", "Kind") ?? "";
+                if (kind.Contains("button", StringComparison.OrdinalIgnoreCase) ||
+                    kind.Contains("label", StringComparison.OrdinalIgnoreCase) ||
+                    kind.Contains("static", StringComparison.OrdinalIgnoreCase))
+                {
+                    chosen = obj;
+                }
+            }
+        }
+        if (chosen == null && objects.GetArrayLength() > 0)
+            chosen = objects.EnumerateArray().First();
+        if (chosen == null)
+            return false;
+
+        var chosenElement = chosen.Value;
+        if (!chosenElement.TryGetProperty("rect", out var rect) || rect.ValueKind != JsonValueKind.Object)
+            return false;
+        var x = LayoutJsonIntAny(rect, "x", "X");
+        var y = LayoutJsonIntAny(rect, "y", "Y");
+        var width = LayoutJsonIntAny(rect, "width", "Width");
+        var height = LayoutJsonIntAny(rect, "height", "Height");
+        if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0)
+            return false;
+        centerX = x.Value + Math.Max(1, width.Value / 2);
+        centerY = y.Value + Math.Max(1, height.Value / 2);
+        selectedObject = new
+        {
+            objectMap = fullPath,
+            objectId = JsonStringAny(chosenElement, "objectId", "id", "ObjectId", "Id") ?? "",
+            semanticKind = JsonStringAny(chosenElement, "semanticKind", "kind", "SemanticKind", "Kind") ?? "",
+            displayedText = JsonStringAny(chosenElement, "displayedText", "text", "DisplayedText", "Text") ?? "",
+            rect = new { x, y, width, height },
+            center = new { x = centerX, y = centerY }
+        };
+        return true;
+    }
+
+    private static void ApplyWorkbenchToolProbePrecondition(string[] args, string outDir, string context, int pid, IntPtr main)
+    {
+        if (string.IsNullOrWhiteSpace(context))
+            return;
+        switch (context)
+        {
+            case "menu-editor":
+                ApplyMenuEditorToolProbePrecondition(args, outDir, pid, main);
+                return;
+            case "strategy-editor":
+                ApplyStrategyEditorToolProbePrecondition(args, outDir, pid, main);
+                return;
+            case "strategy-after-add":
+            case "strategy-after-distinct-toolbox":
+            case "strategy-after-distinct-drag":
+                ApplyStrategyAfterAddToolProbePrecondition(args, outDir, pid, main);
+                return;
+            case "device-editor":
+            case "device-after-copy-paste":
+                ApplyDeviceEditorToolProbePrecondition(args, outDir, pid, main);
+                return;
+            case "animation":
+            case "animation-select-all":
+            case "animation-clipboard-seed":
+            case "animation-after-cut":
+            case "animation-after-cut-undo":
+            case "animation-after-paste":
+            case "animation-after-paste-undo":
+            case "animation-single-object":
+            case "animation-single-after-paste":
+            case "animation-single-after-paste-undo":
+            case "animation-draw-object":
+            case "animation-draw-table":
+                return;
+            default:
+                throw new InvalidOperationException("Unsupported mcgs tool-probe --context: " + context);
+        }
+    }
+
+    private static void ApplyMenuEditorToolProbePrecondition(string[] args, string outDir, int pid, IntPtr main)
+    {
+        var contextDir = Path.Combine(outDir, "precondition-menu-editor");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before"));
+
+        UiAutomation.SendCommand(main, 33953);
+        Thread.Sleep(700);
+        TrySelectWorkbenchTab(main, 0);
+        var list = FindVisibleListViewContaining(main, "\u4E3B\u63A7\u7A97\u53E3", minItems: 1);
+        UiAutomation.ListViewSelectIndex(list, 0);
+        Thread.Sleep(250);
+        WriteListViewSummary(main, Path.Combine(contextDir, "menu-listviews.json"));
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "main-control-workbench"));
+
+        if (!ClickButtonByNormalizedText(main, mouse: true, "\u83DC\u5355\u7EC4\u6001"))
+            throw new InvalidOperationException("Menu configuration button was not found.");
+        Thread.Sleep(900);
+
+        var tree = WaitForTreeViewWithItems(main, TimeSpan.FromSeconds(5));
+        var selected = SelectOptionalTreeItem(args, tree, "--menu-tree-index", "--menu-tree-text");
+        File.WriteAllLines(Path.Combine(contextDir, "menu-editor.window-tree.txt"), UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(contextDir, "menu-tree.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            tree = WindowInfo.FromHandle(tree),
+            items = UiAutomation.TreeViewItems(tree),
+            selected
+        }, JsonOptions()), Encoding.UTF8);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-menu-editor"));
+    }
+
+    private static void ApplyStrategyEditorToolProbePrecondition(string[] args, string outDir, int pid, IntPtr main)
+    {
+        var contextDir = Path.Combine(outDir, "precondition-strategy-editor");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before"));
+
+        UiAutomation.SendCommand(main, 33060);
+        Thread.Sleep(700);
+        TrySelectWorkbenchTab(main, 4);
+        var list = FindVisibleListViewContaining(main, "\u5FAA\u73AF\u7B56\u7565", minItems: 1);
+        UiAutomation.ListViewSelectText(list, "\u5FAA\u73AF\u7B56\u7565");
+        Thread.Sleep(250);
+        WriteListViewSummary(main, Path.Combine(contextDir, "strategy-listviews.json"));
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "strategy-workbench"));
+
+        if (!ClickButtonByNormalizedText(main, mouse: true, "\u7B56\u7565\u7EC4\u6001"))
+            throw new InvalidOperationException("Strategy configuration button was not found.");
+        Thread.Sleep(900);
+        var selectedLine = SelectOptionalStrategyLine(args, main, contextDir);
+        File.WriteAllLines(Path.Combine(contextDir, "strategy-editor.window-tree.txt"), UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(contextDir, "strategy-editor.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            selectedLine
+        }, JsonOptions()), Encoding.UTF8);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-strategy-editor"));
+    }
+
+    private static void ApplyStrategyAfterAddToolProbePrecondition(string[] args, string outDir, int pid, IntPtr main)
+    {
+        ApplyStrategyEditorToolProbePrecondition(args, outDir, pid, main);
+        var context = (Opt(args, "--context") ?? "").ToLowerInvariant();
+        if (context == "strategy-after-distinct-toolbox")
+        {
+            ApplyStrategyDistinctToolboxFixture(args, outDir, pid, main);
+            return;
+        }
+        if (context == "strategy-after-distinct-drag")
+        {
+            ApplyStrategyDistinctDragFixture(args, outDir, pid, main);
+            return;
+        }
+        var contextDir = Path.Combine(outDir, "precondition-strategy-after-add");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before-add"));
+        UiAutomation.SendCommand(main, 32851, send: true);
+        Thread.Sleep(700);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-add"));
+        File.WriteAllText(Path.Combine(contextDir, "precondition.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            context = "strategy-after-add",
+            setupCommandId = 32851,
+            setupAction = "add strategy policy line before probing undo"
+        }, JsonOptions()), Encoding.UTF8);
+    }
+
+    private static void ApplyStrategyDistinctToolboxFixture(string[] args, string outDir, int pid, IntPtr main)
+    {
+        var contextDir = Path.Combine(outDir, "precondition-strategy-after-distinct-toolbox");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before-toolbox-insert"));
+
+        var toolbox = FindVisibleListViewContainingInProcess(pid, "\u811A\u672C\u7A0B\u5E8F", minItems: 3);
+        var beforeItems = UiAutomation.ListViewItems(toolbox);
+        File.WriteAllText(Path.Combine(contextDir, "toolbox-items-before.json"),
+            JsonSerializer.Serialize(beforeItems, JsonOptions()), Encoding.UTF8);
+        var requestedItems = Opts(args, "--strategy-toolbox-item").ToArray();
+        if (requestedItems.Length == 0)
+            requestedItems = new[] { "\u811A\u672C\u7A0B\u5E8F", "\u8BA1\u6570\u5668" };
+
+        var actions = new List<object>();
+        for (var i = 0; i < requestedItems.Length; i++)
+        {
+            var item = requestedItems[i];
+            var beforeDialogs = UiAutomation.TopWindowsForPid(pid)
+                .Where(h => Native.GetClass(h) == "#32770")
+                .Select(WindowInfo.FromHandle)
+                .ToArray();
+            UiAutomation.ListViewDoubleClickText(toolbox, item, mouse: true);
+            Thread.Sleep(900);
+            CaptureProcessWindows(pid, Path.Combine(contextDir, $"after-toolbox-{i:D2}-{SafeFile(item)}"));
+            var afterDialogs = UiAutomation.TopWindowsForPid(pid)
+                .Where(h => Native.GetClass(h) == "#32770")
+                .Select(WindowInfo.FromHandle)
+                .ToArray();
+            var newDialogs = afterDialogs
+                .Where(after => !beforeDialogs.Any(before => before.Handle.Equals(after.Handle, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            actions.Add(new
+            {
+                item,
+                newDialogs
+            });
+            if (newDialogs.Length > 0)
+                throw new InvalidOperationException("Strategy toolbox item opened a modal dialog before a deterministic fixture was created: " + item);
+        }
+
+        UiAutomation.SendCommand(main, 57603, send: true);
+        Thread.Sleep(1000);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-fixture-save"));
+        var selectedLine = SelectOptionalStrategyLine(args, main, contextDir);
+        File.WriteAllText(Path.Combine(contextDir, "distinct-toolbox-result.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            context = "strategy-after-distinct-toolbox",
+            insertionMethod = "double-click standard strategy toolbox ListView items",
+            requestedItems,
+            actions,
+            selectedLine
+        }, JsonOptions()), Encoding.UTF8);
+    }
+
+    private static void ApplyStrategyDistinctDragFixture(string[] args, string outDir, int pid, IntPtr main)
+    {
+        var contextDir = Path.Combine(outDir, "precondition-strategy-after-distinct-drag");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before-distinct-drag"));
+
+        var addCount = ParseInt(args, "--strategy-line-count", 2);
+        var addActions = new List<object>();
+        for (var i = 0; i < addCount; i++)
+        {
+            UiAutomation.SendCommand(main, 32851, send: true);
+            Thread.Sleep(650);
+            CaptureProcessWindows(pid, Path.Combine(contextDir, $"after-add-line-{i:D2}"));
+            addActions.Add(new { index = i, commandId = 32851 });
+        }
+
+        var toolbox = FindVisibleListViewContainingInProcess(pid, "\u811A\u672C\u7A0B\u5E8F", minItems: 3);
+        var toolboxItems = UiAutomation.ListViewItems(toolbox);
+        File.WriteAllText(Path.Combine(contextDir, "toolbox-items.json"),
+            JsonSerializer.Serialize(toolboxItems, JsonOptions()), Encoding.UTF8);
+
+        var frame = UiAutomation.EnumerateChildren(main)
+            .Select(h => new { Handle = h, Info = WindowInfo.FromHandle(h) })
+            .Where(h => h.Info.ClassName.Contains("AfxFrameOrView", StringComparison.OrdinalIgnoreCase) &&
+                        h.Info.Text.Contains("\u7B56\u7565\u7EC4\u6001", StringComparison.OrdinalIgnoreCase) &&
+                        h.Info.Width > 300 && h.Info.Height > 200)
+            .OrderByDescending(h => h.Info.Width * h.Info.Height)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException("Visible strategy editor frame was not found for drag fixture.");
+
+        var requestedItems = Opts(args, "--strategy-toolbox-item").ToArray();
+        if (requestedItems.Length == 0)
+            requestedItems = new[] { "\u811A\u672C\u7A0B\u5E8F", "\u8BA1\u6570\u5668" };
+
+        var targetX = ParseInt(args, "--strategy-drop-x", 430);
+        var targetY0 = ParseInt(args, "--strategy-drop-y", 92);
+        var targetSpacing = ParseInt(args, "--strategy-line-spacing", 56);
+        var dragActions = new List<object>();
+        for (var i = 0; i < requestedItems.Length; i++)
+        {
+            var itemText = requestedItems[i];
+            var item = toolboxItems.FirstOrDefault(t =>
+                t.Texts.Any(text => text.Contains(itemText, StringComparison.OrdinalIgnoreCase)))
+                ?? throw new InvalidOperationException("Strategy toolbox item not found: " + itemText);
+            var toolboxRect = UiAutomation.GetWindowRect(toolbox);
+            var frameRect = UiAutomation.GetWindowRect(frame.Handle);
+            var startX = toolboxRect.Left + item.Rect.Left + Math.Max(8, Math.Min(40, item.Rect.Width / 2));
+            var startY = toolboxRect.Top + item.Rect.Top + Math.Max(2, item.Rect.Height / 2);
+            var endX = frameRect.Left + targetX;
+            var endY = frameRect.Top + targetY0 + i * targetSpacing;
+
+            var beforeDialogs = UiAutomation.TopWindowsForPid(pid)
+                .Where(h => Native.GetClass(h) == "#32770")
+                .Select(WindowInfo.FromHandle)
+                .ToArray();
+            DragScreenPoint(startX, startY, endX, endY);
+            Thread.Sleep(900);
+            CaptureProcessWindows(pid, Path.Combine(contextDir, $"after-drag-{i:D2}-{SafeFile(itemText)}"));
+            var afterDialogs = UiAutomation.TopWindowsForPid(pid)
+                .Where(h => Native.GetClass(h) == "#32770")
+                .Select(WindowInfo.FromHandle)
+                .ToArray();
+            var newDialogs = afterDialogs
+                .Where(after => !beforeDialogs.Any(before => before.Handle.Equals(after.Handle, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            dragActions.Add(new
+            {
+                item = itemText,
+                source = new { hwnd = "0x" + toolbox.ToInt64().ToString("X"), x = startX, y = startY, item.Rect },
+                target = new { hwnd = frame.Info.Handle, x = endX, y = endY, relativeX = targetX, relativeY = targetY0 + i * targetSpacing },
+                newDialogs
+            });
+            if (newDialogs.Length > 0)
+                throw new InvalidOperationException("Strategy drag opened a modal dialog before deterministic fixture completion: " + itemText);
+        }
+
+        UiAutomation.SendCommand(main, 57603, send: true);
+        Thread.Sleep(1000);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-distinct-drag-save"));
+        var selectedLine = SelectOptionalStrategyLine(args, main, contextDir);
+        File.WriteAllText(Path.Combine(contextDir, "distinct-drag-result.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            context = "strategy-after-distinct-drag",
+            insertionMethod = "add policy lines with command 32851, then drag toolbox ListView items to strategy frame slots",
+            addActions,
+            requestedItems,
+            frame = frame.Info,
+            dropPlan = new { targetX, targetY0, targetSpacing },
+            dragActions,
+            selectedLine
+        }, JsonOptions()), Encoding.UTF8);
+    }
+
+    private static void DragScreenPoint(int startX, int startY, int endX, int endY)
+    {
+        Native.SetCursorPos(startX, startY);
+        Thread.Sleep(100);
+        Native.MouseEvent(Native.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(120);
+        Native.SetCursorPos(endX, endY);
+        Native.MouseEvent(Native.MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(180);
+        Native.MouseEvent(Native.MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    private static void ApplyDeviceEditorToolProbePrecondition(string[] args, string outDir, int pid, IntPtr main)
+    {
+        var contextDir = Path.Combine(outDir, "precondition-device-editor");
+        Directory.CreateDirectory(contextDir);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "before"));
+
+        var timeout = TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20));
+        var deviceText = Opt(args, "--device-text") ?? "Smart200";
+        var tree = EnterDeviceConfiguration(pid, main, deviceText, timeout);
+        Thread.Sleep(300);
+        object selected;
+        var context = (Opt(args, "--context") ?? "").ToLowerInvariant();
+        if (context == "device-after-copy-paste")
+            selected = ApplyDeviceCopyPasteFixture(args, contextDir, pid, main, tree, deviceText, timeout);
+        else
+            selected = SelectOptionalTreeItem(args, tree, "--device-tree-index", "--device-tree-text");
+        File.WriteAllLines(Path.Combine(contextDir, "device-editor.window-tree.txt"), UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+        File.WriteAllText(Path.Combine(contextDir, "device-tree.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            context,
+            deviceText,
+            tree = WindowInfo.FromHandle(tree),
+            items = UiAutomation.TreeViewItems(tree),
+            selected
+        }, JsonOptions()), Encoding.UTF8);
+        CaptureProcessWindows(pid, Path.Combine(contextDir, "after-device-editor"));
+    }
+
+    private static object ApplyDeviceCopyPasteFixture(string[] args, string contextDir, int pid, IntPtr main,
+        IntPtr tree, string deviceText, TimeSpan timeout)
+    {
+        var fixtureDir = Path.Combine(contextDir, "copy-paste-fixture");
+        Directory.CreateDirectory(fixtureDir);
+        var beforeItems = UiAutomation.TreeViewItems(tree);
+        File.WriteAllText(Path.Combine(fixtureDir, "tree-before.json"),
+            JsonSerializer.Serialize(beforeItems, JsonOptions()), Encoding.UTF8);
+
+        var source = beforeItems.FirstOrDefault(i => i.Text.Contains(deviceText, StringComparison.OrdinalIgnoreCase))
+                     ?? beforeItems.FirstOrDefault()
+                     ?? throw new InvalidOperationException("Device copy/paste fixture cannot find a source device tree item.");
+        var sourceHandle = ParseHwnd(source.Handle);
+        UiAutomation.TreeViewSelect(tree, sourceHandle);
+        var rect = UiAutomation.TreeViewItemRect(tree, sourceHandle);
+        UiAutomation.ClickPoint(tree, Math.Max(2, rect.Left + Math.Max(1, rect.Width / 2)),
+            Math.Max(2, rect.Top + Math.Max(1, rect.Height / 2)), MouseButton.Left, doubleClick: false, mouse: true);
+        Thread.Sleep(250);
+        CaptureProcessWindows(pid, Path.Combine(fixtureDir, "after-source-select"));
+
+        SendKeys.SendWait("^c");
+        Thread.Sleep(300);
+        CaptureProcessWindows(pid, Path.Combine(fixtureDir, "after-copy"));
+
+        SendKeys.SendWait("^v");
+        Thread.Sleep(1000);
+        CaptureProcessWindows(pid, Path.Combine(fixtureDir, "after-paste"));
+        RecordOpenPopups(pid, "device-copy-paste");
+
+        tree = WaitForTreeViewWithItems(main, timeout);
+        var afterItems = UiAutomation.TreeViewItems(tree);
+        File.WriteAllText(Path.Combine(fixtureDir, "tree-after.json"),
+            JsonSerializer.Serialize(afterItems, JsonOptions()), Encoding.UTF8);
+
+        var newItems = afterItems
+            .Where(after => !beforeItems.Any(before => before.Text.Equals(after.Text, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var created = afterItems.Length > beforeItems.Length;
+        File.WriteAllText(Path.Combine(fixtureDir, "copy-paste-result.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            action = "select device tree item, Ctrl+C, Ctrl+V",
+            beforeCount = beforeItems.Length,
+            afterCount = afterItems.Length,
+            created,
+            source,
+            newItems
+        }, JsonOptions()), Encoding.UTF8);
+
+        if (!created)
+            throw new InvalidOperationException("Device copy/paste fixture did not create a second visible device tree item; see " + fixtureDir);
+
+        UiAutomation.SendCommand(main, 57603, send: true);
+        Thread.Sleep(1000);
+        File.WriteAllText(Path.Combine(fixtureDir, "fixture-save.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            commandId = 57603,
+            action = "save device copy/paste fixture before probing reorder commands"
+        }, JsonOptions()), Encoding.UTF8);
+        CaptureProcessWindows(pid, Path.Combine(fixtureDir, "after-fixture-save"));
+
+        var preferredIndex = OptInt(args, "--device-tree-index") ??
+                             (DeviceMoveCommandFromArgs(args) == 33050 ? 0 : Math.Min(1, afterItems.Length - 1));
+        if (preferredIndex < 0 || preferredIndex >= afterItems.Length)
+            throw new ArgumentOutOfRangeException("--device-tree-index", "Device tree index is outside the visible item range after copy/paste.");
+        var selected = afterItems[preferredIndex];
+        UiAutomation.TreeViewSelect(tree, ParseHwnd(selected.Handle));
+        Thread.Sleep(300);
+        CaptureProcessWindows(pid, Path.Combine(fixtureDir, "after-target-select"));
+        return new
+        {
+            mode = "device-copy-paste-fixture",
+            selectedIndex = preferredIndex,
+            selected,
+            beforeCount = beforeItems.Length,
+            afterCount = afterItems.Length,
+            newItems
+        };
+    }
+
+    private static int DeviceMoveCommandFromArgs(string[] args)
+    {
+        var toolId = Opt(args, "--tool-id") ?? "";
+        var match = Regex.Match(toolId, @":(?<id>\d+)$");
+        return match.Success && int.TryParse(match.Groups["id"].Value, out var parsed) ? parsed : 0;
+    }
+
+    private static void TrySelectWorkbenchTab(IntPtr main, int index)
+    {
+        var tab = UiAutomation.EnumerateChildren(main)
+            .FirstOrDefault(h => Native.GetClass(h).Equals("SysTabControl32", StringComparison.OrdinalIgnoreCase) &&
+                                 UiAutomation.TabItems(h).Length > index);
+        if (tab != IntPtr.Zero)
+        {
+            UiAutomation.TabSelectIndex(tab, index, mouse: true);
+            Thread.Sleep(250);
+        }
+    }
+
+    private static IntPtr FindVisibleListViewContaining(IntPtr root, string text, int minItems)
+    {
+        foreach (var list in UiAutomation.EnumerateChildren(root)
+                     .Where(h => Native.GetClass(h).Equals("SysListView32", StringComparison.OrdinalIgnoreCase) &&
+                                 Native.IsWindowVisible(h)))
+        {
+            try
+            {
+                var items = UiAutomation.ListViewItems(list);
+                if (items.Length >= minItems && items.Any(i => i.Texts.Any(t => t.Contains(text, StringComparison.OrdinalIgnoreCase))))
+                    return list;
+            }
+            catch { }
+        }
+        throw new InvalidOperationException("Visible ListView was not found for text: " + text);
+    }
+
+    private static IntPtr FindVisibleListViewContainingInProcess(int pid, string text, int minItems)
+    {
+        foreach (var root in UiAutomation.TopWindowsForPid(pid))
+        foreach (var list in UiAutomation.EnumerateChildren(root)
+                     .Prepend(root)
+                     .Where(h => Native.GetClass(h).Equals("SysListView32", StringComparison.OrdinalIgnoreCase) &&
+                                 Native.IsWindowVisible(h)))
+        {
+            try
+            {
+                var items = UiAutomation.ListViewItems(list);
+                if (items.Length >= minItems && items.Any(i => i.Texts.Any(t => t.Contains(text, StringComparison.OrdinalIgnoreCase))))
+                    return list;
+            }
+            catch { }
+        }
+        throw new InvalidOperationException("Visible process ListView was not found for text: " + text);
+    }
+
+    private static void WriteListViewSummary(IntPtr root, string path)
+    {
+        var views = UiAutomation.EnumerateChildren(root)
+            .Where(h => Native.GetClass(h).Equals("SysListView32", StringComparison.OrdinalIgnoreCase))
+            .Select(h =>
+            {
+                try
+                {
+                    var items = UiAutomation.ListViewItems(h);
+                    return new
+                    {
+                        handle = $"0x{h.ToInt64():X}",
+                        visible = Native.IsWindowVisible(h),
+                        rect = WindowInfo.FromHandle(h),
+                        itemCount = items.Length,
+                        sampleTexts = items.SelectMany(i => i.Texts).Where(t => !string.IsNullOrWhiteSpace(t)).Take(18).ToArray()
+                    };
+                }
+                catch (Exception ex)
+                {
+                    return new
+                    {
+                        handle = $"0x{h.ToInt64():X}",
+                        visible = Native.IsWindowVisible(h),
+                        rect = WindowInfo.FromHandle(h),
+                        itemCount = -1,
+                        sampleTexts = new[] { "error: " + ex.Message }
+                    };
+                }
+            })
+            .ToArray();
+        File.WriteAllText(path, JsonSerializer.Serialize(views, JsonOptions()), Encoding.UTF8);
+    }
+
+    private static IntPtr WaitForTreeViewWithItems(IntPtr root, TimeSpan timeout)
+    {
+        var until = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < until)
+        {
+            foreach (var tree in UiAutomation.EnumerateChildren(root)
+                         .Where(h => Native.GetClass(h).Equals("SysTreeView32", StringComparison.OrdinalIgnoreCase) &&
+                                     Native.IsWindowVisible(h)))
+            {
+                try
+                {
+                    if (UiAutomation.TreeViewItems(tree).Length > 0)
+                        return tree;
+                }
+                catch { }
+            }
+            Thread.Sleep(200);
+        }
+        throw new TimeoutException("Visible TreeView with items was not found.");
+    }
+
+    private static object SelectOptionalTreeItem(string[] args, IntPtr tree, string indexOption, string textOption)
+    {
+        var items = UiAutomation.TreeViewItems(tree);
+        if (OptInt(args, indexOption) is { } index)
+        {
+            if (index < 0 || index >= items.Length)
+                throw new ArgumentOutOfRangeException(indexOption, "Tree index is outside the visible item range.");
+            UiAutomation.TreeViewSelect(tree, ParseHwnd(items[index].Handle));
+            Thread.Sleep(250);
+            return new { mode = "index", index, item = items[index] };
+        }
+        var text = Opt(args, textOption);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            var item = items.FirstOrDefault(i => i.Text.Contains(text, StringComparison.OrdinalIgnoreCase))
+                       ?? throw new InvalidOperationException("Tree item was not found: " + text);
+            UiAutomation.TreeViewSelect(tree, ParseHwnd(item.Handle));
+            Thread.Sleep(250);
+            return new { mode = "text", text, item };
+        }
+        if (items.Length > 0)
+        {
+            UiAutomation.TreeViewSelect(tree, ParseHwnd(items[0].Handle));
+            Thread.Sleep(250);
+            return new { mode = "default-root", index = 0, item = items[0] };
+        }
+        return new { mode = "none" };
+    }
+
+    private static object SelectOptionalStrategyLine(string[] args, IntPtr main, string contextDir)
+    {
+        if (OptInt(args, "--strategy-line-index") is not { } lineIndex)
+            return new { mode = "none" };
+        var frame = UiAutomation.EnumerateChildren(main)
+            .Where(h => Native.GetClass(h).Contains("AfxFrameOrView", StringComparison.OrdinalIgnoreCase) &&
+                        Native.IsWindowVisible(h) &&
+                        Native.GetText(h).Contains("\u7B56\u7565\u7EC4\u6001", StringComparison.OrdinalIgnoreCase))
+            .Select(h => new { Handle = h, Info = WindowInfo.FromHandle(h) })
+            .OrderByDescending(h => h.Info.Width * h.Info.Height)
+            .FirstOrDefault();
+        if (frame == null)
+            throw new InvalidOperationException("Visible strategy editor frame was not found.");
+        var target = UiAutomation.EnumerateChildren(frame.Handle)
+            .Select(h => new { Handle = h, Info = WindowInfo.FromHandle(h) })
+            .Where(h => Native.IsWindowVisible(h.Handle) &&
+                        h.Info.ClassName.StartsWith("Afx:", StringComparison.OrdinalIgnoreCase) &&
+                        h.Info.Width > 300 && h.Info.Height > 200)
+            .OrderByDescending(h => h.Info.Width * h.Info.Height)
+            .FirstOrDefault()
+            ?? frame;
+        var defaultX = Math.Min(Math.Max(70, target.Info.Width / 12), Math.Max(70, target.Info.Width - 20));
+        var mode = (Opt(args, "--strategy-select-mode") ?? "coordinate").ToLowerInvariant();
+        var selectX = ParseInt(args, "--strategy-select-x", defaultX);
+        var selectY0 = ParseInt(args, "--strategy-select-y", 35);
+        var selectSpacing = ParseInt(args, "--strategy-select-spacing", 28);
+        var selectWidth = ParseInt(args, "--strategy-select-width", 180);
+        var selectHeight = ParseInt(args, "--strategy-select-height", 24);
+        var clickX = Math.Min(Math.Max(selectX, 20), Math.Max(20, target.Info.Width - 20));
+        var clickY = Math.Min(Math.Max(selectY0 + lineIndex * selectSpacing, 20), Math.Max(20, target.Info.Height - 20));
+        UiAutomation.ActivateForInput(target.Handle);
+        Thread.Sleep(120);
+        var keySequence = Opt(args, "--strategy-select-keys") ?? "";
+        var selectionActions = new List<string>();
+        switch (mode)
+        {
+            case "none":
+                selectionActions.Add("none");
+                break;
+            case "double-click":
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Left, doubleClick: true, mouse: true);
+                selectionActions.Add("left-double-click");
+                break;
+            case "post-coordinate":
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Left, doubleClick: false, mouse: false);
+                selectionActions.Add("post-left-click");
+                break;
+            case "post-double-click":
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Left, doubleClick: true, mouse: false);
+                selectionActions.Add("post-left-double-click");
+                break;
+            case "right-click":
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Right, doubleClick: false, mouse: true);
+                Thread.Sleep(250);
+                selectionActions.Add("right-click");
+                CaptureProcessWindows(UiAutomation.GetWindowProcessId(main), Path.Combine(contextDir, "after-strategy-line-right-click-popup"));
+                SendKeys.SendWait("{ESC}");
+                selectionActions.Add("escape-popup");
+                break;
+            case "keyboard":
+                keySequence = string.IsNullOrWhiteSpace(keySequence)
+                    ? "{HOME}" + string.Concat(Enumerable.Repeat("{DOWN}", Math.Max(0, lineIndex))) + " "
+                    : keySequence;
+                SendKeys.SendWait(keySequence);
+                selectionActions.Add("keys:" + keySequence);
+                break;
+            case "marquee":
+                var endX = Math.Min(Math.Max(clickX + selectWidth, 20), Math.Max(20, target.Info.Width - 20));
+                var endY = Math.Min(Math.Max(clickY + selectHeight, 20), Math.Max(20, target.Info.Height - 20));
+                UiAutomation.DragPoint(target.Handle, clickX, clickY, endX, endY, mouse: true);
+                selectionActions.Add($"marquee:{clickX},{clickY}->{endX},{endY}");
+                break;
+            case "post-marquee":
+                var postEndX = Math.Min(Math.Max(clickX + selectWidth, 20), Math.Max(20, target.Info.Width - 20));
+                var postEndY = Math.Min(Math.Max(clickY + selectHeight, 20), Math.Max(20, target.Info.Height - 20));
+                UiAutomation.DragPoint(target.Handle, clickX, clickY, postEndX, postEndY, mouse: false);
+                selectionActions.Add($"post-marquee:{clickX},{clickY}->{postEndX},{postEndY}");
+                break;
+            case "coordinate-then-keyboard":
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(180);
+                keySequence = string.IsNullOrWhiteSpace(keySequence) ? " " : keySequence;
+                SendKeys.SendWait(keySequence);
+                selectionActions.Add("left-click");
+                selectionActions.Add("keys:" + keySequence);
+                break;
+            default:
+                UiAutomation.ClickPoint(target.Handle, clickX, clickY, MouseButton.Left, doubleClick: false, mouse: true);
+                selectionActions.Add("left-click");
+                break;
+        }
+        Thread.Sleep(450);
+        CaptureProcessWindows(UiAutomation.GetWindowProcessId(main), Path.Combine(contextDir, "after-strategy-line-select"));
+        return new
+        {
+            mode,
+            lineIndex,
+            frame = frame.Info,
+            target = target.Info,
+            click = new { x = clickX, y = clickY },
+            marquee = mode == "marquee"
+                ? new
+                {
+                    width = selectWidth,
+                    height = selectHeight
+                }
+                : null,
+            actions = selectionActions
+        };
     }
 
     private static int McgsToolSweep(string[] args)
@@ -265,12 +1383,46 @@ internal static partial class Program
 
         var probeRoot = Opt(args, "--probe-root");
         var probes = LoadMcgsToolProbeEvidence(probeRoot);
+        var commandProbes = BuildCommandProbeIndex(probes.Values);
         var entries = catalog.Tools.Select(tool =>
         {
-            probes.TryGetValue(tool.toolId, out var probe);
+            probes.TryGetValue(tool.toolId, out var exactProbe);
+            McgsToolProbeEvidence? equivalentProbe = null;
+            if (exactProbe == null &&
+                tool.commandId.GetValueOrDefault() != 0 &&
+                commandProbes.TryGetValue(tool.commandId.GetValueOrDefault(), out var commandProbe) &&
+                CommandProbeCanCoverTool(tool, commandProbe))
+            {
+                equivalentProbe = commandProbe;
+            }
+            if (exactProbe != null &&
+                exactProbe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                !ProbeCoversTool(tool, exactProbe) &&
+                tool.commandId.GetValueOrDefault() != 0 &&
+                commandProbes.TryGetValue(tool.commandId.GetValueOrDefault(), out var strongerCommandProbe) &&
+                !strongerCommandProbe.ToolId.Equals(exactProbe.ToolId, StringComparison.OrdinalIgnoreCase) &&
+                CommandProbeCanCoverTool(tool, strongerCommandProbe) &&
+                ToolProbeEvidenceStrength(strongerCommandProbe) > ToolProbeEvidenceStrength(exactProbe))
+            {
+                equivalentProbe = strongerCommandProbe;
+            }
+            var probe = exactProbe ?? equivalentProbe;
+            if (equivalentProbe != null)
+                probe = equivalentProbe;
             var blocked = tool.supportStatus.Equals("blocked", StringComparison.OrdinalIgnoreCase);
-            var probed = !blocked && probe != null && probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase);
-            var status = probed ? "probed" : tool.supportStatus;
+            var candidateSafe = tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase);
+            var unknownRisk = tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase);
+            var probeHasCandidateSafeEvidence = probe != null && ProbeHasCandidateSafeEvidence(probe);
+            var probeHasUnknownRiskEvidence = probe != null && ProbeHasUnknownRiskEvidence(probe);
+            var documentedBlockerNextProbe = "";
+            var documentedProbeBlocker = exactProbe != null && ProbeHasDocumentedBlocker(tool, exactProbe, out documentedBlockerNextProbe);
+            var probed = !blocked &&
+                         probe != null &&
+                         probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                         (!candidateSafe || probeHasCandidateSafeEvidence) &&
+                         (!unknownRisk || probeHasUnknownRiskEvidence);
+            blocked = blocked || documentedProbeBlocker;
+            var status = probed ? "probed" : blocked ? "blocked" : tool.supportStatus;
             return new
             {
                 tool.toolId,
@@ -284,8 +1436,11 @@ internal static partial class Program
                     ? tool.evidenceSource
                     : probed ? probe!.Path : "",
                 probeStatus = probe?.Status ?? "",
-                probePath = probe?.Path ?? "",
-                nextProbe = probed ? "" : tool.nextProbe
+                probePath = exactProbe?.Path ?? "",
+                equivalentProbePath = equivalentProbe?.Path ?? "",
+                equivalentProbeToolId = equivalentProbe?.ToolId ?? "",
+                probeEvidenceKind = exactProbe != null ? "exact-tool" : equivalentProbe != null ? "equivalent-command" : "",
+                nextProbe = probed ? "" : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe
             };
         }).ToArray();
         var needsPreconditionCount = entries.Count(e => string.Equals(e.status, "needs-precondition", StringComparison.OrdinalIgnoreCase));
@@ -342,10 +1497,37 @@ internal static partial class Program
                 if (string.IsNullOrWhiteSpace(toolId))
                     continue;
                 var status = JsonString(doc.RootElement, "status") ?? "UNKNOWN";
-                if (result.TryGetValue(toolId, out var existing) &&
-                    existing.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                var commandId = JsonIntAny(doc.RootElement, "commandId", "CommandId") ?? 0;
+                var safetyClass = JsonString(doc.RootElement, "safetyClass") ?? "";
+                if (result.ContainsKey(toolId))
                     continue;
-                result[toolId] = new McgsToolProbeEvidence(path, status);
+                var candidateSafeMutation = false;
+                var candidateSafeMutationFunctionalDiff = false;
+                var candidateSafeMutationReversibleReturn = false;
+                var candidateSafeMutationUnexpectedFunctionalDiff = false;
+                var candidateSafeMutationNotFunctional = false;
+                var projectCopyHashChanged = false;
+                var unknownRiskHashDriftExplained = false;
+                var context = JsonString(doc.RootElement, "context") ?? "";
+                if (doc.RootElement.TryGetProperty("evidence", out var evidence) &&
+                    evidence.ValueKind == JsonValueKind.Object)
+                {
+                    candidateSafeMutation = JsonBoolAny(evidence, "candidateSafeMutation", "CandidateSafeMutation") == true;
+                    candidateSafeMutationFunctionalDiff = JsonBoolAny(evidence, "candidateSafeMutationFunctionalDiff", "CandidateSafeMutationFunctionalDiff") == true;
+                    candidateSafeMutationReversibleReturn = JsonBoolAny(evidence, "candidateSafeMutationReversibleReturn", "CandidateSafeMutationReversibleReturn") == true;
+                    candidateSafeMutationUnexpectedFunctionalDiff = JsonBoolAny(evidence, "candidateSafeMutationUnexpectedFunctionalDiff", "CandidateSafeMutationUnexpectedFunctionalDiff") == true;
+                    candidateSafeMutationNotFunctional = JsonBoolAny(evidence, "candidateSafeMutationNotFunctional", "CandidateSafeMutationNotFunctional") == true;
+                    projectCopyHashChanged = JsonBoolAny(evidence, "projectCopyHashChanged", "ProjectCopyHashChanged") == true;
+                    unknownRiskHashDriftExplained = JsonBoolAny(evidence, "unknownRiskHashDriftExplained", "UnknownRiskHashDriftExplained") == true;
+                }
+                var newWindowObserved = JsonBoolAny(doc.RootElement, "newWindowObserved", "NewWindowObserved") == true ||
+                                        (doc.RootElement.TryGetProperty("commandObservedWindows", out var windows) &&
+                                         windows.ValueKind == JsonValueKind.Array &&
+                                         windows.GetArrayLength() > 0);
+                result[toolId] = new McgsToolProbeEvidence(toolId, path, status, commandId, safetyClass, candidateSafeMutation,
+                    candidateSafeMutationFunctionalDiff, candidateSafeMutationReversibleReturn,
+                    candidateSafeMutationUnexpectedFunctionalDiff, candidateSafeMutationNotFunctional,
+                    newWindowObserved, projectCopyHashChanged, context, unknownRiskHashDriftExplained);
             }
             catch
             {
@@ -355,7 +1537,99 @@ internal static partial class Program
         return result;
     }
 
-    private sealed record McgsToolProbeEvidence(string Path, string Status);
+    private static Dictionary<int, McgsToolProbeEvidence> BuildCommandProbeIndex(IEnumerable<McgsToolProbeEvidence> probes)
+    {
+        var result = new Dictionary<int, McgsToolProbeEvidence>();
+        foreach (var probe in probes)
+        {
+            if (probe.CommandId == 0 || !probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!result.TryGetValue(probe.CommandId, out var existing) ||
+                ToolProbeEvidenceStrength(probe) > ToolProbeEvidenceStrength(existing))
+            {
+                result[probe.CommandId] = probe;
+            }
+        }
+        return result;
+    }
+
+    private static bool CommandProbeCanCoverTool(McgsToolEntry tool, McgsToolProbeEvidence probe)
+    {
+        if (tool.commandId.GetValueOrDefault() == 0 || tool.commandId.GetValueOrDefault() != probe.CommandId)
+            return false;
+        if (tool.supportStatus.Equals("blocked", StringComparison.OrdinalIgnoreCase) ||
+            tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!string.IsNullOrWhiteSpace(probe.SafetyClass) &&
+            !probe.SafetyClass.Equals(tool.safetyClass, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return true;
+    }
+
+    private static bool ProbeCoversTool(McgsToolEntry tool, McgsToolProbeEvidence probe)
+    {
+        if (!probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (tool.safetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase))
+            return ProbeHasCandidateSafeEvidence(probe);
+        if (tool.safetyClass.Equals("unknown-risk", StringComparison.OrdinalIgnoreCase))
+            return ProbeHasUnknownRiskEvidence(probe);
+        return true;
+    }
+
+    private static bool ProbeHasCandidateSafeEvidence(McgsToolProbeEvidence probe)
+        => probe.CandidateSafeMutationFunctionalDiff ||
+           probe.CandidateSafeMutationReversibleReturn ||
+           probe.NewWindowObserved;
+
+    private static bool ProbeHasUnknownRiskEvidence(McgsToolProbeEvidence probe)
+        => !probe.ProjectCopyHashChanged || probe.UnknownRiskHashDriftExplained;
+
+    private static bool ProbeHasDocumentedBlocker(McgsToolEntry tool, McgsToolProbeEvidence probe, out string nextProbe)
+    {
+        nextProbe = "";
+        if (!probe.Status.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var commandId = tool.commandId.GetValueOrDefault();
+        if (commandId == 57643 &&
+            probe.Context.StartsWith("animation", StringComparison.OrdinalIgnoreCase) &&
+            probe.CandidateSafeMutationUnexpectedFunctionalDiff)
+        {
+            nextProbe = "Animation undo probe was executed after controlled object paste/undo, but saved MCE evidence still produced functional blob_strings/blob_geometry diffs; keep this toolbar instance blocked until an object-tree-aware normalizer or a dedicated animation undo fixture proves the diff is orphan serialization only.";
+            return true;
+        }
+
+        if ((commandId == 33049 || commandId == 33050) && probe.CandidateSafeMutationNotFunctional)
+        {
+            nextProbe = "Device move up/down was executed after selecting Smart200, but the disposable FG2 device tree contains only one device; build a multi-device throwaway fixture before expecting a functional move diff.";
+            return true;
+        }
+
+        if ((commandId == 33062 || commandId == 33063) && probe.CandidateSafeMutationNotFunctional)
+        {
+            nextProbe = "Strategy move up/down was executed in a distinct two-row strategy editor fixture, but local MCGS did not expose a file-safe policy-row selection channel. Physical click, double-click, right-click, keyboard, posted WM_LBUTTON, and marquee selection probes produced only editor-context or normalized-equivalent diffs; keep this command blocked until a future row-selection channel is discovered from MCGS internals or manual editor documentation.";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int ToolProbeEvidenceStrength(McgsToolProbeEvidence probe)
+    {
+        var score = 0;
+        if (probe.CandidateSafeMutationFunctionalDiff) score += 8;
+        if (probe.CandidateSafeMutationReversibleReturn) score += 6;
+        if (probe.NewWindowObserved) score += 4;
+        if (probe.UnknownRiskHashDriftExplained) score += 3;
+        if (!probe.ProjectCopyHashChanged) score += 1;
+        return score;
+    }
+
+    private sealed record McgsToolProbeEvidence(string ToolId, string Path, string Status, int CommandId, string SafetyClass,
+        bool CandidateSafeMutation, bool CandidateSafeMutationFunctionalDiff, bool CandidateSafeMutationReversibleReturn,
+        bool CandidateSafeMutationUnexpectedFunctionalDiff, bool CandidateSafeMutationNotFunctional,
+        bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained);
 
     private sealed class McgsCatalogBuild
     {
@@ -464,20 +1738,20 @@ internal static partial class Program
                 ""),
             57600 => new KnownMcgsCommand(
                 "MFC file new",
-                "needs-precondition",
+                "blocked",
                 "formal-apply-required",
                 "WM_COMMAND 57600 in an isolated editor instance",
                 "standard MFC File/New command; may replace the active project context or prompt to save",
                 "MFC standard command id plus toolbar-probe enabled-state evidence",
-                "Probe only in an isolated disposable editor session with no official project open; capture before/after process state and close without saving."),
+                "Do not invoke in unattended sweeps. If needed, probe only in an isolated disposable editor session with no official project open; capture before/after process state and close without saving."),
             57601 => new KnownMcgsCommand(
                 "MFC file open",
-                "needs-precondition",
+                "blocked",
                 "formal-apply-required",
                 "WM_COMMAND 57601 in an isolated editor instance",
                 "standard MFC File/Open command; opens a file dialog and may replace the active project context",
                 "MFC standard command id plus toolbar-probe enabled-state evidence",
-                "Probe only in an isolated disposable editor session and cancel the dialog; never invoke against the official project."),
+                "Do not invoke in unattended sweeps. If needed, probe only in an isolated disposable editor session and cancel the dialog; never invoke against the official project."),
             57603 => new KnownMcgsCommand(
                 "save project",
                 "implemented",
@@ -560,20 +1834,24 @@ internal static partial class Program
             toolbarText.Contains("动画组态", StringComparison.OrdinalIgnoreCase))
         {
             return new KnownMcgsCommand(
-                "blocked unidentified animation toolbar command 34026",
-                "blocked",
-                "unknown-risk",
-                "WM_COMMAND 34026 is blocked from unattended invocation",
-                "McgsSetE.exe has no RT_STRING text for this command. Workbench-context and active-animation probes showed no visible window-tree/screenshot effect, but MCGS open/close mutates project bytes in this profile, so silent state mutation cannot be ruled out.",
-                "toolbar-probe enabled-state evidence; mcgs-tool-probe active-animation no-visible-effect evidence; Gemini conservative review",
-                "Do not invoke again in unattended sweeps until static handler analysis or a reliable normalized MCE diff can prove the command has no project-state side effect.");
+                "unidentified animation editor-context command 34026",
+                "needs-precondition",
+                "read-only",
+                "WM_COMMAND 34026 in animation editor on a disposable candidate with normalized MCE diff",
+                "McgsSetE.exe has no RT_STRING text for this command. Local active-animation probe showed no dialog/window-tree effect and normalized MCE diff reduced to editor-context-only state, so catalog it conservatively as an unidentified editor-state command rather than a project object mutation.",
+                "toolbar-probe enabled-state evidence; mcgs-tool-probe normalized-diff evidence; Gemini conservative review of sanitized toolbar neighborhood",
+                "If the exact purpose is required, extract the toolbar bitmap/icon or statically inspect the McgsSetE.exe message map for command 34026; otherwise keep it read-only with editor-context-only diff evidence.");
         }
 
-        if (commandId is null || string.IsNullOrWhiteSpace(commandResourceText))
+        if (commandId is null)
             return null;
 
         var id = commandId.Value;
         var source = "McgsSetE.exe RT_STRING command resource plus toolbar-probe evidence";
+        if (IsToolboxDrawingCommand(id))
+            return ToolboxDrawingCommand(id, ToolboxDrawingCommandName(id), toolbarText, commandResourceText, source,
+                ToolboxDrawingCommandEffect(id));
+
         return id switch
         {
             32781 => ReadOnlyResourceCommand(id, "workbench large-icon view", toolbarText, commandResourceText, source,
@@ -606,6 +1884,14 @@ internal static partial class Program
                 "adds a menu item in menu configuration"),
             32807 => CandidateResourceCommand(id, "add menu separator", toolbarText, commandResourceText, source,
                 "adds a menu separator line in menu configuration"),
+            32876 or 32877 or 32878 or 32879 or 32880 or 32881 or 32882 or 32883 or 32884 or
+            32885 or 32886 or 32887 or 32888 or 32889 or 32890 or 32891 or 32892 or 32893 or
+            32894 or 32895 or 32896 or 32897 or 32898 or 32899 or 34016 =>
+                CandidateResourceCommand(id, "animation object arrange/transform command " + id, toolbarText, commandResourceText, source,
+                    "modifies the selected animation canvas object or object selection"),
+            32827 or 32828 or 32829 or 32830 or 32998 or 33000 or 34060 =>
+                CandidateResourceCommand(id, "animation object style command " + id, toolbarText, commandResourceText, source,
+                    "opens or applies style settings for the selected animation canvas object"),
             32848 => ReadOnlyResourceCommand(id, "toggle toolbox", toolbarText, commandResourceText, source,
                 "opens or closes the toolbox pane"),
             32851 => CandidateResourceCommand(id, "add strategy policy line", toolbarText, commandResourceText, source,
@@ -667,6 +1953,61 @@ internal static partial class Program
             string.IsNullOrWhiteSpace(resourceText) ? effect : resourceText,
             evidenceSource,
             "Probe on a throwaway candidate with a minimal matching editor context; record before/after SHA, dialog/window tree, and rollback evidence.");
+
+    private static KnownMcgsCommand ToolboxDrawingCommand(int commandId, string displayName, string toolbarText, string resourceText, string evidenceSource, string effect)
+        => new(
+            displayName,
+            "needs-precondition",
+            "candidate-safe-mutation",
+            $"WM_COMMAND {commandId} in animation canvas, then drag a disposable rectangle",
+            string.IsNullOrWhiteSpace(resourceText) ? effect : resourceText,
+            evidenceSource,
+            "Probe on a throwaway candidate with --context animation-draw-object, --draw-x/--draw-y/--draw-width/--draw-height, --save-after-invoke, and --baseline-export. For table-like tools, prefer --context animation-draw-table and then rerun toolbar-probe with the disposable table selected.");
+
+    private static bool IsToolboxDrawingCommand(int commandId)
+        => commandId is 32901 or 32902 or 32903 or 32904 or 32905 or 32906 or 32907 or 32908 or
+            32936 or 32937 or 32938 or 32939 or 32940 or 32941 or 32942 or 32943 or
+            32944 or 32945 or 32946 or 32947 or 32948 or 32949 or 32950 or 32955 or 32956;
+
+    private static string ToolboxDrawingCommandName(int commandId) => commandId switch
+    {
+        32901 => "line drawing tool",
+        32902 => "arc drawing tool",
+        32903 => "rectangle drawing tool",
+        32904 => "rounded-rectangle drawing tool",
+        32905 => "ellipse drawing tool",
+        32906 => "polygon/polyline drawing tool",
+        32907 => "native static text drawing tool",
+        32908 => "bitmap drawing tool",
+        32936 => "input box drawing tool",
+        32937 => "flow block drawing tool",
+        32938 => "standard button drawing tool",
+        32939 => "animation button drawing tool",
+        32940 => "slider input drawing tool",
+        32941 => "native animation display/lamp drawing tool",
+        32942 => "knob input drawing tool",
+        32943 => "alarm display drawing tool",
+        32944 => "realtime curve drawing tool",
+        32945 => "historical curve drawing tool",
+        32946 => "free table drawing tool",
+        32947 => "historical table drawing tool",
+        32948 => "percent-fill drawing tool",
+        32949 => "rotating meter drawing tool",
+        32950 => "saved-data browser drawing tool",
+        32955 => "plan curve drawing tool",
+        32956 => "combo box drawing tool",
+        _ => "toolbox drawing command " + commandId
+    };
+
+    private static string ToolboxDrawingCommandEffect(int commandId) => commandId switch
+    {
+        32946 => "creates a free-table canvas component; table editing toolbar commands require this object selected as a fixture",
+        32947 => "creates a historical-table canvas component; table editing toolbar commands require this object selected as a fixture",
+        32907 => "creates a native static text/label object; full property readback is handled by window.static-text.add",
+        32938 => "creates a standard button object; momentary/status workflows configure and read it back",
+        32941 => "creates an animation display/native lamp-like component; full property readback is handled by window.lamp.add-native",
+        _ => "creates the selected MCGS toolbox object by dragging a rectangle on the animation canvas"
+    };
 
     private static string SafeToolbarContext(string toolbarText)
         => string.IsNullOrWhiteSpace(toolbarText) ? "the matching editor context" : toolbarText;
@@ -787,11 +2128,13 @@ internal static partial class Program
             return new KnownMcgsCommand(
                 $"table editor command {commandId}",
                 "needs-precondition",
-                "unknown-risk",
-                $"WM_COMMAND {commandId} only after a concrete table editor context is opened on a throwaway candidate",
-                "table-edit toolbar command captured while no active table editor surface was available",
-                "toolbar-probe table-edit context evidence",
-                "Open a realtime-data/device/table editor context on a throwaway candidate, rerun toolbar-probe, then record before/after candidate hash and table evidence before invoking.");
+                "candidate-safe-mutation",
+                $"WM_COMMAND {commandId} only after a disposable MCGS canvas table object is created and selected on a throwaway candidate",
+                string.IsNullOrWhiteSpace(commandResourceText)
+                    ? "table-object editing toolbar command captured without an active table-object fixture"
+                    : commandResourceText,
+                "toolbar-probe table-edit context evidence; Gemini review of sanitized command text classified this as canvas table-object editing",
+                "Create a disposable canvas table object fixture, select one or more cells, rerun toolbar-probe, then invoke only on that throwaway candidate with --context animation-single-object, before/after normalized MCE diff, and reopen readback.");
         }
 
         if (toolbarText.Contains("动画组态", StringComparison.OrdinalIgnoreCase) ||

@@ -85,7 +85,7 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal(0, result.ExitCode);
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "tool-catalog.json"), Encoding.UTF8))!.AsObject();
         var tools = root["tools"]!.AsArray().Select(n => n!.AsObject()).ToArray();
-        Assert.Equal("needs-precondition", FindTool(tools, 57600)["supportStatus"]!.GetValue<string>());
+        Assert.Equal("blocked", FindTool(tools, 57600)["supportStatus"]!.GetValue<string>());
         Assert.Equal("formal-apply-required", FindTool(tools, 57601)["safetyClass"]!.GetValue<string>());
         Assert.Equal("blocked", FindTool(tools, 57607)["supportStatus"]!.GetValue<string>());
         Assert.Equal("implemented", FindTool(tools, 57634)["supportStatus"]!.GetValue<string>());
@@ -95,7 +95,7 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
-    public void ToolCatalogBlocksUnidentifiedAnimationCommand34026()
+    public void ToolCatalogClassifiesUnidentifiedAnimationCommand34026AsReadOnlyEditorState()
     {
         Directory.CreateDirectory(_root);
         var project = Path.Combine(_root, "candidate.MCE");
@@ -123,9 +123,119 @@ public sealed class FullCoverageTests : IDisposable
         var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "tool-catalog.json"), Encoding.UTF8))!.AsObject();
         var tool = root["tools"]!.AsArray().Select(n => n!.AsObject())
             .First(t => t["commandId"]?.GetValue<int>() == 34026);
-        Assert.Equal("blocked", tool["supportStatus"]!.GetValue<string>());
-        Assert.Equal("unknown-risk", tool["safetyClass"]!.GetValue<string>());
-        Assert.Contains("static handler analysis", tool["nextProbe"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", tool["supportStatus"]!.GetValue<string>());
+        Assert.Equal("read-only", tool["safetyClass"]!.GetValue<string>());
+        Assert.Contains("editor-state command", tool["expectedEffect"]!.GetValue<string>());
+        Assert.Contains("normalized-diff evidence", tool["evidenceSource"]!.GetValue<string>());
+        Assert.Contains("message map", tool["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolCatalogClassifiesKnownAnimationStyleCommandWithoutResourceText()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var toolbarProbe = Path.Combine(_root, "toolbar-probe-34060.json");
+        File.WriteAllText(toolbarProbe, """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolbars": [
+            {
+              "window": { "Text": "动画组态工具条" },
+              "buttons": [
+                { "Index": 33, "IdCommand": 34060, "Enabled": false, "Hidden": false, "Text": "" }
+              ]
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var outDir = Path.Combine(_root, "catalog-34060");
+
+        var result = TestCli.Run("mcgs", "tool-catalog", "--project", project, "--toolbar-probe", toolbarProbe, "--out", outDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "tool-catalog.json"), Encoding.UTF8))!.AsObject();
+        var tool = root["tools"]!.AsArray().Select(n => n!.AsObject())
+            .First(t => t["commandId"]?.GetValue<int>() == 34060);
+        Assert.Equal("needs-precondition", tool["supportStatus"]!.GetValue<string>());
+        Assert.Equal("candidate-safe-mutation", tool["safetyClass"]!.GetValue<string>());
+        Assert.Contains("selected animation canvas object", tool["expectedEffect"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolCatalogBlocksTableEditorCommandsUntilTableFixtureExists()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var toolbarProbe = Path.Combine(_root, "toolbar-probe-table.json");
+        File.WriteAllText(toolbarProbe, """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolbars": [
+            {
+              "window": { "Text": "表格编辑工具条" },
+              "buttons": [
+                { "Index": 2, "IdCommand": 33112, "Enabled": true, "Hidden": false, "Text": "" }
+              ]
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var outDir = Path.Combine(_root, "catalog-table");
+
+        var result = TestCli.Run("mcgs", "tool-catalog", "--project", project, "--toolbar-probe", toolbarProbe, "--out", outDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "tool-catalog.json"), Encoding.UTF8))!.AsObject();
+        var tool = root["tools"]!.AsArray().Select(n => n!.AsObject())
+            .First(t => t["commandId"]?.GetValue<int>() == 33112);
+        Assert.Equal("needs-precondition", tool["supportStatus"]!.GetValue<string>());
+        Assert.Equal("candidate-safe-mutation", tool["safetyClass"]!.GetValue<string>());
+        Assert.Contains("canvas table object fixture", tool["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolCatalogClassifiesToolboxTableDrawingToolsAsCandidateSafeFixtureBuilders()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var toolbarProbe = Path.Combine(_root, "toolbar-probe-toolbox-table.json");
+        File.WriteAllText(toolbarProbe, """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolbars": [
+            {
+              "window": { "Text": "Toolbox" },
+              "buttons": [
+                { "Index": 24, "IdCommand": 32946, "Enabled": true, "Hidden": false, "Text": "" },
+                { "Index": 25, "IdCommand": 32947, "Enabled": true, "Hidden": false, "Text": "" }
+              ]
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var outDir = Path.Combine(_root, "catalog-toolbox-table");
+
+        var result = TestCli.Run("mcgs", "tool-catalog", "--project", project, "--toolbar-probe", toolbarProbe, "--out", outDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "tool-catalog.json"), Encoding.UTF8))!.AsObject();
+        var tools = root["tools"]!.AsArray().Select(n => n!.AsObject()).ToArray();
+        var freeTable = FindTool(tools, 32946);
+        var historyTable = FindTool(tools, 32947);
+        Assert.Equal("candidate-safe-mutation", freeTable["safetyClass"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", freeTable["supportStatus"]!.GetValue<string>());
+        Assert.Contains("free table", freeTable["displayName"]!.GetValue<string>());
+        Assert.Contains("animation-draw-table", freeTable["nextProbe"]!.GetValue<string>());
+        Assert.Equal("candidate-safe-mutation", historyTable["safetyClass"]!.GetValue<string>());
+        Assert.Contains("historical table", historyTable["displayName"]!.GetValue<string>());
+        Assert.Contains("animation-draw-table", historyTable["nextProbe"]!.GetValue<string>());
     }
 
     [Fact]
@@ -178,6 +288,372 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal("UNKNOWN", sweep["status"]!.GetValue<string>());
         Assert.True(sweep["needsPreconditionCount"]!.GetValue<int>() > 0);
         Assert.Contains("unmet preconditions", sweep["blockedReasons"]!.AsArray()[0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepDoesNotTreatHashOnlyCandidateSafeProbeAsProbed()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-hash-only");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:4:14:32805",
+              "displayName": "add pull-down menu",
+              "source": "toolbar",
+              "uiPath": "菜单组态工具条/button[14]",
+              "commandId": 32805,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32805",
+              "expectedEffect": "adds a pull-down menu in menu configuration",
+              "evidenceSource": "test catalog",
+              "nextProbe": "open menu editor and require a functional normalized MCE diff"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "hash-only");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:4:14:32805",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": false
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-hash-only");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("UNKNOWN", sweep["status"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", entry["status"]!.GetValue<string>());
+        Assert.Equal("PASS", entry["probeStatus"]!.GetValue<string>());
+        Assert.False(entry["invoked"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolSweepCanUseEquivalentCommandProbeForDuplicateToolbarTools()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-equivalent-command");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:7:57635",
+              "displayName": "MFC edit cut",
+              "source": "toolbar",
+              "uiPath": "动画组态工具条/button[7]",
+              "commandId": 57635,
+              "enabled": false,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 57635",
+              "expectedEffect": "cuts selected objects",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable object"
+            },
+            {
+              "toolId": "toolbar:7:7:57635",
+              "displayName": "MFC edit cut",
+              "source": "toolbar",
+              "uiPath": "workbench toolbar/button[7]",
+              "commandId": 57635,
+              "enabled": false,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 57635",
+              "expectedEffect": "cuts selected objects",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable object"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "cut-animation");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:7:57635",
+          "commandId": 57635,
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-equivalent-command");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entries = sweep["entries"]!.AsArray().Select(n => n!.AsObject()).ToArray();
+        Assert.All(entries, entry => Assert.Equal("probed", entry["status"]!.GetValue<string>()));
+        Assert.Equal("exact-tool", entries[0]["probeEvidenceKind"]!.GetValue<string>());
+        Assert.Equal("equivalent-command", entries[1]["probeEvidenceKind"]!.GetValue<string>());
+        Assert.Equal("toolbar:5:7:57635", entries[1]["equivalentProbeToolId"]!.GetValue<string>());
+        Assert.NotEqual("", entries[1]["equivalentProbePath"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepTreatsReversibleUndoReturnAsCandidateSafeEvidence()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-reversible-undo");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:11:57643",
+              "displayName": "MFC edit undo",
+              "source": "toolbar",
+              "uiPath": "动画组态工具条/button[11]",
+              "commandId": 57643,
+              "enabled": false,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 57643",
+              "expectedEffect": "undoes a controlled disposable edit",
+              "evidenceSource": "test catalog",
+              "nextProbe": "cut then undo"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "undo-return");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:11:57643",
+          "commandId": 57643,
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": false,
+            "candidateSafeMutationFunctionalDiff": false,
+            "candidateSafeMutationReversibleReturn": true,
+            "projectCopyHashChanged": false
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-reversible-undo");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("PASS", sweep["status"]!.GetValue<string>());
+        Assert.Equal("probed", entry["status"]!.GetValue<string>());
+        Assert.True(entry["invoked"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolSweepUsesNewestProbeForSameToolId()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-newest-probe");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:11:57643",
+              "displayName": "MFC edit undo",
+              "source": "toolbar",
+              "uiPath": "动画组态工具条/button[11]",
+              "commandId": 57643,
+              "enabled": false,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 57643",
+              "expectedEffect": "undoes a controlled disposable edit",
+              "evidenceSource": "test catalog",
+              "nextProbe": "cut then undo"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var oldProbeDir = Path.Combine(_root, "probe-root", "old-pass");
+        Directory.CreateDirectory(oldProbeDir);
+        File.WriteAllText(Path.Combine(oldProbeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:11:57643",
+          "commandId": 57643,
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutationFunctionalDiff": true
+          }
+        }
+        """, Encoding.UTF8);
+        File.SetLastWriteTimeUtc(Path.Combine(oldProbeDir, "tool-probe.json"), DateTime.UtcNow.AddMinutes(-5));
+        var newProbeDir = Path.Combine(_root, "probe-root", "new-unknown");
+        Directory.CreateDirectory(newProbeDir);
+        File.WriteAllText(Path.Combine(newProbeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "toolId": "toolbar:5:11:57643",
+          "commandId": 57643,
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutationFunctionalDiff": false,
+            "candidateSafeMutationReversibleReturn": false
+          }
+        }
+        """, Encoding.UTF8);
+        File.SetLastWriteTimeUtc(Path.Combine(newProbeDir, "tool-probe.json"), DateTime.UtcNow);
+
+        var sweepDir = Path.Combine(_root, "sweep-newest-probe");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("UNKNOWN", entry["probeStatus"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", entry["status"]!.GetValue<string>());
+        Assert.False(entry["invoked"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void MceNormalizedDiffTreatsBlobGeometryOffsetOnlyChangesAsEquivalent()
+    {
+        Directory.CreateDirectory(_root);
+        var baseline = Path.Combine(_root, "export-baseline");
+        var candidate = Path.Combine(_root, "export-candidate");
+        Directory.CreateDirectory(baseline);
+        Directory.CreateDirectory(candidate);
+        WriteMinimalExport(baseline, blobGeometryExtra: "\"offset\": 100, \"sha256\": \"baseline-private\", \"bytes\": 32");
+        WriteMinimalExport(candidate, blobGeometryExtra: "\"offset\": 2048, \"sha256\": \"candidate-private\", \"bytes\": 48");
+
+        var outDir = Path.Combine(_root, "normalized-diff");
+        var result = TestCli.Run("mce", "normalized-diff", "--baseline", baseline, "--candidate", candidate, "--out", outDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var diff = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "mce-normalized-diff.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", diff["status"]!.GetValue<string>());
+        Assert.True(diff["equivalent"]!.GetValue<bool>());
+        Assert.Equal(0, diff["changedFileCount"]!.GetValue<int>());
+        var geometry = diff["files"]!.AsArray().Select(n => n!.AsObject())
+            .First(f => f["file"]!.GetValue<string>() == "blob_geometry.json");
+        Assert.True(geometry["equivalent"]!.GetValue<bool>());
+        Assert.Empty(geometry["entryDiffs"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolSweepDoesNotTreatUnknownRiskHashDriftAsProbed()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-unknown-drift");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:7:26:34027",
+              "displayName": "select current editing language",
+              "source": "toolbar",
+              "uiPath": "workbench toolbar/button[26]",
+              "commandId": 34027,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "unknown-risk",
+              "invocationRoute": "WM_COMMAND 34027",
+              "expectedEffect": "opens a current-language dialog",
+              "evidenceSource": "test catalog",
+              "nextProbe": "capture dialog fields and prove hash drift is editor-context-only"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "unknown-drift");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:7:26:34027",
+          "newWindowObserved": false,
+          "evidence": {
+            "projectCopyHashChanged": true
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-unknown-drift");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("UNKNOWN", sweep["status"]!.GetValue<string>());
+        Assert.Equal("needs-precondition", entry["status"]!.GetValue<string>());
+        Assert.Equal("PASS", entry["probeStatus"]!.GetValue<string>());
+        Assert.False(entry["invoked"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -342,6 +818,34 @@ public sealed class FullCoverageTests : IDisposable
           }
         }
         """;
+
+    private static void WriteMinimalExport(string dir, string blobGeometryExtra)
+    {
+        File.WriteAllText(Path.Combine(dir, "summary.json"), """{"schemaVersion":1,"project":"ignored.MCE"}""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(dir, "schema.json"), """{"schemaVersion":1}""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(dir, "data.json"), "[]", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(dir, "blob_strings.json"), "[]", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(dir, "blob_geometry.json"), $$"""
+        [
+          {
+            "table": "WndUser",
+            "column": "lbObjects",
+            "rowKey": "2",
+            "rowLabelSha256": "row-label",
+            {{blobGeometryExtra}},
+            "classOccurrences": [
+              { "className": "CDrawButton", "offset": 10 }
+            ],
+            "candidateRectangles": [
+              { "encoding": "le32", "pattern": "xywh", "x": 610, "y": 320, "width": 90, "height": 42, "offset": 12 }
+            ],
+            "textAnchors": [
+              { "encoding": "gb2312", "byteLength": 12, "charLength": 6, "sha256": "text-anchor", "offset": 40 }
+            ]
+          }
+        ]
+        """, Encoding.UTF8);
+    }
 
     private static JsonObject FindTool(JsonObject[] tools, int commandId)
         => tools.First(t => t["commandId"]?.GetValue<int>() == commandId);

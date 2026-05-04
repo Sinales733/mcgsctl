@@ -108,6 +108,8 @@ internal static partial class Program
             candidateDoc.RootElement.ValueKind == JsonValueKind.Array)
         {
             result.EntryDiffs = DiffJsonArrayEntries(baselineDoc.RootElement, candidateDoc.RootElement, file);
+            if (result.EntryDiffs.Count == 0)
+                result.Equivalent = true;
         }
         return result;
     }
@@ -130,6 +132,8 @@ internal static partial class Program
             var hasRight = right.TryGetValue(key, out var r);
             if (hasLeft && hasRight && l.Hash.Equals(r.Hash, StringComparison.OrdinalIgnoreCase))
                 continue;
+            if (hasLeft && hasRight && MceEntriesSemanticallyEquivalent(file, l.Element, r.Element))
+                continue;
             diffs.Add(new MceNormalizedEntryDiff
             {
                 Key = key,
@@ -140,6 +144,58 @@ internal static partial class Program
             });
         }
         return diffs;
+    }
+
+    private static bool MceEntriesSemanticallyEquivalent(string file, JsonElement baseline, JsonElement candidate)
+    {
+        if (!file.Equals("blob_geometry.json", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return MceGeometrySignature(baseline).Equals(MceGeometrySignature(candidate), StringComparison.Ordinal);
+    }
+
+    private static string MceGeometrySignature(JsonElement element)
+    {
+        var parts = new List<string>
+        {
+            "table=" + (MceJsonString(element, "table") ?? ""),
+            "column=" + (MceJsonString(element, "column") ?? ""),
+            "rowKey=" + (MceJsonString(element, "rowKey") ?? ""),
+            "rowLabelSha256=" + (MceJsonString(element, "rowLabelSha256") ?? "")
+        };
+        AddSignatureArray(parts, element, "classOccurrences", e =>
+            (MceJsonString(e, "className") ?? ""));
+        AddSignatureArray(parts, element, "candidateRectangles", e =>
+            string.Join("|",
+                MceJsonString(e, "encoding") ?? "",
+                MceJsonString(e, "pattern") ?? "",
+                MceJsonInt(e, "x")?.ToString() ?? "",
+                MceJsonInt(e, "y")?.ToString() ?? "",
+                MceJsonInt(e, "width")?.ToString() ?? "",
+                MceJsonInt(e, "height")?.ToString() ?? ""));
+        AddSignatureArray(parts, element, "textAnchors", e =>
+            string.Join("|",
+                MceJsonString(e, "encoding") ?? "",
+                MceJsonInt(e, "byteLength")?.ToString() ?? "",
+                MceJsonInt(e, "charLength")?.ToString() ?? "",
+                MceJsonString(e, "sha256") ?? ""));
+        return string.Join("\n", parts);
+    }
+
+    private static void AddSignatureArray(List<string> parts, JsonElement element, string property, Func<JsonElement, string> selector)
+    {
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty(property, out var array) ||
+            array.ValueKind != JsonValueKind.Array)
+        {
+            parts.Add(property + ":");
+            return;
+        }
+
+        var values = array.EnumerateArray()
+            .Select(selector)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToArray();
+        parts.Add(property + ":" + string.Join(";", values));
     }
 
     private static List<MceNormalizedStringDiff> DiffMceStringArrays(JsonElement baseline, JsonElement candidate)

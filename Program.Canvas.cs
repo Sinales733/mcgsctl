@@ -446,14 +446,64 @@ internal static partial class Program
         try
         {
             using var session = OpenCanvasProbeSession(args, outDir, "toolbar-probe", out process, out main);
-            var toolbars = UiAutomation.EnumerateChildren(session.Main)
-                .Where(h => Native.GetClass(h).Contains("ToolbarWindow32", StringComparison.OrdinalIgnoreCase))
-                .Select(h =>
+            var toolboxOpenRequested = Has(args, "--open-toolbox");
+            var toolboxOpenedByProbe = false;
+            if (toolboxOpenRequested && FindTopLevelWindowByText(process!.Id, "工具箱") == IntPtr.Zero)
+            {
+                Native.SendMessage(session.Main, Native.WM_COMMAND, (IntPtr)32848, IntPtr.Zero);
+                Thread.Sleep(1000);
+                toolboxOpenedByProbe = FindTopLevelWindowByText(process.Id, "工具箱") != IntPtr.Zero;
+            }
+
+            object? selectedCanvasObject = null;
+            if (OptInt(args, "--select-x") is { } selectX && OptInt(args, "--select-y") is { } selectY)
+            {
+                var doubleSelect = Has(args, "--select-double");
+                var selectionDir = Path.Combine(outDir, "selection-precondition");
+                Directory.CreateDirectory(selectionDir);
+                CaptureProcessWindows(process!.Id, Path.Combine(selectionDir, "before-select"));
+                UiAutomation.ClickPoint(session.Canvas, selectX, selectY, MouseButton.Left, doubleClick: doubleSelect, mouse: true);
+                Thread.Sleep(doubleSelect ? 900 : 450);
+                CaptureProcessWindows(process.Id, Path.Combine(selectionDir, "after-select"));
+                selectedCanvasObject = new
+                {
+                    x = selectX,
+                    y = selectY,
+                    doubleClick = doubleSelect,
+                    evidence = "selection-precondition"
+                };
+                File.WriteAllText(Path.Combine(selectionDir, "selection.json"),
+                    JsonSerializer.Serialize(selectedCanvasObject, JsonOptions()), Encoding.UTF8);
+            }
+
+            var toolbarHandles = new List<(IntPtr Handle, string Scope, IntPtr Owner)>();
+            void AddToolbar(IntPtr handle, string scope, IntPtr owner)
+            {
+                if (handle == IntPtr.Zero || toolbarHandles.Any(t => t.Handle == handle))
+                    return;
+                if (Native.GetClass(handle).Contains("ToolbarWindow32", StringComparison.OrdinalIgnoreCase))
+                    toolbarHandles.Add((handle, scope, owner));
+            }
+
+            foreach (var child in UiAutomation.EnumerateChildren(session.Main))
+                AddToolbar(child, "main-descendant", session.Main);
+
+            foreach (var top in UiAutomation.TopWindowsForPid(process!.Id))
+            {
+                if (top == session.Main)
+                    continue;
+                AddToolbar(top, "top-level", top);
+                foreach (var child in UiAutomation.EnumerateChildren(top))
+                    AddToolbar(child, "top-level-descendant", top);
+            }
+
+            var toolbars = toolbarHandles
+                .Select(t =>
                 {
                     object buttons;
                     try
                     {
-                        buttons = UiAutomation.ToolbarButtons(h);
+                        buttons = UiAutomation.ToolbarButtons(t.Handle);
                     }
                     catch (Exception ex)
                     {
@@ -461,7 +511,9 @@ internal static partial class Program
                     }
                     return new
                     {
-                        window = WindowInfo.FromHandle(h),
+                        sourceScope = t.Scope,
+                        ownerWindow = WindowInfo.FromHandle(t.Owner),
+                        window = WindowInfo.FromHandle(t.Handle),
                         buttons
                     };
                 })
@@ -474,6 +526,9 @@ internal static partial class Program
                 project = session.ProjectCopy,
                 windowIndex = session.WindowIndex,
                 canvasWindow = WindowInfo.FromHandle(session.Canvas),
+                toolboxOpenRequested,
+                toolboxOpenedByProbe,
+                selectedCanvasObject,
                 toolbarCount = toolbars.Length,
                 toolbars,
                 blockedReasons = toolbars.Length > 0
@@ -483,6 +538,8 @@ internal static partial class Program
             File.WriteAllText(Path.Combine(outDir, "toolbar-probe.json"),
                 JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
             File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(session.Main), Encoding.UTF8);
+            File.WriteAllLines(Path.Combine(outDir, "top-window-tree.txt"),
+                UiAutomation.TopWindowsForPid(process!.Id).SelectMany(UiAutomation.WindowTreeLines), Encoding.UTF8);
             TryScreenshot(session.Main, Path.Combine(outDir, "main-window.png"));
             Console.WriteLine("canvas toolbar-probe: " + outDir);
             return toolbars.Length > 0 ? 0 : 2;
@@ -501,6 +558,10 @@ internal static partial class Program
             }
         }
     }
+
+    private static IntPtr FindTopLevelWindowByText(int pid, string text)
+        => UiAutomation.TopWindowsForPid(pid)
+            .FirstOrDefault(h => Native.GetText(h).Equals(text, StringComparison.OrdinalIgnoreCase));
 
     private static int CanvasMceGeometryProbe(string[] args)
     {

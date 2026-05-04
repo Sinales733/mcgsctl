@@ -146,12 +146,12 @@ Commands:
   mcgsctl verify --project <mce> --spec <json>
   mcgsctl mcgs inventory --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
   mcgsctl mcgs tool-catalog --project <candidate.mce> --out <dir> [--toolbar-probe <toolbar-probe.json>]
-  mcgsctl mcgs tool-probe --project <candidate.mce> --tool-id <id> --out <dir> [--tool-catalog <tool-catalog.json>]
+  mcgsctl mcgs tool-probe --project <candidate.mce> --tool-id <id> --out <dir> [--tool-catalog <tool-catalog.json>] [--invoke-readonly|--invoke-candidate-safe] [--baseline-export <mce-export-dir>|--baseline-after-precondition] [--context animation-select-all|animation-clipboard-seed|animation-after-cut|animation-single-after-cut|animation-draw-object|animation-draw-table|strategy-editor|strategy-after-add|strategy-after-distinct-toolbox|strategy-after-distinct-drag|menu-editor|device-editor|device-after-copy-paste] [--object-map <canvas-objects.json> --object-id <id>] [--draw-x <n> --draw-y <n> --draw-width <n> --draw-height <n>] [--strategy-line-index <n>] [--strategy-select-mode coordinate|double-click|post-coordinate|post-double-click|right-click|keyboard|marquee|post-marquee|coordinate-then-keyboard] [--strategy-select-x <n> --strategy-select-y <n> --strategy-select-spacing <n>] [--strategy-select-width <n> --strategy-select-height <n>] [--strategy-select-keys <sendkeys>] [--strategy-toolbox-item <text>] [--strategy-drop-x <n> --strategy-drop-y <n> --strategy-line-spacing <n>] [--menu-tree-index <n>|--menu-tree-text <text>] [--device-tree-index <n>|--device-tree-text <text>] [--save-after-invoke]
   mcgsctl mcgs tool-sweep --project <candidate.mce> --out <dir> [--tool-catalog <tool-catalog.json>]
   mcgsctl canvas inspect --project <candidate.mce> --out <dir> [--window-index <n>]
   mcgsctl canvas context-menu-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--x <n> --y <n>]
   mcgsctl canvas clipboard-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--select-all]
-  mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>]
+  mcgsctl canvas toolbar-probe --project <candidate.mce> --out <dir> [--window-index <n>] [--open-toolbox] [--select-x <n> --select-y <n> [--select-double]]
   mcgsctl canvas mce-geometry-probe --project <candidate.mce> --out <dir>
   mcgsctl canvas property-map-probe --project <candidate.mce> --row-key <key> --out <dir> [--semantic-map <semantic-map.json>] [--property-readback-dir <dir>]
   mcgsctl canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font] [--probe-permissions] [--reveal-overlap-delete]
