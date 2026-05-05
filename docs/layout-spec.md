@@ -177,7 +177,10 @@ property-dialog tab/control, and writes `property-readback.json`,
 opens the font subdialog, records `font-dialog.tree.txt` and `font-dialog.png`,
 extracts font family/style/size, then cancels the subdialog without saving.
 `property-map-probe --property-readback-dir <dir>` ingests those readbacks and
-uses the newest evidence for each object ID.
+uses the newest verified evidence for each object ID. If a readback reports
+`selectionVerified=false`, it is diagnostic evidence only and is ignored by
+`property-map-probe` so a failed selection cannot populate another object's
+property fields.
 
 Every object record carries a `properties` object with stable keys for geometry, semantic kind, displayed text, variable/expression bindings, operations, script, font, alignment, colors, borders, visibility, input/display format, permissions, navigation, animation/alarm rules, grouping, and z-order. The value contract is deliberately strict:
 
@@ -203,7 +206,16 @@ tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep `
   --out .mcgsctl-runs\mcgs-tool-sweep
 ```
 
-`tool-catalog.json` and `function-catalog.json` are inventory records, not proof that every MCGS command is understood. `mcgs tool-sweep` writes `tool-sweep.json` for stage-1 accounting and `tool-closure-records.json` for the usability gate. A tool is understood only after its purpose, inputs, side effects, safety class, invocation path, readback/evidence path, rollback path, and closure status are recorded. `tool-sweep status=PASS` is therefore only a probe-accounting result; `closureStatus=UNKNOWN` still means more file-safe closure work remains.
+`mcgs tool-catalog` writes inventory-level `tool-catalog.json` and
+`function-catalog.json`; those inventory records are not proof that every MCGS
+command is understood. `mcgs tool-sweep` writes `tool-sweep.json` for stage-1
+accounting, `tool-closure-records.json` for the usability gate, and a
+closure-backed `function-catalog.json` that links each tool function to its
+closure status, closure evidence, missing evidence, and next probe. A tool is
+understood only after its purpose, inputs, side effects, safety class,
+invocation path, readback/evidence path, rollback path, and closure status are
+recorded. `tool-sweep status=PASS` is therefore only a probe-accounting result;
+`closureStatus=UNKNOWN` still means more file-safe closure work remains.
 
 Closure statuses are intentionally stricter than probe statuses:
 
