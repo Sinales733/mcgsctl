@@ -961,7 +961,146 @@ public sealed class FullCoverageTests : IDisposable
         var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
             .AsObject()["records"]!.AsArray()[0]!.AsObject();
         Assert.Equal("blockedBySafety", record["closureStatus"]!.GetValue<string>());
+        Assert.Contains("formal project authorization",
+            string.Join("\n", record["missingEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+        Assert.Equal("", record["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepClosesPrintPreviewWhenReadOnlyProbeIsVerified()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-print-preview");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:3:5:57609",
+              "displayName": "MFC print preview",
+              "source": "toolbar",
+              "uiPath": "standard toolbar/button[5]",
+              "commandId": 57609,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "read-only",
+              "invocationRoute": "WM_COMMAND 57609",
+              "expectedEffect": "opens print preview view and returns without project mutation",
+              "evidenceSource": "test catalog",
+              "nextProbe": "probe on disposable candidate"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "print-preview");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:3:5:57609",
+          "commandId": 57609,
+          "context": "animation",
+          "safetyClass": "read-only",
+          "newWindowObserved": true,
+          "evidence": {
+            "projectCopyHashChanged": false
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-print-preview");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
+        Assert.Equal(0, sweep["blockedBySafetyCount"]!.GetValue<int>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("readOnlyClosedLoopPass", record["closureStatus"]!.GetValue<string>());
         Assert.Empty(record["missingEvidence"]!.AsArray());
+        Assert.Equal("", record["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepCarriesDocumentedHumanBlockerIntoClosureRecord()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-policy-move");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:6:19:33063",
+              "displayName": "move policy line up",
+              "source": "toolbar",
+              "uiPath": "strategy toolbar/button[19]",
+              "commandId": 33063,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 33063",
+              "expectedEffect": "moves selected policy line up",
+              "evidenceSource": "test catalog",
+              "nextProbe": "probe once row selection is available"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "policy-up");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "toolId": "toolbar:6:19:33063",
+          "commandId": 33063,
+          "context": "strategy-policy-line",
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationNotFunctional": true,
+            "projectCopyHashChanged": true,
+            "normalizedDiff": {
+              "Equivalent": true,
+              "EditorContextOnly": true
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-policy-move-blocked");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("blockedNeedsHuman", record["closureStatus"]!.GetValue<string>());
+        var missingEvidence = string.Join("\n", record["missingEvidence"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Contains("did not expose a file-safe policy-row selection channel", missingEvidence);
+        Assert.Equal("", record["nextProbe"]!.GetValue<string>());
+        var entry = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!
+            .AsObject()["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("", entry["nextProbe"]!.GetValue<string>());
     }
 
     [Fact]

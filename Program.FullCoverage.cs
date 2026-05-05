@@ -2571,6 +2571,9 @@ internal static partial class Program
             blocked = blocked || documentedProbeBlocker;
             var status = probed ? "probed" : blocked ? "blocked" : tool.supportStatus;
             var closure = BuildMcgsToolClosureRecord(tool, status, probed, exactProbe, equivalentProbe, probe, documentedProbeBlocker ? documentedBlockerNextProbe : "");
+            var entryNextProbe = closure.closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman"
+                ? ""
+                : probed ? closure.nextProbe : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe;
             return new McgsToolSweepEntry
             {
                 toolId = tool.toolId,
@@ -2594,7 +2597,7 @@ internal static partial class Program
                 closureStatus = closure.closureStatus,
                 missingEvidence = closure.missingEvidence,
                 closureRecordPath = "tool-closure-records.json",
-                nextProbe = probed ? closure.nextProbe : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe
+                nextProbe = entryNextProbe
             };
         }).ToArray();
         var needsPreconditionCount = entries.Count(e => string.Equals(e.status, "needs-precondition", StringComparison.OrdinalIgnoreCase));
@@ -2624,7 +2627,10 @@ internal static partial class Program
             var probe = exactProbe ?? equivalentProbe;
             if (equivalentProbe != null)
                 probe = equivalentProbe;
-            return BuildMcgsToolClosureRecord(tool, entry.status, entry.status.Equals("probed", StringComparison.OrdinalIgnoreCase), exactProbe, equivalentProbe, probe, "");
+            var documentedBlockerNextProbe = "";
+            var documentedProbeBlocker = exactProbe != null && ProbeHasDocumentedBlocker(tool, exactProbe, out documentedBlockerNextProbe);
+            return BuildMcgsToolClosureRecord(tool, entry.status, entry.status.Equals("probed", StringComparison.OrdinalIgnoreCase),
+                exactProbe, equivalentProbe, probe, documentedProbeBlocker ? documentedBlockerNextProbe : "");
         }).ToArray();
         var closedLoopPassCount = closureRecords.Count(r => r.closureStatus == "closedLoopPass");
         var readOnlyClosedLoopPassCount = closureRecords.Count(r => r.closureStatus == "readOnlyClosedLoopPass");
@@ -3086,6 +3092,8 @@ internal static partial class Program
         }
 
         var tableEditorClosed = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" && IsTableEditorCommand(tool);
+        if (closureStatus is "blockedBySafety" or "blockedNeedsHuman")
+            missing.AddRange(McgsToolBlockedClosureEvidence(tool, closureStatus, documentedBlockerNextProbe));
         if (closureStatus is "notClosedLoop" or "needsProbe" or "invalidEvidence")
             missing.AddRange(McgsToolMissingClosureEvidence(tool, category, probed, probe));
         if (closureStatus == "notClosedLoop" && string.IsNullOrWhiteSpace(nextProbe))
@@ -3191,7 +3199,7 @@ internal static partial class Program
             safetyClass = tool.safetyClass,
             closureStatus = closureStatus,
             missingEvidence = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            nextProbe = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" ? "" : nextProbe,
+            nextProbe = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman" ? "" : nextProbe,
             geminiReview = ""
         };
     }
@@ -3256,6 +3264,8 @@ internal static partial class Program
 
     private static bool IsSafetyBlockedTool(McgsToolEntry tool)
     {
+        if (tool.safetyClass.Equals("read-only", StringComparison.OrdinalIgnoreCase))
+            return false;
         if (tool.safetyClass is "formal-apply-required" or "hardware-risk" or "external-side-effect")
             return true;
         var text = string.Join(" ", tool.displayName, tool.expectedEffect, tool.nextProbe, tool.invocationRoute);
@@ -3565,8 +3575,53 @@ internal static partial class Program
             "management" =>
                 "Run a targeted management-command probe on a disposable candidate with before/action/after evidence, normalized project diff, side-effect accounting, and rollback/discard path.",
             _ =>
-                "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after evidence, side effects, normalized diff, and a concrete closure decision."
+               "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after evidence, side effects, normalized diff, and a concrete closure decision."
         };
+    }
+
+    private static string[] McgsToolBlockedClosureEvidence(McgsToolEntry tool, string closureStatus, string documentedBlockerNextProbe)
+    {
+        var evidence = new List<string>();
+        if (closureStatus == "blockedBySafety")
+        {
+            evidence.Add("blocked safety boundary: " + McgsToolSafetyBlockerReason(tool));
+            if (!string.IsNullOrWhiteSpace(tool.nextProbe))
+                evidence.Add("manual/safe-continuation condition: " + tool.nextProbe);
+        }
+        else if (closureStatus == "blockedNeedsHuman")
+        {
+            var condition = !string.IsNullOrWhiteSpace(documentedBlockerNextProbe)
+                ? documentedBlockerNextProbe
+                : !string.IsNullOrWhiteSpace(tool.nextProbe)
+                    ? tool.nextProbe
+                    : "human-provided fixture, selection state, or editor context is required before file-safe probing can continue";
+            evidence.Add("blocked human/precondition boundary: " + condition);
+        }
+
+        if (evidence.Count == 0)
+            evidence.Add("blocked boundary recorded without invocation; no file-safe unattended proof is currently available");
+        return evidence.ToArray();
+    }
+
+    private static string McgsToolSafetyBlockerReason(McgsToolEntry tool)
+    {
+        if (tool.safetyClass.Equals("formal-apply-required", StringComparison.OrdinalIgnoreCase))
+            return "command may replace/open/save the active project context and requires explicit formal project authorization";
+        if (tool.safetyClass.Equals("hardware-risk", StringComparison.OrdinalIgnoreCase))
+            return "command may start runtime behavior or interact with drivers/PLC/hardware";
+        if (tool.safetyClass.Equals("external-side-effect", StringComparison.OrdinalIgnoreCase))
+            return "command may trigger an external side effect outside a throwaway candidate";
+        var text = string.Join(" ", tool.displayName, tool.expectedEffect, tool.nextProbe, tool.invocationRoute);
+        if (text.Contains("print", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("printer", StringComparison.OrdinalIgnoreCase))
+            return "command can interact with printer configuration or printing side effects";
+        if (text.Contains("MCGSRUN", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("MFCGRUN", StringComparison.OrdinalIgnoreCase))
+            return "command starts an MCGS runtime process";
+        if (text.Contains("official project", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("formal apply", StringComparison.OrdinalIgnoreCase))
+            return "command requires formal official-project authorization";
+        return "command risk is not proven file-safe for unattended invocation";
     }
 
     private static string[] McgsToolPreconditions(McgsToolEntry tool)
