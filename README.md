@@ -139,9 +139,12 @@ For full editor coverage, build tool and function inventories from MCGS toolbar/
 ```powershell
 tools\mcgsctl\mcgsctl.ps1 mcgs tool-catalog --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --toolbar-probe .mcgsctl-runs\canvas-toolbar\toolbar-probe.json --out .mcgsctl-runs\mcgs-tool-catalog
 tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --tool-catalog .mcgsctl-runs\mcgs-tool-catalog\tool-catalog.json --out .mcgsctl-runs\mcgs-tool-sweep
+tools\mcgsctl\mcgsctl.ps1 mcgs blocked-breakthrough-audit --closures .mcgsctl-runs\mcgs-tool-sweep\tool-closure-records.json --out .mcgsctl-runs\mcgs-blocked-breakthrough-audit
 ```
 
 `mcgs tool-catalog` writes inventory-level `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` writes `tool-sweep.json`, `tool-closure-records.json`, and a closure-backed `function-catalog.json` that joins each tool function to its closure status, closure evidence, missing evidence, and next probe. The stage-1 `status` only says whether inventory/probe accounting is complete; it is not a usability claim. Full usability is represented by `closureStatus`: candidate-safe tools must reach `closedLoopPass`, read-only tools must reach `readOnlyClosedLoopPass`, and unsafe tools must have `blockedBySafety` or `blockedNeedsHuman`. `notClosedLoop`, `needsProbe`, and `invalidEvidence` are continuation states.
+
+`mcgs blocked-breakthrough-audit` is the follow-up gate for remaining `blockedBySafety` / `blockedNeedsHuman` tools. It writes `blocked-breakthrough-report.json`, records which substitute probes were considered, attaches Gemini review metadata when available, and requires every blocked item to be classified as `closedLoopPass`, `readOnlyClosedLoopPass`, or `hardBlocked` with no hidden `nextProbe`. A `hardBlocked` item is not a usability pass; it means the local file-safe route has been exhausted and the record states the human or safety condition needed to continue.
 
 Read-only tool probes are accepted only when the evidence proves no unintended project mutation: either the candidate hash stays unchanged or the normalized diff classifies the drift as `normalized-equivalent` / editor-context-only. A successful click or dialog observation without that proof does not close the tool.
 

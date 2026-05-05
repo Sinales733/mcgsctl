@@ -1798,6 +1798,88 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal("unresolved", properties["permissions"]!["status"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void BlockedBreakthroughAuditHardBlocksWithoutHiddenNextProbe()
+    {
+        Directory.CreateDirectory(_root);
+        var closures = Path.Combine(_root, "tool-closure-records.json");
+        File.WriteAllText(closures, """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "records": [
+            {
+              "toolId": "toolbar:7:4:57607",
+              "name": "MFC print",
+              "uiPath": "workbench toolbar/button[4]",
+              "category": "management",
+              "commandId": "57607",
+              "safetyClass": "unknown-risk",
+              "closureStatus": "blockedBySafety",
+              "missingEvidence": [
+                "blocked safety boundary: command can interact with printer configuration or printing side effects",
+                "manual/safe-continuation condition: do not invoke unattended"
+              ],
+              "nextProbe": ""
+            },
+            {
+              "toolId": "toolbar:6:20:33062",
+              "name": "move policy line down",
+              "uiPath": "strategy toolbar/button[20]",
+              "category": "unknown",
+              "commandId": "33062",
+              "safetyClass": "candidate-safe-mutation",
+              "closureStatus": "blockedNeedsHuman",
+              "missingEvidence": [
+                "blocked human/precondition boundary: row-selection probes produced only normalized-equivalent diffs"
+              ],
+              "nextProbe": ""
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var gemini = Path.Combine(_root, "gemini-review.json");
+        File.WriteAllText(gemini, """
+        {
+          "proAttempts": [
+            { "model": "gemini-3.1-pro-preview", "result": "timeout" }
+          ],
+          "fallbackSessionId": "chat-test.json",
+          "fallbackModel": "gemini-2.5-flash",
+          "fallbackContent": "{\"families\":{\"print\":{\"decision\":\"hardBlockCondition\"},\"policyMove\":{\"decision\":\"safeProbe\",\"safeProbe\":true}}}"
+        }
+        """, Encoding.UTF8);
+        var outDir = Path.Combine(_root, "blocked-audit");
+
+        var result = TestCli.Run("mcgs", "blocked-breakthrough-audit",
+            "--closures", closures,
+            "--gemini-review", gemini,
+            "--out", outDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var report = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "blocked-breakthrough-report.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", report["status"]!.GetValue<string>());
+        Assert.Equal(2, report["originalBlockedCount"]!.GetValue<int>());
+        Assert.Equal(0, report["breakthroughCount"]!.GetValue<int>());
+        Assert.Equal(2, report["hardBlockedCount"]!.GetValue<int>());
+        Assert.Equal(0, report["hiddenNextProbeCount"]!.GetValue<int>());
+        var records = report["records"]!.AsArray().Select(n => n!.AsObject()).ToArray();
+        Assert.All(records, record =>
+        {
+            Assert.Equal("hardBlocked", record["breakthroughStatus"]!.GetValue<string>());
+            Assert.True(record["blockerEvidenceSufficient"]!.GetValue<bool>());
+            Assert.True(record["missingEvidenceClear"]!.GetValue<bool>());
+            Assert.True(record["noHiddenNextProbe"]!.GetValue<bool>());
+            Assert.Equal("", record["nextProbe"]!.GetValue<string>());
+            Assert.NotEmpty(record["alternativeProbesConsidered"]!.AsArray());
+            Assert.False(string.IsNullOrWhiteSpace(record["whyNoFileSafeProbe"]!.GetValue<string>()));
+            Assert.False(string.IsNullOrWhiteSpace(record["requiredHumanOrSafetyCondition"]!.GetValue<string>()));
+        });
+        var policy = records.Single(r => r["blockedFamily"]!.GetValue<string>() == "policy-line-move");
+        Assert.False(policy["geminiReview"]!.AsObject()["accepted"]!.GetValue<bool>());
+        Assert.Contains("functional normalized row-order diff", policy["smallestNoBoundaryValidation"]!.GetValue<string>());
+    }
+
     private static string BuildPropertyReadback(string family, string style, string size)
         => $$"""
         {

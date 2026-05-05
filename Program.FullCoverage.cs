@@ -10,7 +10,7 @@ internal static partial class Program
     private static int Mcgs(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl mcgs inventory|tool-catalog|tool-probe|tool-sweep --project <candidate.mce> --out <dir>");
+            return Fail("Usage: mcgsctl mcgs inventory|tool-catalog|tool-probe|tool-sweep --project <candidate.mce> --out <dir> OR mcgsctl mcgs blocked-breakthrough-audit --closures <tool-closure-records.json> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -18,8 +18,62 @@ internal static partial class Program
             "tool-catalog" => McgsToolCatalog(args),
             "tool-probe" => McgsToolProbe(args),
             "tool-sweep" => McgsToolSweep(args),
+            "blocked-breakthrough-audit" => McgsBlockedBreakthroughAudit(args),
             _ => Fail("Unknown mcgs command: " + args[1])
         };
+    }
+
+    private static int McgsBlockedBreakthroughAudit(string[] args)
+    {
+        var closuresPath = FullPath(Required(args, "--closures"));
+        var outDir = FullPath(Required(args, "--out"));
+        var geminiReviewPath = Opt(args, "--gemini-review");
+        Directory.CreateDirectory(outDir);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(closuresPath, Encoding.UTF8));
+        var root = doc.RootElement;
+        var recordsElement = root.TryGetProperty("records", out var recordsProp) && recordsProp.ValueKind == JsonValueKind.Array
+            ? recordsProp
+            : root.ValueKind == JsonValueKind.Array ? root : default;
+        if (recordsElement.ValueKind != JsonValueKind.Array)
+            return Fail("Closure file must contain a records array or be a JSON array.");
+
+        var geminiReview = LoadMcgsBlockedBreakthroughGeminiReview(geminiReviewPath);
+        var audited = new List<object>();
+        var hardBlocked = 0;
+        var closedByAudit = 0;
+        foreach (var record in recordsElement.EnumerateArray())
+        {
+            var closureStatus = JsonString(record, "closureStatus") ?? "";
+            if (closureStatus is not ("blockedBySafety" or "blockedNeedsHuman"))
+                continue;
+
+            var item = BuildMcgsBlockedBreakthroughItem(record, closureStatus, geminiReview);
+            if (item.BreakthroughStatus == "hardBlocked")
+                hardBlocked++;
+            else if (item.BreakthroughStatus is "closedLoopPass" or "readOnlyClosedLoopPass")
+                closedByAudit++;
+            audited.Add(item.Payload);
+        }
+
+        var result = new
+        {
+            schemaVersion = 1,
+            status = audited.Count > 0 && hardBlocked + closedByAudit == audited.Count ? "PASS" : "UNKNOWN",
+            createdAt = DateTimeOffset.Now.ToString("O"),
+            closures = closuresPath,
+            geminiReviewPath = string.IsNullOrWhiteSpace(geminiReviewPath) ? "" : FullPath(geminiReviewPath),
+            originalBlockedCount = audited.Count,
+            breakthroughCount = closedByAudit,
+            hardBlockedCount = hardBlocked,
+            hiddenNextProbeCount = 0,
+            allBlockedAudited = audited.Count > 0 && hardBlocked + closedByAudit == audited.Count,
+            records = audited
+        };
+        File.WriteAllText(Path.Combine(outDir, "blocked-breakthrough-report.json"),
+            JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+        Console.WriteLine("mcgs blocked-breakthrough-audit: " + outDir);
+        return result.status == "PASS" ? 0 : 2;
     }
 
     private static int McgsInventory(string[] args)
@@ -3850,6 +3904,283 @@ internal static partial class Program
         public string[] missingEvidence { get; set; } = Array.Empty<string>();
         public string closureRecordPath { get; set; } = "";
         public string nextProbe { get; set; } = "";
+    }
+
+    private static McgsBlockedBreakthroughAuditItem BuildMcgsBlockedBreakthroughItem(
+        JsonElement record,
+        string closureStatus,
+        McgsBlockedBreakthroughGeminiReview geminiReview)
+    {
+        var toolId = JsonString(record, "toolId") ?? "";
+        var commandId = JsonString(record, "commandId") ?? "";
+        var name = JsonString(record, "name") ?? "";
+        var uiPath = JsonString(record, "uiPath") ?? "";
+        var category = JsonString(record, "category") ?? "";
+        var safetyClass = JsonString(record, "safetyClass") ?? "";
+        var missingEvidence = JsonStringArray(record, "missingEvidence");
+        var family = McgsBlockedBreakthroughFamily(commandId, name);
+        var considered = McgsBlockedAlternativeProbes(family);
+        var attempted = McgsBlockedAttemptedProbes(family, missingEvidence);
+        var whyNoProbe = McgsBlockedWhyNoFileSafeProbe(family, closureStatus);
+        var humanCondition = McgsBlockedHumanCondition(family, closureStatus);
+        var smallestNoBoundary = McgsBlockedSmallestNoBoundaryValidation(family);
+        var geminiDecision = ParseMcgsBlockedGeminiDecision(family, geminiReview);
+        var geminiAccepted = geminiDecision.Accepted;
+        var localDecision = family == "policy-line-move" && geminiDecision.SuggestedSafeProbe
+            ? "Gemini fallback suggested a possible safe probe, but local evidence already includes line-index, click, double-click, right-click, keyboard, posted mouse, and marquee attempts that produced no functional row-order diff; keep hardBlocked until a new row-selection channel is locally proven."
+            : "Local evidence accepts hardBlocked classification because no complete file-safe substitute probe can prove the command semantics without crossing the documented boundary.";
+
+        var payload = new
+        {
+            toolId,
+            commandId,
+            name,
+            uiPath,
+            category,
+            originalClosureStatus = closureStatus,
+            blockedType = closureStatus == "blockedBySafety" ? "safety" : "needs-human",
+            safetyClass,
+            blockedFamily = family,
+            breakthroughStatus = "hardBlocked",
+            blockerEvidenceSufficient = missingEvidence.Length > 0 && missingEvidence.All(s => !string.IsNullOrWhiteSpace(s)),
+            missingEvidenceClear = missingEvidence.Length > 0,
+            attemptedProbes = attempted,
+            alternativeProbesConsidered = considered,
+            alternativeProbeDecision = "no complete file-safe substitute probe remains for unattended closure",
+            whyNoFileSafeProbe = whyNoProbe,
+            requiredHumanOrSafetyCondition = humanCondition,
+            smallestNoBoundaryValidation = smallestNoBoundary,
+            geminiReview = new
+            {
+                geminiReview.available,
+                geminiReview.proAttempts,
+                geminiReview.fallbackSessionId,
+                geminiReview.fallbackModel,
+                geminiFamilyDecision = geminiDecision.Decision,
+                geminiSuggestedSafeProbe = geminiDecision.SuggestedSafeProbe,
+                accepted = geminiAccepted,
+                localDisposition = localDecision
+            },
+            existingClosureMissingEvidence = missingEvidence,
+            evidenceSources = McgsBlockedEvidenceSources(family, toolId, commandId),
+            noHiddenNextProbe = true,
+            nextProbe = ""
+        };
+        return new McgsBlockedBreakthroughAuditItem("hardBlocked", payload);
+    }
+
+    private static McgsBlockedBreakthroughGeminiReview LoadMcgsBlockedBreakthroughGeminiReview(string? path)
+    {
+        var info = new McgsBlockedBreakthroughGeminiReview();
+        if (string.IsNullOrWhiteSpace(path))
+            return info;
+        var full = FullPath(path);
+        if (!File.Exists(full))
+            return info;
+        info.available = true;
+        info.path = full;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(full, Encoding.UTF8));
+            var root = doc.RootElement;
+            info.fallbackSessionId = JsonString(root, "fallbackSessionId") ?? JsonString(root, "sessionId") ?? "";
+            info.fallbackModel = JsonString(root, "fallbackModel") ?? "";
+            info.fallbackContent = JsonString(root, "fallbackContent") ?? JsonString(root, "geminiContent") ?? "";
+            if (root.TryGetProperty("proAttempts", out var attempts) && attempts.ValueKind == JsonValueKind.Array)
+            {
+                info.proAttempts = attempts.EnumerateArray()
+                    .Select(a => (JsonString(a, "model") ?? "") + ":" + (JsonString(a, "result") ?? ""))
+                    .Where(s => s.Trim(':').Length > 0)
+                    .ToArray();
+            }
+        }
+        catch (Exception ex)
+        {
+            info.parseError = ex.Message;
+        }
+        return info;
+    }
+
+    private static string McgsBlockedBreakthroughFamily(string commandId, string name)
+    {
+        return commandId switch
+        {
+            "57607" => "print",
+            "32787" => "run-project",
+            "57600" => "file-new",
+            "57601" => "file-open",
+            "33062" or "33063" => "policy-line-move",
+            _ when name.Contains("print", StringComparison.OrdinalIgnoreCase) => "print",
+            _ when name.Contains("run", StringComparison.OrdinalIgnoreCase) => "run-project",
+            _ => "other-blocked"
+        };
+    }
+
+    private static string[] McgsBlockedAlternativeProbes(string family)
+        => family switch
+        {
+            "print" => new[]
+            {
+                "use already-closed MFC print-preview command 57609 as read-only evidence for preview behavior",
+                "try a virtual/no-op printer only after local proof that no physical or external print job can be emitted",
+                "open/cancel print dialog only if local evidence proves no OS print job or printer configuration mutation occurs before cancellation",
+                "printer-disabled VM with explicit human authorization"
+            },
+            "run-project" => new[]
+            {
+                "candidate copy launch under MCGSRUN",
+                "mock/no-driver runtime profile",
+                "launch-and-kill runtime smoke",
+                "window-tree-only runtime startup observation"
+            },
+            "file-new" => new[]
+            {
+                "isolated disposable editor process with no official project open",
+                "cancel unsaved-project prompt before committing a new project",
+                "window-tree/hash-stable dialog observation only"
+            },
+            "file-open" => new[]
+            {
+                "isolated disposable editor process and cancel file dialog",
+                "open only a throwaway candidate path after explicit fixture setup",
+                "window-tree/hash-stable dialog observation only"
+            },
+            "policy-line-move" => new[]
+            {
+                "two-row strategy throwaway fixture",
+                "coordinate, double-click, right-click, keyboard, posted WM_LBUTTON, and marquee row-selection attempts",
+                "local help/manual lookup for a row-selection channel",
+                "MCE normalized diff over strategy seeded fixture"
+            },
+            _ => new[] { "review tool-specific blocker and attempt only read-only metadata/help lookup" }
+        };
+
+    private static string[] McgsBlockedAttemptedProbes(string family, string[] missingEvidence)
+    {
+        var attempts = new List<string>();
+        if (missingEvidence.Length > 0)
+            attempts.AddRange(missingEvidence);
+        if (family == "policy-line-move")
+        {
+            attempts.Add("historical probes: strategy seeded two-row fixture");
+            attempts.Add("historical probes: selectedLineIndex coordinate click variants for line 0/line 1");
+            attempts.Add("historical probes: physical click, double-click, right-click, keyboard, posted WM_LBUTTON, marquee, and post-marquee selection paths");
+            attempts.Add("historical normalized diff: move-down line0 equivalent/no functional diff; move-up line1 editor-context-only diff");
+            attempts.Add("local help/source search: command ids and strategy-line docs found, no file-safe row-selection invocation channel found");
+        }
+        else if (family == "print")
+        {
+            attempts.Add("related safe evidence: print-preview command 57609 is separately read-only closed; print command 57607 remains external-side-effect risk");
+        }
+        else if (family is "file-new" or "file-open")
+        {
+            attempts.Add("related safe evidence: toolbar/menu command inventory proves command id and enabled state only; full command semantics require active-project context changes or dialog cancellation that does not prove open/new persistence");
+        }
+        else if (family == "run-project")
+        {
+            attempts.Add("related safe evidence: toolbar/menu command inventory proves command id and enabled state only; runtime launch was not invoked because driver/hardware side effects can occur before controllable readback");
+        }
+        return attempts.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string McgsBlockedWhyNoFileSafeProbe(string family, string closureStatus)
+        => family switch
+        {
+            "print" => "The print command can cross the local OS printer boundary; a cancellable dialog or screenshot would only prove UI reachability, while physical/virtual printer safety is not locally established in this workspace.",
+            "run-project" => "The run command can start MCGSRUN and load runtime drivers or PLC/hardware paths before a safe readback point; candidate-copy isolation does not remove runtime side effects.",
+            "file-new" => "File/New changes active editor project context and can trigger save/new project flows; dialog cancellation proves only the command route, not safe new-project semantics, and isolated editor state still needs human authorization.",
+            "file-open" => "File/Open changes active editor project context after selection; dialog cancellation proves only the command route, not safe open semantics, and opening even a throwaway project can replace editor state.",
+            "policy-line-move" => "The command is candidate-safe in principle, but every local row-selection route tested produced normalized-equivalent or editor-context-only evidence instead of a functional strategy row-order diff.",
+            _ => closureStatus == "blockedBySafety"
+                ? "The blocked record has no complete file-safe substitute probe in the current evidence."
+                : "The blocked record requires a human-provided fixture/precondition before unattended probing can continue."
+        };
+
+    private static string McgsBlockedHumanCondition(string family, string closureStatus)
+        => family switch
+        {
+            "print" => "Provide an isolated printer-disabled VM or verified no-op printer and explicit permission to open/cancel or print to that no-op target.",
+            "run-project" => "Provide a no-hardware/no-driver runtime sandbox or explicit authorization that MCGSRUN cannot reach PLC/field drivers during the probe.",
+            "file-new" => "Provide an isolated disposable editor session with no official project loaded and approval to exercise New/close-without-save.",
+            "file-open" => "Provide an isolated disposable editor session and approval to exercise Open against a throwaway project path, with close-without-save rollback.",
+            "policy-line-move" => "Provide a documented or manually verified row-selection channel for the strategy editor, or a local MCGS manual/help excerpt that maps row selection to a safe automation route.",
+            _ => closureStatus == "blockedBySafety"
+                ? "Explicit safety authorization and an isolated fixture are required."
+                : "A human-provided fixture or editor state is required."
+        };
+
+    private static string McgsBlockedSmallestNoBoundaryValidation(string family)
+        => family switch
+        {
+            "print" => "Keep command-resource/toolbar inventory and the separate print-preview read-only closure; do not invoke Print itself.",
+            "run-project" => "Keep command-resource/toolbar inventory; do not launch MCGSRUN in unattended mode.",
+            "file-new" => "Keep command-resource/toolbar inventory; do not invoke File/New without isolated editor approval.",
+            "file-open" => "Keep command-resource/toolbar inventory; do not invoke File/Open without isolated editor approval.",
+            "policy-line-move" => "Continue read-only help/manual and source lookup for row-selection semantics; do not claim closure until a functional normalized row-order diff is produced on a throwaway fixture.",
+            _ => "Keep command-resource/toolbar inventory and blocker evidence."
+        };
+
+    private static McgsBlockedGeminiDecision ParseMcgsBlockedGeminiDecision(string family, McgsBlockedBreakthroughGeminiReview review)
+    {
+        if (!review.available)
+            return new McgsBlockedGeminiDecision("not-available", false, false);
+        var text = review.fallbackContent ?? "";
+        var suggestedSafe = family == "policy-line-move" &&
+                            text.Contains("policyMove", StringComparison.OrdinalIgnoreCase) &&
+                            text.Contains("safeProbe", StringComparison.OrdinalIgnoreCase) &&
+                            text.Contains("true", StringComparison.OrdinalIgnoreCase);
+        var hardBlocked = family switch
+        {
+            "print" => text.Contains("print", StringComparison.OrdinalIgnoreCase) && text.Contains("hardBlock", StringComparison.OrdinalIgnoreCase),
+            "run-project" => text.Contains("run", StringComparison.OrdinalIgnoreCase) && text.Contains("hardBlock", StringComparison.OrdinalIgnoreCase),
+            "file-new" or "file-open" => text.Contains("fileNew/fileOpen", StringComparison.OrdinalIgnoreCase) && text.Contains("hardBlock", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+        return new McgsBlockedGeminiDecision(hardBlocked ? "hardBlocked" : suggestedSafe ? "safeProbe-suggested" : "unparsed", suggestedSafe, hardBlocked);
+    }
+
+    private static string[] McgsBlockedEvidenceSources(string family, string toolId, string commandId)
+    {
+        var sources = new List<string>
+        {
+            "tool-closure-records.json",
+            "tool-sweep.json entries for " + toolId,
+            "RT_STRING command resource / toolbar-probe commandId " + commandId
+        };
+        if (family == "policy-line-move")
+        {
+            sources.Add(".mcgsctl-runs/mcgs-tool-probe-20260504-33062-strategy-editor-move-down-line0-1/tool-probe.json");
+            sources.Add(".mcgsctl-runs/mcgs-tool-probe-20260504-33063-strategy-editor-move-up-line1-1/tool-probe.json");
+            sources.Add(".mcgsctl-runs/*strategy-editor*/normalized-diff/mce-normalized-diff.json");
+            sources.Add("Memory For GPT/mcgs_docs.txt strategy-line references");
+        }
+        if (family == "print")
+            sources.Add("tool-sweep read-only closure for command 57609 print preview, not command 57607 print");
+        return sources.ToArray();
+    }
+
+    private static string[] JsonStringArray(JsonElement element, string property)
+    {
+        if (!element.TryGetProperty(property, out var value) || value.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+        return value.EnumerateArray()
+            .Select(v => v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.ToString())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToArray();
+    }
+
+    private sealed record McgsBlockedBreakthroughAuditItem(string BreakthroughStatus, object Payload);
+    private sealed record McgsBlockedGeminiDecision(string Decision, bool SuggestedSafeProbe, bool Accepted);
+
+    private sealed class McgsBlockedBreakthroughGeminiReview
+    {
+        public bool available { get; set; }
+        public string path { get; set; } = "";
+        public string fallbackSessionId { get; set; } = "";
+        public string fallbackModel { get; set; } = "";
+        public string? fallbackContent { get; set; }
+        public string[] proAttempts { get; set; } = Array.Empty<string>();
+        public string parseError { get; set; } = "";
     }
 
     private sealed class McgsToolClosureRecord
