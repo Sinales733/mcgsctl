@@ -1472,6 +1472,14 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Contains("multi-language configuration dialog", record["actualEffect"]!.GetValue<string>());
         Assert.Contains("candidate-safe dialog hash drift",
             string.Join("\n", record["projectDiffEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+        var functions = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "function-catalog.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", functions["status"]!.GetValue<string>());
+        Assert.Equal(1, functions["closureBackedFunctionCount"]!.GetValue<int>());
+        var toolFunction = functions["functions"]!.AsArray()
+            .Select(n => n!.AsObject())
+            .First(f => f["functionId"]!.GetValue<string>() == "tool:toolbar:4:30:34059");
+        Assert.Equal("readOnlyClosedLoopPass", toolFunction["closureStatus"]!.GetValue<string>());
+        Assert.Equal("", toolFunction["nextProbe"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1528,6 +1536,46 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal("幼圆", properties["fontFamily"]!["value"]!.GetValue<string>());
         Assert.Equal("小四", properties["fontSize"]!["value"]!.GetValue<string>());
         Assert.Equal("加粗", properties["fontStyle"]!["value"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void PropertyMapIgnoresUnverifiedSelectionReadback()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var semantic = Path.Combine(_root, "semantic-map.json");
+        File.WriteAllText(semantic, BuildSemanticMap().ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+
+        var readbackRoot = Path.Combine(_root, "bad-readback");
+        Directory.CreateDirectory(readbackRoot);
+        File.WriteAllText(Path.Combine(readbackRoot, "property-readback.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "selectionVerified": false,
+          "objectId": "mce-sem-r2-0001",
+          "tabs": [],
+          "fontDialog": {
+            "status": "PASS",
+            "extracted": {
+              "fontFamily": "wrong-family",
+              "fontStyle": "wrong-style",
+              "fontSize": "wrong-size"
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var outDir = Path.Combine(_root, "property-map-bad-readback");
+        var result = TestCli.Run("canvas", "property-map-probe", "--project", project, "--semantic-map", semantic,
+            "--row-key", "2", "--property-readback-dir", readbackRoot, "--out", outDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "property-map.json"), Encoding.UTF8))!.AsObject();
+        var properties = root["objects"]!.AsArray()[0]!.AsObject()["properties"]!.AsObject();
+        Assert.Equal("unresolved", properties["fontSize"]!["status"]!.GetValue<string>());
+        Assert.NotEqual("wrong-family", properties["fontFamily"]!["value"]!.GetValue<string>());
     }
 
     [Fact]

@@ -2691,6 +2691,61 @@ internal static partial class Program
             invalidEvidenceCount,
             records = closureRecords
         }, JsonOptions()), Encoding.UTF8);
+        var closureBackedFunctions = catalog.Tools.Zip(closureRecords, (tool, closure) => new
+        {
+            functionId = "tool:" + tool.toolId,
+            name = tool.displayName,
+            purpose = ToolPurpose(tool),
+            uiLocations = new[] { tool.uiPath },
+            commandRoute = string.IsNullOrWhiteSpace(tool.invocationRoute)
+                ? (tool.commandId.HasValue ? $"WM_COMMAND {tool.commandId}" : tool.toolId)
+                : tool.invocationRoute,
+            inputs = ToolInputs(tool),
+            outputs = tool.expectedEffect,
+            sideEffects = closure.sideEffects,
+            relatedObjectTypes = ToolRelatedObjectTypes(tool),
+            relatedPropertyDialogs = ToolRelatedPropertyDialogs(tool),
+            validationReadbackMethod = ToolValidationReadback(tool),
+            safetyClass = tool.safetyClass,
+            supportStatus = tool.supportStatus,
+            closureStatus = closure.closureStatus,
+            closureRecordPath = "tool-closure-records.json",
+            closureEvidence = closure.candidateOrFixture,
+            missingEvidence = closure.missingEvidence,
+            commandId = tool.commandId,
+            commandResourceText = tool.commandResourceText,
+            confidence = closure.closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
+                ? 0.95
+                : ToolFunctionConfidence(tool),
+            evidenceSource = string.IsNullOrWhiteSpace(closure.candidateOrFixture)
+                ? tool.evidenceSource
+                : closure.candidateOrFixture,
+            nextProbe = closure.closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman"
+                ? ""
+                : closure.nextProbe
+        }).Cast<object>().ToArray();
+        var functionRecords = SupportedWorkflowFunctions().Cast<object>()
+            .Concat(closureBackedFunctions)
+            .ToArray();
+        File.WriteAllText(Path.Combine(outDir, "function-catalog.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            status = closureComplete ? "PASS" : "UNKNOWN",
+            createdAt = result.createdAt,
+            project,
+            projectSha256 = result.projectSha256,
+            functionCount = functionRecords.Length,
+            workflowFunctionCount = SupportedWorkflowFunctions().Count(),
+            closureBackedFunctionCount = closureBackedFunctions.Length,
+            closedLoopPassCount,
+            readOnlyClosedLoopPassCount,
+            notClosedLoopCount,
+            needsProbeClosureCount,
+            blockedBySafetyCount,
+            blockedNeedsHumanCount,
+            invalidEvidenceCount,
+            functions = functionRecords
+        }, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-sweep: " + outDir);
         return result.status == "PASS" ? 0 : 2;
     }
@@ -5467,6 +5522,8 @@ internal static partial class Program
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
                 if (!string.Equals(JsonStringAny(doc.RootElement, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (JsonBoolAny(doc.RootElement, "selectionVerified", "SelectionVerified") == false)
                     continue;
                 var evidence = ParsePropertyDialogEvidence(path, doc.RootElement);
                 if (!string.IsNullOrWhiteSpace(evidence.ObjectId))
