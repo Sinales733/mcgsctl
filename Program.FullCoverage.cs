@@ -2557,14 +2557,17 @@ internal static partial class Program
             var probeHasUnknownRiskEvidence = probe != null && ProbeHasUnknownRiskEvidence(probe);
             var probeHasReadOnlyEvidence = probe != null && ProbeHasReadOnlyEvidence(probe);
             var probeHasEditorStyleContextEvidence = IsEditorStyleContextReadOnlyClosedProbe(tool, probe);
+            var probeHasPropertyDialogEvidence = IsPropertyDialogReadOnlyClosedProbe(tool, probe);
             var documentedBlockerNextProbe = "";
             var documentedProbeBlocker = exactProbe != null && ProbeHasDocumentedBlocker(tool, exactProbe, out documentedBlockerNextProbe);
             var probed = !blocked &&
                          probe != null &&
-                         (probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) || probeHasEditorStyleContextEvidence) &&
-                         (!candidateSafe || probeHasCandidateSafeEvidence || probeHasEditorStyleContextEvidence) &&
+                         (probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) ||
+                          probeHasEditorStyleContextEvidence ||
+                          probeHasPropertyDialogEvidence) &&
+                         (!candidateSafe || probeHasCandidateSafeEvidence || probeHasEditorStyleContextEvidence || probeHasPropertyDialogEvidence) &&
                          (!unknownRisk || probeHasUnknownRiskEvidence) &&
-                         (!readOnly || probeHasReadOnlyEvidence || probeHasEditorStyleContextEvidence);
+                         (!readOnly || probeHasReadOnlyEvidence || probeHasEditorStyleContextEvidence || probeHasPropertyDialogEvidence);
             blocked = blocked || documentedProbeBlocker;
             var status = probed ? "probed" : blocked ? "blocked" : tool.supportStatus;
             var closure = BuildMcgsToolClosureRecord(tool, status, probed, exactProbe, equivalentProbe, probe, documentedProbeBlocker ? documentedBlockerNextProbe : "");
@@ -2792,7 +2795,8 @@ internal static partial class Program
         {
             if (probe.CommandId == 0 ||
                 (!probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
-                 !IsEditorStyleContextReadOnlyClosedProbe(probe.CommandId, probe)))
+                 !IsEditorStyleContextReadOnlyClosedProbe(probe.CommandId, probe) &&
+                 !IsPropertyDialogReadOnlyClosedProbe(probe.CommandId, probe)))
                 continue;
             if (!result.TryGetValue(probe.CommandId, out var existing) ||
                 ToolProbeEvidenceStrength(probe) > ToolProbeEvidenceStrength(existing))
@@ -2813,12 +2817,17 @@ internal static partial class Program
         if (!string.IsNullOrWhiteSpace(probe.SafetyClass) &&
             !probe.SafetyClass.Equals(tool.safetyClass, StringComparison.OrdinalIgnoreCase))
             return false;
+        if (tool.commandId.GetValueOrDefault() == 32785 &&
+            !tool.toolId.Equals(probe.ToolId, StringComparison.OrdinalIgnoreCase))
+            return false;
         return true;
     }
 
     private static bool ProbeCoversTool(McgsToolEntry tool, McgsToolProbeEvidence probe)
     {
         if (IsEditorStyleContextReadOnlyClosedProbe(tool, probe))
+            return true;
+        if (IsPropertyDialogReadOnlyClosedProbe(tool, probe))
             return true;
         if (!probe.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
             return false;
@@ -2886,6 +2895,7 @@ internal static partial class Program
         if (probe.CandidateSafeMutationReversibleReturn) score += 6;
         if (probe.NewWindowObserved) score += 4;
         if (IsEditorStyleContextReadOnlyClosedProbe(probe.CommandId, probe)) score += 7;
+        if (IsPropertyDialogReadOnlyClosedProbe(probe.CommandId, probe)) score += 7;
         if (probe.UnknownRiskHashDriftExplained) score += 3;
         if (!probe.ProjectCopyHashChanged) score += 1;
         return score;
@@ -2902,6 +2912,8 @@ internal static partial class Program
                                     IsStandardMfcEditClosedProbe(probe);
         var editorStyleContextReadOnlyClosed = category == "drawing-edit" &&
                                                IsEditorStyleContextReadOnlyClosedProbe(tool, probe);
+        var propertyDialogReadOnlyClosed = category == "property-dialog" &&
+                                           IsPropertyDialogReadOnlyClosedProbe(tool, probe);
         var missing = new List<string>();
         var evidencePath = probe?.Path ?? "";
         var nextProbe = !string.IsNullOrWhiteSpace(documentedBlockerNextProbe)
@@ -2977,6 +2989,11 @@ internal static partial class Program
             closureStatus = "readOnlyClosedLoopPass";
             nextProbe = "";
         }
+        else if (probed && propertyDialogReadOnlyClosed)
+        {
+            closureStatus = "readOnlyClosedLoopPass";
+            nextProbe = "";
+        }
         else if (probed && standardMfcEditClosed)
         {
             closureStatus = "closedLoopPass";
@@ -3032,6 +3049,8 @@ internal static partial class Program
                 : "tool-probe standard edit command produced reversible return evidence");
         if (editorStyleContextReadOnlyClosed)
             afterEvidence.Add("tool-probe plus property-map sidecar proved editor-default style/context change without selected-object property mutation");
+        if (propertyDialogReadOnlyClosed)
+            afterEvidence.Add("tool-probe plus property-dialog sidecar proved selected-object property dialog tab/control readback on a disposable copy");
         if (IsUnknownRiskReadOnlyClosedProbe(tool, probe))
             afterEvidence.Add(probe!.ProjectCopyHashChanged
                 ? "tool-probe normalized diff classified unknown-risk hash drift as editor-context-only"
@@ -3279,6 +3298,60 @@ internal static partial class Program
                sidecar.ComparedPropertyCount > 0;
     }
 
+    private static bool IsPropertyDialogReadOnlyClosedProbe(McgsToolEntry tool, McgsToolProbeEvidence? probe)
+    {
+        if (tool.commandId.GetValueOrDefault() != 32785)
+            return false;
+        if (probe == null || !tool.toolId.Equals(probe.ToolId, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return IsPropertyDialogReadOnlyClosedProbe(tool.commandId.GetValueOrDefault(), probe);
+    }
+
+    private static bool IsPropertyDialogReadOnlyClosedProbe(int commandId, McgsToolProbeEvidence? probe)
+    {
+        if (probe == null || commandId != 32785)
+            return false;
+        if (!probe.SafetyClass.Equals("candidate-safe-mutation", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var sidecar = TryReadPropertyDialogClosureEvidence(probe.Path);
+        return sidecar != null &&
+               sidecar.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+               sidecar.CommandId == commandId &&
+               (string.IsNullOrWhiteSpace(sidecar.ToolId) || sidecar.ToolId.Equals(probe.ToolId, StringComparison.OrdinalIgnoreCase)) &&
+               sidecar.SelectionVerified &&
+               sidecar.TabCount > 0 &&
+               sidecar.ControlCount > 0;
+    }
+
+    private static PropertyDialogClosureEvidence? TryReadPropertyDialogClosureEvidence(string probePath)
+    {
+        if (string.IsNullOrWhiteSpace(probePath))
+            return null;
+        var dir = Path.GetDirectoryName(FullPath(probePath));
+        if (string.IsNullOrWhiteSpace(dir))
+            return null;
+        var sidecarPath = Path.Combine(dir, "property-dialog-closure.json");
+        if (!File.Exists(sidecarPath))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(sidecarPath, Encoding.UTF8));
+            var root = doc.RootElement;
+            return new PropertyDialogClosureEvidence(
+                JsonStringAny(root, "status", "Status") ?? "",
+                JsonStringAny(root, "toolId", "ToolId") ?? "",
+                LayoutJsonIntAny(root, "commandId", "CommandId") ?? 0,
+                JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true,
+                LayoutJsonIntAny(root, "tabCount", "TabCount") ?? 0,
+                LayoutJsonIntAny(root, "controlCount", "ControlCount") ?? 0,
+                sidecarPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static StyleObjectNonMutationEvidence? TryReadStyleObjectNonMutationEvidence(string probePath)
     {
         if (string.IsNullOrWhiteSpace(probePath))
@@ -3378,18 +3451,19 @@ internal static partial class Program
     private static string McgsToolActualEffect(McgsToolEntry tool, string sweepStatus, bool probed, McgsToolProbeEvidence? probe)
     {
         if (IsSafetyBlockedTool(tool)) return "not invoked; explicit safety boundary";
-        if (tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)) return "implemented route exists; closure depends on category evidence";
         if (probed && probe?.DrawingCreateClosurePass == true) return "probe created a drawing object with internal occupancy, class-delta, rectangle, collision, and export evidence";
         if (probed && probe?.DrawingEditClosurePass == true) return "probe edited selected animation object(s) with selection precondition and functional normalized geometry diff evidence";
         if (probed && probe?.CandidateSafeMutationFunctionalDiff == true) return "probe observed functional normalized candidate diff";
         if (probed && probe?.CandidateSafeMutationReversibleReturn == true) return "probe observed reversible return";
         if (probed && probe?.CandidateSafeEditorContextOnlyModeToggle == true) return "probe observed selected-object editor mode toggle with editor-context-only normalized diff";
         if (probed && IsEditorStyleContextReadOnlyClosedProbe(tool, probe)) return "probe observed editor-default style/context drift; property readback sidecar proved selected object properties unchanged";
+        if (probed && IsPropertyDialogReadOnlyClosedProbe(tool, probe)) return "probe opened selected-object property dialog on a disposable copy and captured tab/control readback evidence";
         if (probed && IsUnknownRiskReadOnlyClosedProbe(tool, probe))
             return probe!.ProjectCopyHashChanged
                 ? "probe observed only editor-context normalized drift on a disposable project copy"
                 : "probe invoked command with no disposable project copy hash change";
         if (probed && probe?.NewWindowObserved == true) return "probe observed new dialog/window";
+        if (tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase)) return "implemented route exists; closure depends on category evidence";
         return sweepStatus;
     }
 
@@ -3409,6 +3483,8 @@ internal static partial class Program
             return new[] { probe.Path, "tool-probe saved selected table fixture and normalized diff proved editor-context-only mode state" };
         if (closureStatus == "readOnlyClosedLoopPass" && IsEditorStyleContextReadOnlyClosedProbe(tool, probe))
             return new[] { probe!.Path, Path.Combine(Path.GetDirectoryName(probe.Path) ?? "", "style-object-nonmutation-closure.json") };
+        if (closureStatus == "readOnlyClosedLoopPass" && IsPropertyDialogReadOnlyClosedProbe(tool, probe))
+            return new[] { probe!.Path, Path.Combine(Path.GetDirectoryName(probe.Path) ?? "", "property-dialog-closure.json") };
         if (closureStatus == "readOnlyClosedLoopPass" && IsUnknownRiskReadOnlyClosedProbe(tool, probe))
             return probe!.ProjectCopyHashChanged
                 ? new[] { probe.Path, "normalized diff proved only editor-context drift on disposable project copy" }
@@ -3436,6 +3512,8 @@ internal static partial class Program
             return new[] { probe.Path, "tool-probe normalized-diff over selected table fixture showed no functional project-object mutation" };
         if (closureStatus == "readOnlyClosedLoopPass" && IsEditorStyleContextReadOnlyClosedProbe(tool, probe))
             return new[] { probe!.Path, "style-object-nonmutation-closure sidecar: before/after property-map values for the selected object were unchanged" };
+        if (closureStatus == "readOnlyClosedLoopPass" && IsPropertyDialogReadOnlyClosedProbe(tool, probe))
+            return new[] { probe!.Path, "property-dialog-closure sidecar: selected object dialog tabs and controls were captured from a disposable copy" };
         if (closureStatus == "readOnlyClosedLoopPass" && IsUnknownRiskReadOnlyClosedProbe(tool, probe))
             return probe!.ProjectCopyHashChanged
                 ? new[] { probe.Path, "tool-probe normalized-diff/mce-normalized-diff.json classified the side effect as editor-context-only" }
@@ -3480,6 +3558,8 @@ internal static partial class Program
             ? new[] { probe!.Path, "tool-probe before/after window capture evidence for standard edit command audit only" }
             : closureStatus == "readOnlyClosedLoopPass" && IsEditorStyleContextReadOnlyClosedProbe(tool, probe)
             ? new[] { probe!.Path, "tool-probe style popup/dialog captures plus property-readback screenshots for audit only" }
+            : closureStatus == "readOnlyClosedLoopPass" && IsPropertyDialogReadOnlyClosedProbe(tool, probe)
+            ? new[] { probe!.Path, "property-dialog readback screenshot/window-tree evidence for audit only" }
             : closureStatus == "closedLoopPass" && IsTableEditorCommand(tool) && probe != null
             ? new[] { probe.Path, "tool-probe before/after window capture evidence for audit only" }
             : closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass"
@@ -3494,6 +3574,8 @@ internal static partial class Program
         if (probe.CandidateSafeEditorContextOnlyModeToggle) return new[] { probe.Path, "normalized diff classified as editor-context-only table mode toggle" };
         if (IsEditorStyleCommand(probe.CommandId) && TryReadStyleObjectNonMutationEvidence(probe.Path) != null)
             return new[] { probe.Path, "normalized diff plus style-object-nonmutation-closure sidecar classified the side effect as editor-default style/context only" };
+        if (probe.CommandId == 32785 && TryReadPropertyDialogClosureEvidence(probe.Path) != null)
+            return new[] { probe.Path, "property-dialog-closure sidecar captured tab/control readback on disposable copy" };
         if (probe.UnknownRiskHashDriftExplained) return new[] { probe.Path, "normalized diff classified unknown-risk hash drift as editor-context-only" };
         if (!probe.ProjectCopyHashChanged) return new[] { "tool-probe project copy hash unchanged" };
         return new[] { "tool-probe project copy hash changed" };
@@ -3507,6 +3589,8 @@ internal static partial class Program
             sideEffects.Add("editor-context-only table mode state changed on disposable copy; normalized functional project evidence unchanged");
         else if (probe != null && IsEditorStyleCommand(probe.CommandId) && TryReadStyleObjectNonMutationEvidence(probe.Path) != null)
             sideEffects.Add("editor-default style/context state changed on disposable copy; selected-object property-map evidence unchanged");
+        else if (probe != null && IsPropertyDialogReadOnlyClosedProbe(tool, probe))
+            sideEffects.Add("opened selected-object property dialog on disposable copy; dialog closed and copy discarded");
         else if (probe?.UnknownRiskHashDriftExplained == true)
             sideEffects.Add("editor-context-only state changed on disposable copy; normalized functional project evidence unchanged");
         else if (probe?.ProjectCopyHashChanged == true) sideEffects.Add("candidate/project copy SHA changed");
@@ -3662,6 +3746,9 @@ internal static partial class Program
 
     private sealed record StyleObjectNonMutationEvidence(string Status, int CommandId,
         bool ObjectPropertiesUnchanged, int ComparedPropertyCount, string Path);
+
+    private sealed record PropertyDialogClosureEvidence(string Status, string ToolId, int CommandId,
+        bool SelectionVerified, int TabCount, int ControlCount, string Path);
 
     private sealed class McgsCatalogBuild
     {

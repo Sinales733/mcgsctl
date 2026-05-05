@@ -519,6 +519,105 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
+    public void ToolSweepClosesExactPropertyDialogProbeWithoutCoveringOtherContexts()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-property-dialog");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:25:32785",
+              "displayName": "animation selected object property dialog",
+              "source": "toolbar",
+              "uiPath": "animation toolbar/button[25]",
+              "commandId": 32785,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32785",
+              "expectedEffect": "opens selected animation object property dialog",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable animation object"
+            },
+            {
+              "toolId": "toolbar:3:19:32785",
+              "displayName": "device selected object property dialog",
+              "source": "toolbar",
+              "uiPath": "device toolbar/button[19]",
+              "commandId": 32785,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32785",
+              "expectedEffect": "opens selected device editor property dialog",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable device-tree object"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "property-dialog-animation");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "toolId": "toolbar:5:25:32785",
+          "commandId": 32785,
+          "context": "animation-single-object",
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": true,
+          "evidence": {
+            "candidateSafeMutation": false,
+            "projectCopyHashChanged": false
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "property-dialog-closure.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:5:25:32785",
+          "commandId": 32785,
+          "selectionVerified": true,
+          "tabCount": 4,
+          "controlCount": 42,
+          "propertyReadback": "property-readback.json"
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-property-dialog");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("UNKNOWN", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
+        Assert.Equal(1, sweep["notClosedLoopCount"]!.GetValue<int>());
+        var entries = sweep["entries"]!.AsArray().Select(n => n!.AsObject()).ToArray();
+        Assert.Equal("readOnlyClosedLoopPass", entries[0]["closureStatus"]!.GetValue<string>());
+        Assert.Equal("notClosedLoop", entries[1]["closureStatus"]!.GetValue<string>());
+        Assert.Equal("", entries[1]["equivalentProbePath"]!.GetValue<string>());
+
+        var records = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray().Select(n => n!.AsObject()).ToArray();
+        Assert.Contains("property-dialog-closure",
+            string.Join("\n", records[0]["readbackEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+        Assert.Contains("disposable copy", records[0]["actualEffect"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolSweepWritesClosureRecordsAndDoesNotTreatProbePassAsUsability()
     {
         Directory.CreateDirectory(_root);
