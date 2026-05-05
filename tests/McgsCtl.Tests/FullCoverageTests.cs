@@ -618,6 +618,88 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
+    public void ToolSweepClosesExactTablessPropertyDialogOnlyWithEditorContextDiffEvidence()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-tabless-property-dialog");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:3:19:32785",
+              "displayName": "device selected object property dialog",
+              "source": "toolbar",
+              "uiPath": "device toolbar/button[19]",
+              "commandId": 32785,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32785",
+              "expectedEffect": "opens selected device editor property dialog",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable device object"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "tabless-property-dialog");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "toolId": "toolbar:3:19:32785",
+          "commandId": 32785,
+          "context": "device-editor",
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": true,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "projectCopyHashChanged": true,
+            "candidateSafeMutationFunctionalDiff": false
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "property-dialog-closure.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:3:19:32785",
+          "commandId": 32785,
+          "selectionVerified": true,
+          "tabCount": 0,
+          "controlCount": 39,
+          "tablessDialog": true,
+          "windowTitle": "设备编辑窗口",
+          "editorContextOnly": true,
+          "normalizedDiff": "normalized-diff/mce-normalized-diff.json"
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-tabless-property-dialog");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("readOnlyClosedLoopPass", record["closureStatus"]!.GetValue<string>());
+        Assert.Contains("property-dialog-closure",
+            string.Join("\n", record["readbackEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
+    [Fact]
     public void ToolSweepWritesClosureRecordsAndDoesNotTreatProbePassAsUsability()
     {
         Directory.CreateDirectory(_root);

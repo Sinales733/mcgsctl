@@ -3319,8 +3319,11 @@ internal static partial class Program
                sidecar.CommandId == commandId &&
                (string.IsNullOrWhiteSpace(sidecar.ToolId) || sidecar.ToolId.Equals(probe.ToolId, StringComparison.OrdinalIgnoreCase)) &&
                sidecar.SelectionVerified &&
-               sidecar.TabCount > 0 &&
-               sidecar.ControlCount > 0;
+               sidecar.ControlCount > 0 &&
+               (sidecar.TabCount > 0 ||
+                (sidecar.TablessDialog &&
+                 sidecar.EditorContextOnly &&
+                 !string.IsNullOrWhiteSpace(sidecar.WindowTitle)));
     }
 
     private static PropertyDialogClosureEvidence? TryReadPropertyDialogClosureEvidence(string probePath)
@@ -3344,6 +3347,9 @@ internal static partial class Program
                 JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true,
                 LayoutJsonIntAny(root, "tabCount", "TabCount") ?? 0,
                 LayoutJsonIntAny(root, "controlCount", "ControlCount") ?? 0,
+                JsonBoolAny(root, "tablessDialog", "TablessDialog") == true,
+                JsonStringAny(root, "windowTitle", "WindowTitle") ?? "",
+                JsonBoolAny(root, "editorContextOnly", "EditorContextOnly") == true,
                 sidecarPath);
         }
         catch
@@ -3513,7 +3519,7 @@ internal static partial class Program
         if (closureStatus == "readOnlyClosedLoopPass" && IsEditorStyleContextReadOnlyClosedProbe(tool, probe))
             return new[] { probe!.Path, "style-object-nonmutation-closure sidecar: before/after property-map values for the selected object were unchanged" };
         if (closureStatus == "readOnlyClosedLoopPass" && IsPropertyDialogReadOnlyClosedProbe(tool, probe))
-            return new[] { probe!.Path, "property-dialog-closure sidecar: selected object dialog tabs and controls were captured from a disposable copy" };
+            return new[] { probe!.Path, McgsPropertyDialogClosureEvidenceText(probe) };
         if (closureStatus == "readOnlyClosedLoopPass" && IsUnknownRiskReadOnlyClosedProbe(tool, probe))
             return probe!.ProjectCopyHashChanged
                 ? new[] { probe.Path, "tool-probe normalized-diff/mce-normalized-diff.json classified the side effect as editor-context-only" }
@@ -3575,10 +3581,20 @@ internal static partial class Program
         if (IsEditorStyleCommand(probe.CommandId) && TryReadStyleObjectNonMutationEvidence(probe.Path) != null)
             return new[] { probe.Path, "normalized diff plus style-object-nonmutation-closure sidecar classified the side effect as editor-default style/context only" };
         if (probe.CommandId == 32785 && TryReadPropertyDialogClosureEvidence(probe.Path) != null)
-            return new[] { probe.Path, "property-dialog-closure sidecar captured tab/control readback on disposable copy" };
+            return new[] { probe.Path, McgsPropertyDialogClosureEvidenceText(probe) };
         if (probe.UnknownRiskHashDriftExplained) return new[] { probe.Path, "normalized diff classified unknown-risk hash drift as editor-context-only" };
         if (!probe.ProjectCopyHashChanged) return new[] { "tool-probe project copy hash unchanged" };
         return new[] { "tool-probe project copy hash changed" };
+    }
+
+    private static string McgsPropertyDialogClosureEvidenceText(McgsToolProbeEvidence probe)
+    {
+        var sidecar = TryReadPropertyDialogClosureEvidence(probe.Path);
+        if (sidecar?.TablessDialog == true)
+            return $"property-dialog-closure sidecar: tabless editor dialog '{sidecar.WindowTitle}' controls were captured from a disposable copy";
+        if (sidecar != null)
+            return "property-dialog-closure sidecar: selected object dialog tabs and controls were captured from a disposable copy";
+        return "property-dialog-closure sidecar captured property dialog readback on disposable copy";
     }
 
     private static string[] McgsToolSideEffects(McgsToolEntry tool, McgsToolProbeEvidence? probe)
@@ -3748,7 +3764,8 @@ internal static partial class Program
         bool ObjectPropertiesUnchanged, int ComparedPropertyCount, string Path);
 
     private sealed record PropertyDialogClosureEvidence(string Status, string ToolId, int CommandId,
-        bool SelectionVerified, int TabCount, int ControlCount, string Path);
+        bool SelectionVerified, int TabCount, int ControlCount, bool TablessDialog, string WindowTitle,
+        bool EditorContextOnly, string Path);
 
     private sealed class McgsCatalogBuild
     {
