@@ -1253,7 +1253,7 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
-    public void ToolSweepAcceptsReadOnlyNormalizedEquivalentHashDriftAsProbed()
+    public void ToolSweepClosesViewToggleReadOnlyNormalizedEquivalentHashDrift()
     {
         Directory.CreateDirectory(_root);
         var project = Path.Combine(_root, "candidate.MCE");
@@ -1313,9 +1313,165 @@ public sealed class FullCoverageTests : IDisposable
         var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
         var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
         Assert.Equal("PASS", sweep["status"]!.GetValue<string>());
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
         Assert.Equal("probed", entry["status"]!.GetValue<string>());
         Assert.True(entry["invoked"]!.GetValue<bool>());
-        Assert.Equal("notClosedLoop", entry["closureStatus"]!.GetValue<string>());
+        Assert.Equal("readOnlyClosedLoopPass", entry["closureStatus"]!.GetValue<string>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Contains("read-only view toggle", record["actualEffect"]!.GetValue<string>());
+        Assert.Contains("normalized diff classified read-only hash drift",
+            string.Join("\n", record["projectDiffEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
+    [Fact]
+    public void ToolSweepClosesKnownManagementMutationWithMatchingEditorContext()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-management-menu");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:4:15:32806",
+              "displayName": "add menu item",
+              "source": "toolbar",
+              "uiPath": "menu toolbar/button[15]",
+              "commandId": 32806,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32806",
+              "expectedEffect": "adds a menu item",
+              "evidenceSource": "test catalog",
+              "nextProbe": "probe in menu editor"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "management-menu");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:4:15:32806",
+          "commandId": 32806,
+          "context": "menu-editor",
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "projectCopyHashChanged": true,
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true,
+            "candidateSafeMutationUnexpectedFunctionalDiff": false,
+            "normalizedDiff": {
+              "Equivalent": false,
+              "ChangedFileCount": 1,
+              "EditorContextOnly": false
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-management-menu");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["closedLoopPassCount"]!.GetValue<int>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("closedLoopPass", record["closureStatus"]!.GetValue<string>());
+        Assert.Contains("expected management model", record["actualEffect"]!.GetValue<string>());
+        Assert.Contains("throwaway candidate", record["sideEffects"]!.AsArray()[0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepClosesMultiLanguageConfigurationDialogAsReadOnlyManagement()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-multilang");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:4:30:34059",
+              "displayName": "multi-language configuration dialog",
+              "source": "toolbar",
+              "uiPath": "animation toolbar/button[30]",
+              "commandId": 34059,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 34059",
+              "expectedEffect": "opens multi-language configuration dialog",
+              "evidenceSource": "test catalog",
+              "nextProbe": "probe on throwaway candidate"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "multilang");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:4:30:34059",
+          "commandId": 34059,
+          "safetyClass": "candidate-safe-mutation",
+          "commandObservedWindows": [
+            "0x560A40 #32770 多语言配置"
+          ],
+          "evidence": {
+            "projectCopyHashChanged": true,
+            "readOnlyHashDriftClass": "editor-context-only",
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": false,
+            "candidateSafeMutationUnexpectedFunctionalDiff": false,
+            "normalizedDiff": {
+              "Equivalent": false,
+              "ChangedFileCount": 1,
+              "EditorContextOnly": true
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-multilang");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("management", record["category"]!.GetValue<string>());
+        Assert.Equal("readOnlyClosedLoopPass", record["closureStatus"]!.GetValue<string>());
+        Assert.Contains("multi-language configuration dialog", record["actualEffect"]!.GetValue<string>());
+        Assert.Contains("candidate-safe dialog hash drift",
+            string.Join("\n", record["projectDiffEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
     }
 
     [Fact]
