@@ -431,6 +431,94 @@ public sealed class FullCoverageTests : IDisposable
     }
 
     [Fact]
+    public void ToolSweepClosesEditorStyleContextProbeWithObjectNonMutationSidecar()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-style-context");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:5:20:32830",
+              "displayName": "animation object font dialog",
+              "source": "toolbar",
+              "uiPath": "animation toolbar/button[20]",
+              "commandId": 32830,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32830",
+              "expectedEffect": "changes selected object or editor default font style",
+              "evidenceSource": "test catalog",
+              "nextProbe": "select a disposable object and prove whether object properties changed"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "style-context");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "toolId": "toolbar:5:20:32830",
+          "commandId": 32830,
+          "context": "animation-single-object",
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationNotFunctional": true,
+            "projectCopyHashChanged": true
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "style-object-nonmutation-closure.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "commandId": 32830,
+          "objectPropertiesUnchanged": true,
+          "comparedPropertyPaths": [
+            "fontFamily",
+            "fontSize",
+            "fontStyle"
+          ]
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-style-context");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["readOnlyClosedLoopPassCount"]!.GetValue<int>());
+        Assert.Equal(0, sweep["needsProbeClosureCount"]!.GetValue<int>());
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("probed", entry["status"]!.GetValue<string>());
+        Assert.Equal("UNKNOWN", entry["probeStatus"]!.GetValue<string>());
+        Assert.Equal("readOnlyClosedLoopPass", entry["closureStatus"]!.GetValue<string>());
+        Assert.Empty(entry["missingEvidence"]!.AsArray());
+
+        var record = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!
+            .AsObject()["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("readOnlyClosedLoopPass", record["closureStatus"]!.GetValue<string>());
+        Assert.Contains("editor-default style/context drift", record["actualEffect"]!.GetValue<string>());
+        Assert.Contains("style-object-nonmutation-closure",
+            string.Join("\n", record["readbackEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
+    [Fact]
     public void ToolSweepWritesClosureRecordsAndDoesNotTreatProbePassAsUsability()
     {
         Directory.CreateDirectory(_root);
