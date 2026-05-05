@@ -4112,19 +4112,35 @@ Commands:
 
     private static IntPtr FindListViewByItemCount(IntPtr root, int count)
     {
+        var candidates = new List<(IntPtr Handle, int Count)>();
         foreach (var child in UiAutomation.EnumerateChildren(root))
         {
             if (!Native.GetClass(child).Contains("SysListView32", StringComparison.OrdinalIgnoreCase)) continue;
             try
             {
-                if (UiAutomation.ListViewItems(child).Length == count) return child;
+                var itemCount = UiAutomation.ListViewItems(child).Length;
+                if (itemCount == count) return child;
+                if (itemCount > 0) candidates.Add((child, itemCount));
             }
             catch
             {
                 // Ignore nonstandard list views while profiling.
             }
         }
-        throw new InvalidOperationException($"ListView with {count} rows was not found.");
+
+        var fallback = candidates
+            .OrderByDescending(c => c.Count)
+            .ThenBy(c =>
+            {
+                Native.GetWindowRect(c.Handle, out var rect);
+                return rect.Top;
+            })
+            .FirstOrDefault();
+        if (fallback.Handle != IntPtr.Zero)
+            return fallback.Handle;
+
+        var seen = candidates.Count == 0 ? "none" : string.Join(", ", candidates.Select(c => c.Count.ToString()));
+        throw new InvalidOperationException($"ListView with {count} rows was not found; non-empty listview item counts seen: {seen}.");
     }
 
     private static IntPtr FindCanvas(IntPtr root)
