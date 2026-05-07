@@ -24,7 +24,7 @@ internal static partial class Program
         {
             get
             {
-                if (Kind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp") return Kind;
+                if (Kind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp" or "rectangle" or "line" or "ellipse" or "rounded-rectangle" or "arc" or "polyline" or "bitmap" or "input-box" or "animation-button" or "combo-box" or "flow-block" or "percent-fill" or "slider-input" or "knob-input" or "rotating-meter" or "realtime-curve" or "historical-curve" or "plan-curve" or "alarm-display" or "free-table" or "historical-table" or "saved-data-browser") return Kind;
                 if (IsSyntheticText && string.Equals(RenderAs, "status-button", StringComparison.OrdinalIgnoreCase))
                     return "status-button";
                 if (IsSyntheticText && !string.Equals(RenderAs, "preview-only", StringComparison.OrdinalIgnoreCase))
@@ -35,7 +35,7 @@ internal static partial class Program
         public string EffectiveExpression => GuiKind is "status-button" or "native-lamp"
             ? (Expression ?? (IsSyntheticText ? "1" : ""))
             : "";
-        public bool GuiSupported => GuiKind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp";
+        public bool GuiSupported => GuiKind is "momentary-button" or "status-button" or "native-static-text" or "native-lamp" or "rectangle" or "line" or "ellipse" or "rounded-rectangle" or "arc" or "polyline" or "bitmap" or "input-box" or "animation-button" or "combo-box" or "flow-block" or "percent-fill" or "slider-input" or "knob-input" or "rotating-meter" or "realtime-curve" or "historical-curve" or "plan-curve" or "alarm-display" or "free-table" or "historical-table" or "saved-data-browser";
     }
 
     private sealed class LayoutValidationResult
@@ -177,14 +177,15 @@ internal static partial class Program
                 {
                     var ok = ReopenVerifyMomentaryButton(readbackProject, editor, obj.Text, obj.Variable ?? "", obj.WindowIndex,
                         obj.X, obj.Y, obj.Width, obj.Height, objectDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)),
-                        afterSnapshot, out var reopenVerified);
+                        afterSnapshot, out var reopenVerified, out var labelReadbackVerified);
                     objectResults.Add(new Dictionary<string, object?>
                     {
                         ["id"] = obj.Id,
                         ["kind"] = obj.Kind,
-                        ["status"] = ok && reopenVerified ? "PASS" : "UNKNOWN",
+                        ["status"] = ok && labelReadbackVerified ? "PASS" : "UNKNOWN",
                         ["propertyReadback"] = ok ? "PASS" : "UNKNOWN",
-                        ["reopenReadback"] = reopenVerified ? "PASS" : "UNKNOWN",
+                        ["labelReadback"] = labelReadbackVerified ? "PASS" : "UNKNOWN",
+                        ["reopenTokenReadback"] = reopenVerified ? "PASS" : "UNKNOWN",
                         ["evidenceDir"] = objectDir
                     });
                 }
@@ -308,7 +309,7 @@ internal static partial class Program
 
             var guiObjects = validation.Objects.Where(o => o.GuiSupported).ToArray();
             if (guiObjects.Length == 0)
-                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button, native-static-text, native-lamp.");
+                throw new InvalidOperationException("Layout contains no GUI-supported objects. Supported GUI kinds: momentary-button, status-button, native-static-text, native-lamp, rectangle, line, ellipse, rounded-rectangle, arc, polyline, bitmap, input-box, animation-button, combo-box, flow-block, percent-fill, slider-input, knob-input, rotating-meter, realtime-curve, historical-curve, plan-curve, alarm-display, free-table, historical-table, saved-data-browser.");
 
             var source = Opt(args, "--source");
             var project = Opt(args, "--project");
@@ -335,6 +336,28 @@ internal static partial class Program
                     "status-button" => WorkflowWindowIndicatorAdd(childArgs),
                     "native-static-text" => WorkflowNativeStaticTextAdd(childArgs),
                     "native-lamp" => WorkflowNativeLampAdd(childArgs),
+                    "rectangle" => WorkflowRectangleAdd(childArgs),
+                    "line" => WorkflowLineAdd(childArgs),
+                    "arc" => WorkflowArcAdd(childArgs),
+                    "polyline" => WorkflowPolylineAdd(childArgs),
+                    "bitmap" => WorkflowBitmapAdd(childArgs),
+                    "ellipse" => WorkflowEllipseAdd(childArgs),
+                    "rounded-rectangle" => WorkflowRoundedRectangleAdd(childArgs),
+                    "input-box" => WorkflowInputBoxAdd(childArgs),
+                    "animation-button" => WorkflowAnimationButtonAdd(childArgs),
+                    "combo-box" => WorkflowComboBoxAdd(childArgs),
+                    "flow-block" => WorkflowFlowBlockAdd(childArgs),
+                    "percent-fill" => WorkflowPercentFillAdd(childArgs),
+                    "slider-input" => WorkflowSliderInputAdd(childArgs),
+                    "knob-input" => WorkflowKnobInputAdd(childArgs),
+                    "rotating-meter" => WorkflowRotatingMeterAdd(childArgs),
+                    "realtime-curve" => WorkflowRealtimeCurveAdd(childArgs),
+                    "historical-curve" => WorkflowHistoricalCurveAdd(childArgs),
+                    "plan-curve" => WorkflowPlanCurveAdd(childArgs),
+                    "alarm-display" => WorkflowAlarmDisplayAdd(childArgs),
+                    "free-table" => WorkflowFreeTableAdd(childArgs),
+                    "historical-table" => WorkflowHistoricalTableAdd(childArgs),
+                    "saved-data-browser" => WorkflowSavedDataBrowserAdd(childArgs),
                     _ => 2
                 };
                 if (exitCode == 0 && currentProject == null && !string.IsNullOrWhiteSpace(workDir))
@@ -406,6 +429,28 @@ internal static partial class Program
                 "status-button" => "window.indicator.add",
                 "native-static-text" => "window.static-text.add",
                 "native-lamp" => "window.lamp.add-native",
+                "rectangle" => "window.rectangle.add",
+                "line" => "window.line.add",
+                "arc" => "window.arc.add",
+                "polyline" => "window.polyline.add",
+                "bitmap" => "window.bitmap.add",
+                "ellipse" => "window.ellipse.add",
+                "rounded-rectangle" => "window.rounded-rect.add",
+                "input-box" => "window.input-box.add",
+                "animation-button" => "window.animation-button.add",
+                "combo-box" => "window.combo-box.add",
+                "flow-block" => "window.flow-block.add",
+                "percent-fill" => "window.percent-fill.add",
+                "slider-input" => "window.slider-input.add",
+                "knob-input" => "window.knob-input.add",
+                "rotating-meter" => "window.rotating-meter.add",
+                "realtime-curve" => "window.realtime-curve.add",
+                "historical-curve" => "window.historical-curve.add",
+                "plan-curve" => "window.plan-curve.add",
+                "alarm-display" => "window.alarm-display.add",
+                "free-table" => "window.free-table.add",
+                "historical-table" => "window.historical-table.add",
+                "saved-data-browser" => "window.saved-data-browser.add",
                 _ => throw new ArgumentException("Unsupported layout GUI kind: " + obj.GuiKind)
             }
         };
@@ -423,8 +468,21 @@ internal static partial class Program
         }
         args.Add("--out");
         args.Add(outDir);
-        args.Add("--text");
-        args.Add(obj.Text);
+        if (obj.GuiKind is "rectangle" or "line" or "ellipse" or "rounded-rectangle" or "arc" or "polyline" or "bitmap" or "input-box" or "animation-button" or "combo-box" or "flow-block" or "percent-fill" or "slider-input" or "knob-input" or "rotating-meter" or "realtime-curve" or "historical-curve" or "plan-curve" or "alarm-display" or "free-table" or "historical-table" or "saved-data-browser")
+        {
+            args.Add("--id");
+            args.Add(obj.Id);
+            if (obj.GuiKind is "input-box" or "animation-button" or "combo-box" or "flow-block" or "percent-fill" or "slider-input" or "knob-input" or "rotating-meter" or "realtime-curve" or "historical-curve" or "plan-curve" or "alarm-display" or "free-table" or "historical-table" or "saved-data-browser")
+            {
+                args.Add("--text");
+                args.Add(obj.Text);
+            }
+        }
+        else
+        {
+            args.Add("--text");
+            args.Add(obj.Text);
+        }
         if (obj.GuiKind == "momentary-button")
         {
             args.Add("--variable");
@@ -958,6 +1016,28 @@ internal static partial class Program
             "native-lamp" => Math.Max(style.StatusWidth, 120),
             "native-static-text" => 160,
             "section-title" or "static-label" => 160,
+            "rectangle" => 150,
+            "line" => 120,
+            "arc" => 120,
+            "polyline" => 120,
+            "bitmap" => 180,
+            "ellipse" => 120,
+            "rounded-rectangle" => 120,
+            "input-box" => 140,
+            "animation-button" => 140,
+            "combo-box" => 140,
+            "flow-block" => 140,
+            "percent-fill" => 140,
+            "slider-input" => 140,
+            "knob-input" => 140,
+            "rotating-meter" => 140,
+            "realtime-curve" => 140,
+            "historical-curve" => 140,
+            "plan-curve" => 140,
+            "alarm-display" => 140,
+            "free-table" => 180,
+            "historical-table" => 180,
+            "saved-data-browser" => 180,
             _ => style.ButtonWidth
         };
 
@@ -969,6 +1049,28 @@ internal static partial class Program
             "native-static-text" => style.LabelHeight,
             "section-title" => style.TitleHeight,
             "static-label" => style.LabelHeight,
+            "rectangle" => 90,
+            "line" => 70,
+            "arc" => 70,
+            "polyline" => 70,
+            "bitmap" => 120,
+            "ellipse" => 70,
+            "rounded-rectangle" => 70,
+            "input-box" => 45,
+            "animation-button" => 45,
+            "combo-box" => 45,
+            "flow-block" => 45,
+            "percent-fill" => 45,
+            "slider-input" => 45,
+            "knob-input" => 45,
+            "rotating-meter" => 45,
+            "realtime-curve" => 45,
+            "historical-curve" => 45,
+            "plan-curve" => 45,
+            "alarm-display" => 45,
+            "free-table" => 90,
+            "historical-table" => 90,
+            "saved-data-browser" => 90,
             _ => style.ButtonHeight
         };
 
@@ -979,14 +1081,30 @@ internal static partial class Program
 
         var supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "section-title", "static-label", "momentary-button", "status-button", "native-static-text", "native-lamp"
+            "section-title", "static-label", "momentary-button", "status-button", "native-static-text", "native-lamp", "rectangle", "line", "ellipse", "rounded-rectangle", "arc", "polyline", "bitmap", "input-box", "animation-button", "combo-box", "flow-block", "percent-fill", "slider-input", "knob-input", "rotating-meter", "realtime-curve", "historical-curve", "plan-curve", "alarm-display", "free-table", "historical-table", "saved-data-browser"
+        };
+        var capabilityHints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["polygon"] = "L3 drawable only",
+            ["bitmap"] = "L3 drawable only",
         };
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var obj in result.Objects)
         {
             if (string.IsNullOrWhiteSpace(obj.Id)) result.BlockedReasons.Add("object missing id");
             else if (!ids.Add(obj.Id)) result.BlockedReasons.Add("duplicate object id: " + obj.Id);
-            if (!supported.Contains(obj.Kind)) result.BlockedReasons.Add($"{obj.Id}: unsupported kind {obj.Kind}");
+            if (!supported.Contains(obj.Kind))
+            {
+                if (capabilityHints.TryGetValue(obj.Kind, out var hint))
+                {
+                    result.BlockedReasons.Add(
+                        $"{obj.Id}: unsupported kind {obj.Kind} ({hint}; requires L4 property automation + L5 workflow/layout schema before layout.apply)");
+                }
+                else
+                {
+                    result.BlockedReasons.Add($"{obj.Id}: unsupported kind {obj.Kind} (not in current layout schema)");
+                }
+            }
             if (!string.IsNullOrWhiteSpace(obj.RenderAs) &&
                 !obj.RenderAs.Equals("status-button", StringComparison.OrdinalIgnoreCase) &&
                 !obj.RenderAs.Equals("native-static-text", StringComparison.OrdinalIgnoreCase) &&
@@ -994,7 +1112,7 @@ internal static partial class Program
                 result.BlockedReasons.Add($"{obj.Id}: unsupported renderAs {obj.RenderAs}");
             if (!obj.IsSyntheticText && !string.IsNullOrWhiteSpace(obj.RenderAs))
                 result.BlockedReasons.Add($"{obj.Id}: renderAs is only supported for section-title/static-label");
-            if (string.IsNullOrWhiteSpace(obj.Text)) result.BlockedReasons.Add($"{obj.Id}: text is required");
+            if (obj.Kind is not ("rectangle" or "line" or "ellipse" or "rounded-rectangle" or "arc" or "polyline") && string.IsNullOrWhiteSpace(obj.Text)) result.BlockedReasons.Add($"{obj.Id}: text is required");
             if (obj.Width <= 0 || obj.Height <= 0) result.BlockedReasons.Add($"{obj.Id}: width/height must be positive");
             if (obj.X < 0 || obj.Y < 0 || obj.X + obj.Width > result.CanvasWidth || obj.Y + obj.Height > result.CanvasHeight)
                 result.BlockedReasons.Add($"{obj.Id}: rect is outside canvas");
@@ -1215,11 +1333,41 @@ internal static partial class Program
                 "native-static-text" => "#eeeeee",
                 "section-title" => "#dddddd",
                 "static-label" => "#eeeeee",
+                "rectangle" => "#f4fafc",
+                "line" => "#f4fafc",
+                "arc" => "#f4fafc",
+                "polyline" => "#f4fafc",
+                "ellipse" => "#f4fafc",
+                "rounded-rectangle" => "#f4fafc",
                 _ => "#ffdddd"
             };
             var stroke = obj.GuiSupported ? "#333333" : "#777777";
-            sb.AppendLine($"""<rect x="{obj.X}" y="{obj.Y}" width="{obj.Width}" height="{obj.Height}" rx="2" ry="2" fill="{fill}" stroke="{stroke}" stroke-width="1"/>""");
-            sb.AppendLine($"""<text x="{obj.X + 6}" y="{obj.Y + Math.Max(16, obj.Height / 2 + 5)}" font-family="SimSun, Arial" font-size="14" fill="#111111">{EscapeXml(obj.Text)}</text>""");
+            if (obj.Kind == "line")
+            {
+                sb.AppendLine($"""<line x1="{obj.X}" y1="{obj.Y}" x2="{obj.X + obj.Width}" y2="{obj.Y + obj.Height}" stroke="{stroke}" stroke-width="2"/>""");
+            }
+            else if (obj.Kind == "arc")
+            {
+                sb.AppendLine($"""<path d="M {obj.X} {obj.Y + obj.Height} A {Math.Max(1, obj.Width / 2)} {Math.Max(1, obj.Height / 2)} 0 0 1 {obj.X + obj.Width} {obj.Y + obj.Height}" fill="none" stroke="{stroke}" stroke-width="2"/>""");
+            }
+            else if (obj.Kind == "polyline")
+            {
+                sb.AppendLine($"""<polyline points="{obj.X},{obj.Y + obj.Height} {obj.X + obj.Width / 2},{obj.Y} {obj.X + obj.Width},{obj.Y + obj.Height}" fill="none" stroke="{stroke}" stroke-width="2"/>""");
+            }
+            else if (obj.Kind == "ellipse")
+            {
+                sb.AppendLine($"""<ellipse cx="{obj.X + obj.Width / 2}" cy="{obj.Y + obj.Height / 2}" rx="{Math.Max(1, obj.Width / 2)}" ry="{Math.Max(1, obj.Height / 2)}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>""");
+            }
+            else if (obj.Kind == "rounded-rectangle")
+            {
+                sb.AppendLine($"""<rect x="{obj.X}" y="{obj.Y}" width="{obj.Width}" height="{obj.Height}" rx="10" ry="10" fill="{fill}" stroke="{stroke}" stroke-width="1"/>""");
+            }
+            else
+            {
+                sb.AppendLine($"""<rect x="{obj.X}" y="{obj.Y}" width="{obj.Width}" height="{obj.Height}" rx="2" ry="2" fill="{fill}" stroke="{stroke}" stroke-width="1"/>""");
+            }
+            if (!string.IsNullOrWhiteSpace(obj.Text))
+                sb.AppendLine($"""<text x="{obj.X + 6}" y="{obj.Y + Math.Max(16, obj.Height / 2 + 5)}" font-family="SimSun, Arial" font-size="14" fill="#111111">{EscapeXml(obj.Text)}</text>""");
             var binding = obj.Variable ?? (!string.IsNullOrWhiteSpace(obj.EffectiveExpression) ? obj.EffectiveExpression : obj.Expression);
             if (!string.IsNullOrWhiteSpace(binding))
                 sb.AppendLine($"""<title>{EscapeXml(obj.Id + " " + obj.Kind + " gui=" + obj.GuiKind + " " + binding + " placement=" + obj.PlacementSource)}</title>""");

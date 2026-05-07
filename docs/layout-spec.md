@@ -1,4 +1,4 @@
-# HMI Layout Spec
+﻿# HMI Layout Spec
 
 `mcgsctl layout` is the offline planning layer for drawing simple, readable MCGS HMI control areas.
 
@@ -25,6 +25,28 @@ momentary-button
 status-button
 native-static-text
 native-lamp
+rectangle
+line
+ellipse
+rounded-rectangle
+arc
+polyline
+bitmap
+input-box
+animation-button
+combo-box
+flow-block
+percent-fill
+slider-input
+knob-input
+rotating-meter
+realtime-curve
+historical-curve
+plan-curve
+alarm-display
+free-table
+historical-table
+saved-data-browser
 section-title   -> native-static-text by default
 static-label    -> native-static-text by default
 ```
@@ -48,6 +70,50 @@ Preview-only mode is still available:
 Preview-only objects appear in `preview.svg` / `preview.html` and validation output, but are not MCGS readback evidence.
 
 `status-button` remains a standard-button style object, not a native MCGS lamp. Use `native-lamp` when a native MCGS animation display component is required. Native lamp evidence proves GUI property readback only; hardware indication and field acceptance remain outside mcgsctl.
+
+## Capability Level Matrix
+
+Every MCGS drawing/control tool has a capability level (L1鈥揕5). Only L5
+(`layoutIntegrated`) tools can be used in `layout.apply`. Tools at L3
+(`drawable`) have been proven to place objects on canvas via toolbar commands,
+but they lack property automation, workflow integration, and layout schema
+support. See `MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md` for full details.
+
+| Kind | Capability Level | `layout.apply` | Notes |
+|------|-----------------|-----------------|-------|
+| `momentary-button` | L5 layoutIntegrated | 鉁?| Full workflow + readback |
+| `status-button` | L5 layoutIntegrated | 鉁?| Full workflow + readback |
+| `native-static-text` | L5 layoutIntegrated | 鉁?| Full workflow + readback |
+| `native-lamp` | L5 layoutIntegrated | 鉁?| Full workflow + readback |
+| `section-title` | L5 layoutIntegrated | 鉁?| Maps to native-static-text |
+| `static-label` | L5 layoutIntegrated | 鉁?| Maps to native-static-text |
+| line | L5 layoutIntegrated | ✅ | window.line.add + property readback |
+| rectangle | L5 layoutIntegrated | 鉁?| `window.rectangle.add` + property readback |
+| ellipse | L5 layoutIntegrated | ✅ | `window.ellipse.add` + property readback |
+| rounded-rectangle | L5 layoutIntegrated | ✅ | `window.rounded-rect.add` + property readback |
+| arc | L5 layoutIntegrated | ✅ | `window.arc.add` + property readback |
+| polyline | L5 layoutIntegrated | ✅ | `window.polyline.add` + property readback |
+| bitmap | L5 layoutIntegrated | ✅ | `window.bitmap.add` + property readback |
+| input-box | L5 layoutIntegrated | ✅ | `window.input-box.add` + property readback |
+| animation-button | L5 layoutIntegrated | ✅ | `window.animation-button.add` + property readback |
+| combo-box | L5 layoutIntegrated | ✅ | `window.combo-box.add` + property readback |
+| flow-block | L5 layoutIntegrated | ✅ | `window.flow-block.add` + property readback |
+| percent-fill | L5 layoutIntegrated | ✅ | `window.percent-fill.add` + property readback |
+| slider-input | L5 layoutIntegrated | ✅ | `window.slider-input.add` + property readback |
+| knob-input | L5 layoutIntegrated | ✅ | `window.knob-input.add` + property readback |
+| rotating-meter | L5 layoutIntegrated | ✅ | `window.rotating-meter.add` + property readback |
+| realtime-curve | L5 layoutIntegrated | ✅ | `window.realtime-curve.add` + property readback |
+| historical-curve | L5 layoutIntegrated | ✅ | `window.historical-curve.add` + property readback |
+| plan-curve | L5 layoutIntegrated | ✅ | `window.plan-curve.add` + property readback |
+| alarm-display | L5 layoutIntegrated | ✅ | `window.alarm-display.add` + property readback |
+| free-table | L5 layoutIntegrated | ✅ | `window.free-table.add` + property readback |
+| historical-table | L5 layoutIntegrated | ✅ | `window.historical-table.add` + property readback |
+| saved-data-browser | L5 layoutIntegrated | ✅ | `window.saved-data-browser.add` + property readback |
+
+**Warning**: `closedLoopPass` in the tool-sweep for L3 tools means the toolbar
+command works, NOT that the tool is usable through `layout.apply`. The gap
+between L3 and L5 requires: property-dialog automation (L4), workflow
+implementation, layout schema entry, and readback verification (L5).
 
 ## Minimal Example
 
@@ -211,11 +277,33 @@ tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep `
 command is understood. `mcgs tool-sweep` writes `tool-sweep.json` for stage-1
 accounting, `tool-closure-records.json` for the usability gate, and a
 closure-backed `function-catalog.json` that links each tool function to its
-closure status, closure evidence, missing evidence, and next probe. A tool is
+closure status, closure evidence, missing evidence, capability level, and next
+probe. A tool is
 understood only after its purpose, inputs, side effects, safety class,
 invocation path, readback/evidence path, rollback path, and closure status are
 recorded. `tool-sweep status=PASS` is therefore only a probe-accounting result;
 `closureStatus=UNKNOWN` still means more file-safe closure work remains.
+
+For drawing tools, also read:
+
+- `drawableOnlyCount`: number of L3-only drawing tools.
+- `layoutIntegratedCount`: number of L5 drawing tools usable by `layout.apply`.
+- `workflowFunctionCount` vs `closureBackedFunctionCount`: workflow coverage and
+  tool-closure coverage are different metrics and must not be mixed.
+
+`capabilityLevel` values:
+
+```text
+discovered       command is known but not closed as usable
+invokable        command/probe route works but drawing closure is incomplete
+drawable         L3 only (toolbar draw proven)
+configurable     L4 only (property readback proven)
+layoutIntegrated L5 (workflow + schema + save/reopen/readback proven)
+```
+
+`closedLoopPass` on a drawing-create tool can still be `drawable` or
+`configurable`. In those cases `nextProbe` must stay non-empty until
+`capabilityLevel=layoutIntegrated`.
 
 Closure statuses are intentionally stricter than probe statuses:
 

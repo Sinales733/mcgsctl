@@ -183,6 +183,550 @@ public sealed class LayoutTests : IDisposable
     }
 
     [Fact]
+    public void RectangleLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "panel-rect",
+            ["kind"] = "rectangle",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 160,
+            ["height"] = 90
+        });
+        var layout = WriteLayout("rectangle", json);
+        var previewDir = Path.Combine(_root, "rectangle-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"rectangle\"", previewJson);
+        Assert.Contains("\"guiKind\": \"rectangle\"", previewJson);
+    }
+
+    [Fact]
+    public void LineLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-line",
+            ["kind"] = "line",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 70
+        });
+        var layout = WriteLayout("line", json);
+        var previewDir = Path.Combine(_root, "line-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"line\"", previewJson);
+        Assert.Contains("\"guiKind\": \"line\"", previewJson);
+    }
+
+    [Fact]
+    public void EllipseLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-ellipse",
+            ["kind"] = "ellipse",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 70
+        });
+        var layout = WriteLayout("ellipse", json);
+        var previewDir = Path.Combine(_root, "ellipse-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"ellipse\"", previewJson);
+        Assert.Contains("\"guiKind\": \"ellipse\"", previewJson);
+    }
+
+    [Fact]
+    public void RoundedRectangleLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-rounded",
+            ["kind"] = "rounded-rectangle",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 70
+        });
+        var layout = WriteLayout("rounded-rectangle", json);
+        var previewDir = Path.Combine(_root, "rounded-rectangle-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"rounded-rectangle\"", previewJson);
+        Assert.Contains("\"guiKind\": \"rounded-rectangle\"", previewJson);
+    }
+
+    [Fact]
+    public void ArcLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-arc",
+            ["kind"] = "arc",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 70
+        });
+        var layout = WriteLayout("arc", json);
+        var previewDir = Path.Combine(_root, "arc-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"arc\"", previewJson);
+        Assert.Contains("\"guiKind\": \"arc\"", previewJson);
+    }
+
+    [Fact]
+    public void PolylineLayoutPassesWithoutText()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-polyline",
+            ["kind"] = "polyline",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 120,
+            ["height"] = 70
+        });
+        var layout = WriteLayout("polyline", json);
+        var previewDir = Path.Combine(_root, "polyline-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"polyline\"", previewJson);
+        Assert.Contains("\"guiKind\": \"polyline\"", previewJson);
+    }
+
+    [Fact]
+    public void InputBoxLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-input-box",
+            ["kind"] = "input-box",
+            ["text"] = "SETPOINT",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("input-box", json);
+        var previewDir = Path.Combine(_root, "input-box-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"input-box\"", previewJson);
+        Assert.Contains("\"guiKind\": \"input-box\"", previewJson);
+    }
+
+    [Fact]
+    public void AnimationButtonLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-animation-button",
+            ["kind"] = "animation-button",
+            ["text"] = "ANIM BTN",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("animation-button", json);
+        var previewDir = Path.Combine(_root, "animation-button-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"animation-button\"", previewJson);
+        Assert.Contains("\"guiKind\": \"animation-button\"", previewJson);
+    }
+
+    [Fact]
+    public void ComboBoxLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-combo-box",
+            ["kind"] = "combo-box",
+            ["text"] = "MODE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("combo-box", json);
+        var previewDir = Path.Combine(_root, "combo-box-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"combo-box\"", previewJson);
+        Assert.Contains("\"guiKind\": \"combo-box\"", previewJson);
+    }
+
+    [Fact]
+    public void FlowBlockLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-flow-block",
+            ["kind"] = "flow-block",
+            ["text"] = "FLOW",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("flow-block", json);
+        var previewDir = Path.Combine(_root, "flow-block-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"flow-block\"", previewJson);
+        Assert.Contains("\"guiKind\": \"flow-block\"", previewJson);
+    }
+
+    [Fact]
+    public void PercentFillLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-percent-fill",
+            ["kind"] = "percent-fill",
+            ["text"] = "RATE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("percent-fill", json);
+        var previewDir = Path.Combine(_root, "percent-fill-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"percent-fill\"", previewJson);
+        Assert.Contains("\"guiKind\": \"percent-fill\"", previewJson);
+    }
+
+    [Fact]
+    public void SliderInputLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-slider-input",
+            ["kind"] = "slider-input",
+            ["text"] = "SLIDER",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("slider-input", json);
+        var previewDir = Path.Combine(_root, "slider-input-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"slider-input\"", previewJson);
+        Assert.Contains("\"guiKind\": \"slider-input\"", previewJson);
+    }
+
+    [Fact]
+    public void KnobInputLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-knob-input",
+            ["kind"] = "knob-input",
+            ["text"] = "KNOB",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("knob-input", json);
+        var previewDir = Path.Combine(_root, "knob-input-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"knob-input\"", previewJson);
+        Assert.Contains("\"guiKind\": \"knob-input\"", previewJson);
+    }
+
+    [Fact]
+    public void RotatingMeterLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-rotating-meter",
+            ["kind"] = "rotating-meter",
+            ["text"] = "RPM",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("rotating-meter", json);
+        var previewDir = Path.Combine(_root, "rotating-meter-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"rotating-meter\"", previewJson);
+        Assert.Contains("\"guiKind\": \"rotating-meter\"", previewJson);
+    }
+
+    [Fact]
+    public void RealtimeCurveLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-realtime-curve",
+            ["kind"] = "realtime-curve",
+            ["text"] = "CURVE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("realtime-curve", json);
+        var previewDir = Path.Combine(_root, "realtime-curve-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"realtime-curve\"", previewJson);
+        Assert.Contains("\"guiKind\": \"realtime-curve\"", previewJson);
+    }
+
+    [Fact]
+    public void BitmapLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-bitmap",
+            ["kind"] = "bitmap",
+            ["text"] = "BMP",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 180,
+            ["height"] = 120
+        });
+        var layout = WriteLayout("bitmap", json);
+        var previewDir = Path.Combine(_root, "bitmap-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"bitmap\"", previewJson);
+        Assert.Contains("\"guiKind\": \"bitmap\"", previewJson);
+    }
+
+    [Fact]
+    public void HistoricalCurveLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-historical-curve",
+            ["kind"] = "historical-curve",
+            ["text"] = "HCURVE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("historical-curve", json);
+        var previewDir = Path.Combine(_root, "historical-curve-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"historical-curve\"", previewJson);
+        Assert.Contains("\"guiKind\": \"historical-curve\"", previewJson);
+    }
+
+    [Fact]
+    public void PlanCurveLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-plan-curve",
+            ["kind"] = "plan-curve",
+            ["text"] = "PCURVE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("plan-curve", json);
+        var previewDir = Path.Combine(_root, "plan-curve-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"plan-curve\"", previewJson);
+        Assert.Contains("\"guiKind\": \"plan-curve\"", previewJson);
+    }
+
+    [Fact]
+    public void AlarmDisplayLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-alarm-display",
+            ["kind"] = "alarm-display",
+            ["text"] = "ALARM",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 140,
+            ["height"] = 45
+        });
+        var layout = WriteLayout("alarm-display", json);
+        var previewDir = Path.Combine(_root, "alarm-display-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"alarm-display\"", previewJson);
+        Assert.Contains("\"guiKind\": \"alarm-display\"", previewJson);
+    }
+
+    [Fact]
+    public void FreeTableLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-free-table",
+            ["kind"] = "free-table",
+            ["text"] = "FTABLE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 180,
+            ["height"] = 90
+        });
+        var layout = WriteLayout("free-table", json);
+        var previewDir = Path.Combine(_root, "free-table-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"free-table\"", previewJson);
+        Assert.Contains("\"guiKind\": \"free-table\"", previewJson);
+    }
+
+    [Fact]
+    public void HistoricalTableLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-historical-table",
+            ["kind"] = "historical-table",
+            ["text"] = "HTABLE",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 180,
+            ["height"] = 90
+        });
+        var layout = WriteLayout("historical-table", json);
+        var previewDir = Path.Combine(_root, "historical-table-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"historical-table\"", previewJson);
+        Assert.Contains("\"guiKind\": \"historical-table\"", previewJson);
+    }
+
+    [Fact]
+    public void SavedDataBrowserLayoutPasses()
+    {
+        var json = ValidLayout();
+        json["objects"]!.AsArray().Add(new JsonObject
+        {
+            ["id"] = "diag-saved-data-browser",
+            ["kind"] = "saved-data-browser",
+            ["text"] = "SAVED",
+            ["x"] = 120,
+            ["y"] = 220,
+            ["width"] = 180,
+            ["height"] = 90
+        });
+        var layout = WriteLayout("saved-data-browser", json);
+        var previewDir = Path.Combine(_root, "saved-data-browser-preview");
+
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--out", previewDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var previewJson = File.ReadAllText(Path.Combine(previewDir, "preview.json"), Encoding.UTF8);
+        Assert.Contains("\"kind\": \"saved-data-browser\"", previewJson);
+        Assert.Contains("\"guiKind\": \"saved-data-browser\"", previewJson);
+    }
+
+    [Fact]
     public void PreviewOnlyStaticLabelDoesNotBecomeGuiSupported()
     {
         var json = ValidLayout();

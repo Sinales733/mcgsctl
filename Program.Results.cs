@@ -1515,7 +1515,13 @@ internal static partial class Program
     }
 
     private static string NormalizePlcAddress(string value)
-        => Regex.Replace(value ?? "", @"\s+", "").ToUpperInvariant();
+    {
+        var normalized = Regex.Replace(value ?? "", @"\s+", "").ToUpperInvariant();
+        normalized = Regex.Replace(normalized, @"^VBUB(\d+)$", "VB$1", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"^M0+(\d+)(\.\d+)$", "M$1$2", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"^V0+(\d+)(\.\d+)$", "V$1$2", RegexOptions.IgnoreCase);
+        return normalized;
+    }
 
     private static int Safety(string[] args)
     {
@@ -1547,16 +1553,27 @@ internal static partial class Program
             plc.TryGetProperty("addressPlan", out var plan) &&
             plan.ValueKind == JsonValueKind.Array)
         {
+            var addressesByDataObject = plan.EnumerateArray()
+                .Select(item => new
+                {
+                    DataObject = JsonString(item, "dataObject") ?? "",
+                    Address = NormalizePlcAddress(JsonString(item, "address") ?? "")
+                })
+                .Where(item => !string.IsNullOrWhiteSpace(item.DataObject) &&
+                               !string.IsNullOrWhiteSpace(item.Address))
+                .GroupBy(item => item.DataObject, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().Address, StringComparer.OrdinalIgnoreCase);
             foreach (var item in plan.EnumerateArray())
             {
-                var address = JsonString(item, "address") ?? "";
+                var address = NormalizePlcAddress(JsonString(item, "address") ?? "");
                 var dataObject = JsonString(item, "dataObject") ?? "";
                 var kind = JsonString(item, "kind") ?? "";
+                var requireAwlDataObject = JsonBoolAny(item, "requireAwlDataObject", "RequireAwlDataObject") == true;
                 if (!string.IsNullOrWhiteSpace(address))
                     checks.Add(awlText.Contains(address, StringComparison.OrdinalIgnoreCase)
                         ? RequiredPass("awl-address-reference:" + address)
                         : RequiredUnknown("awl-address-reference:" + address, "PLC address not found in AWL"));
-                if (!string.IsNullOrWhiteSpace(dataObject))
+                if (requireAwlDataObject && !string.IsNullOrWhiteSpace(dataObject))
                     checks.Add(awlText.Contains(dataObject, StringComparison.OrdinalIgnoreCase)
                         ? RequiredPass("awl-dataobject-reference:" + dataObject)
                         : RequiredUnknown("awl-dataobject-reference:" + dataObject, "Data object not found in AWL"));
@@ -1566,12 +1583,15 @@ internal static partial class Program
                 {
                     foreach (var oppose in opposes.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => !string.IsNullOrWhiteSpace(x)))
                     {
-                        var bothReferenced = awlText.Contains(dataObject, StringComparison.OrdinalIgnoreCase) &&
-                                             awlText.Contains(oppose, StringComparison.OrdinalIgnoreCase);
+                        var oppositeAddress = addressesByDataObject.TryGetValue(oppose, out var foundAddress)
+                            ? foundAddress
+                            : NormalizePlcAddress(oppose);
+                        var bothReferenced = awlText.Contains(address, StringComparison.OrdinalIgnoreCase) &&
+                                             awlText.Contains(oppositeAddress, StringComparison.OrdinalIgnoreCase);
                         checks.Add(bothReferenced
-                            ? RequiredPass("awl-opposition-reference:" + dataObject + ":" + oppose)
-                            : RequiredUnknown("awl-opposition-reference:" + dataObject + ":" + oppose,
-                                "Opposing momentary variables were not both found in AWL"));
+                            ? RequiredPass("awl-opposition-reference:" + address + ":" + oppositeAddress)
+                            : RequiredUnknown("awl-opposition-reference:" + address + ":" + oppositeAddress,
+                                "Opposing momentary addresses were not both found in AWL"));
                     }
                 }
             }

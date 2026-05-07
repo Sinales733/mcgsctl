@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json.Nodes;
 
 namespace McgsCtl.Tests;
@@ -230,12 +230,13 @@ public sealed class FullCoverageTests : IDisposable
         var freeTable = FindTool(tools, 32946);
         var historyTable = FindTool(tools, 32947);
         Assert.Equal("candidate-safe-mutation", freeTable["safetyClass"]!.GetValue<string>());
-        Assert.Equal("needs-precondition", freeTable["supportStatus"]!.GetValue<string>());
+        Assert.Equal("implemented", freeTable["supportStatus"]!.GetValue<string>());
         Assert.Contains("free table", freeTable["displayName"]!.GetValue<string>());
-        Assert.Contains("animation-draw-table", freeTable["nextProbe"]!.GetValue<string>());
+        Assert.Equal("workflow run window.free-table.add", freeTable["evidenceSource"]!.GetValue<string>());
         Assert.Equal("candidate-safe-mutation", historyTable["safetyClass"]!.GetValue<string>());
+        Assert.Equal("implemented", historyTable["supportStatus"]!.GetValue<string>());
         Assert.Contains("historical table", historyTable["displayName"]!.GetValue<string>());
-        Assert.Contains("animation-draw-table", historyTable["nextProbe"]!.GetValue<string>());
+        Assert.Equal("workflow run window.historical-table.add", historyTable["evidenceSource"]!.GetValue<string>());
     }
 
     [Fact]
@@ -915,6 +916,95 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Equal("notClosedLoop", record["closureStatus"]!.GetValue<string>());
         Assert.Contains("internal canvas object/property evidence",
             string.Join("\n", record["missingEvidence"]!.AsArray().Select(n => n!.GetValue<string>())));
+    }
+
+    [Fact]
+    public void DrawableToolCannotClaimLayoutIntegrated()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-drawable-only");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:9:1:32901",
+              "displayName": "line drawing tool",
+              "source": "toolbar",
+              "uiPath": "tools/button[1]",
+              "commandId": 32901,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "needs-precondition",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32901",
+              "expectedEffect": "draws a line object",
+              "evidenceSource": "test catalog",
+              "nextProbe": "draw line on throwaway candidate"
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "drawable-only");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:9:1:32901",
+          "commandId": 32901,
+          "context": "animation-draw-object",
+          "safetyClass": "candidate-safe-mutation",
+          "newWindowObserved": false,
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true,
+            "drawingCreateClosurePass": true
+          },
+          "drawingCreateClosure": {
+            "status": "PASS",
+            "placementSource": "internal-occupancy"
+          }
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-drawable-only");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal("PASS", sweep["closureStatus"]!.GetValue<string>());
+        Assert.Equal(1, sweep["drawableOnlyCount"]!.GetValue<int>());
+        Assert.Equal(0, sweep["layoutIntegratedCount"]!.GetValue<int>());
+
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("closedLoopPass", entry["closureStatus"]!.GetValue<string>());
+        Assert.Equal("drawable", entry["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L4", entry["nextProbe"]!.GetValue<string>());
+        Assert.Contains("L5", entry["nextProbe"]!.GetValue<string>());
+
+        var closure = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-closure-records.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal(1, closure["drawableOnlyCount"]!.GetValue<int>());
+        Assert.Equal(0, closure["layoutIntegratedCount"]!.GetValue<int>());
+        var record = closure["records"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("drawable", record["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L4", record["nextProbe"]!.GetValue<string>());
+
+        var functions = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "function-catalog.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal(1, functions["drawableOnlyCount"]!.GetValue<int>());
+        Assert.Equal(0, functions["layoutIntegratedCount"]!.GetValue<int>());
+        var toolFunction = functions["functions"]!.AsArray()
+            .Select(n => n!.AsObject())
+            .First(f => f["functionId"]!.GetValue<string>() == "tool:toolbar:9:1:32901");
+        Assert.Equal("drawable", toolFunction["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L5", toolFunction["nextProbe"]!.GetValue<string>());
     }
 
     [Fact]

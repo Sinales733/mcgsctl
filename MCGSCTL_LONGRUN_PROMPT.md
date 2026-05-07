@@ -26,6 +26,18 @@ complete local understanding of the MCGS editor: every discoverable tool, every
 tool's purpose and invocation route, every canvas element, and every relevant
 property needed to reason about, modify, and plan HMI screens.
 
+The named requirements in prompts are not an exhaustive whitelist. If a run
+discovers an MCGS feature, command, dialog field, menu item, toolbar button,
+context-menu item, project-tree action, accelerator, or command ID that was not
+named before, add it to the inventory and closure queue instead of ignoring it.
+
+Do not claim to understand proprietary MCGS/MCGSE source code unless that source
+is actually present locally. The practical requirement is to understand the
+available bottom layer: the `mcgsctl` source, MCGS help/manuals, command
+surfaces, Windows UI evidence, exported project evidence, clipboard summaries,
+candidate-copy diffs, and readback behavior. Convert that evidence into
+repeatable command-line workflows instead of unsupported claims.
+
 ## Compression-Resistant Startup
 
 At the start of every new run, after any context compression, or whenever the
@@ -35,11 +47,20 @@ thread looks stale, do this before making decisions:
 2. Read this file: `tools/mcgsctl/MCGSCTL_LONGRUN_PROMPT.md`.
 3. Read `tools/mcgsctl/MCGSCTL_FULL_COVERAGE_PROMPT.md` when the task touches
    full MCGS understanding, tool traversal, or property maps.
-4. Run `git status --short` from `E:\myproject\FG2`.
-5. Read `tools/mcgsctl/README.md` and `docs\operator-runbook.md` if the task
+4. Read `tools/mcgsctl/MCGSCTL_GEMINI_PROMPT.md` before consulting Gemini.
+5. Read `tools/mcgsctl/MCGSCTL_UNATTENDED_RELAY_PROMPT.md` for unattended
+   closure continuation, after any context compression, after a stale thread
+   resume, or after a checkpoint-style report.
+6. Read `tools/mcgsctl/MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md` when the
+   task touches drawing capability, layout integration, or report
+   interpretation. This file defines the L1–L5 capability taxonomy that
+   prevents `closedLoopPass` from being misinterpreted as "layout-integrated."
+7. Run `git status --short` from `E:\myproject\FG2`.
+8. Read `tools/mcgsctl/README.md` and `docs\operator-runbook.md` if the task
    touches workflow behavior, release gates, or GUI writes.
-6. Inspect current code and tests before assuming which features already exist.
-7. Do not trust compressed chat memory over current files and command output.
+9. Inspect current code and tests before assuming which features already exist.
+10. Do not trust compressed chat memory over current files, durable prompt files,
+   and command output.
 
 If progress state is unclear, reconstruct it from:
 
@@ -48,8 +69,21 @@ If progress state is unclear, reconstruct it from:
 - `tools/mcgsctl\README.md`
 - `tools/mcgsctl\docs\operator-runbook.md`
 - `tools/mcgsctl\MCGSCTL_FULL_COVERAGE_PROMPT.md`
+- `tools/mcgsctl\MCGSCTL_GEMINI_PROMPT.md`
+- `tools/mcgsctl\MCGSCTL_UNATTENDED_RELAY_PROMPT.md`
 - `tools/mcgsctl\tests\McgsCtl.Tests`
 - recent evidence under `.mcgsctl-work` and `.mcgsctl-runs`
+
+Compression re-read rule:
+
+- After context compression, do not continue from memory. Re-read the four
+  durable prompt files plus `MCGSCTL_UNATTENDED_RELAY_PROMPT.md` and
+  `MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md`.
+- Then read the latest `tool-closure-records.json` / `tool-sweep.json` evidence,
+  regenerate the closure queue, and continue from the highest-priority
+  file-safe item.
+- If a previous final/report contains a checkpoint, treat it as input. Do not
+  summarize it back to the user unless platform limits force a resume packet.
 
 ## Current Project Facts To Preserve
 
@@ -101,9 +135,10 @@ Treat every blocker as a new engineering task:
   route: UIA, MSAA, `WM_GETOBJECT`, clipboard, toolbar command discovery,
   read-only MCE geometry, GUI readback, screenshots, or Gemini review.
 - If Gemini is available, ask Gemini a bounded question with sanitized evidence
-  whenever it can accelerate UI/tool/property understanding. Do not wait for a
-  milestone; use it as a continuous collaborator, then convert the answer into
-  a local test, probe, code change, or rejected hypothesis.
+  whenever it can accelerate UI/tool/property understanding. Use the AI-to-AI
+  packet protocol in `MCGSCTL_GEMINI_PROMPT.md`, not open-ended chat. Do not
+  wait for a milestone; use Gemini as a continuous collaborator, then convert
+  the answer into a local test, probe, code change, or rejected hypothesis.
 - If Gemini is unavailable, continue from local evidence and public/known
   Windows automation patterns instead of stopping.
 - Keep a local work log in generated evidence or the final summary so a later
@@ -119,11 +154,21 @@ Milestone rule:
   `property-map.json` has unresolved properties, `tool-sweep.json` has
   uninvoked tools, or `function-catalog.json` lacks purpose/effect/readback
   evidence.
+- Do not treat `tool-sweep status=PASS`, an invoked command count, or a catalog
+  count as proof that the tool is usable. Usability requires a per-tool closure
+  record as defined in `MCGSCTL_FULL_COVERAGE_PROMPT.md`.
+- Do not treat `closedLoopPass` on a drawing-create tool as proof that the tool
+  is layout-integrated. Check `capabilityLevel`: only `layoutIntegrated` means
+  `layout.apply` can use the tool. `drawable` means only L3 (toolbar command
+  can place an object). See `MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md`.
 - Do not ask the user for ordinary prioritization; choose from the unresolved
   queue, consult Gemini if helpful, and keep working.
 - If runtime/context limits force a response, make it a resume packet with the
   exact next evidence path and next probe; do not describe the milestone as
   done unless the full completion criteria are actually met.
+- If the response was forced by runtime/context limits, the next run must restart
+  from `MCGSCTL_UNATTENDED_RELAY_PROMPT.md` and the latest closure evidence,
+  not from a broad project summary.
 
 Only stop before full completion when the next required action is outside a
 file-revertible development task: real hardware operation, field-device action,
@@ -154,6 +199,15 @@ Definition of "done" for unattended completion:
 - A branch contains the verified work, with a commit and push when possible.
 - Intermediate branches/commits/pushes do not satisfy "done" while unresolved
   property/tool/function queues remain.
+- The final full-coverage state must be driven by closure records:
+  candidate-safe tools are `closedLoopPass` or `readOnlyClosedLoopPass`; unsafe
+  tools have a concrete blocker and exhausted file-safe probes. `notClosedLoop`
+  and `needsProbe` are continuation states, not completion states.
+- Drawing/layout completion must prove non-overlap and reasonable placement from
+  internal canvas evidence: decoded rectangles, z-order/order data,
+  semantic/property maps, grouping, generated layout plans, and post-apply
+  readback. Screenshots are still required for audit when possible, but they are
+  not the primary collision/occlusion proof.
 
 When blocked on GUI access, keep advancing offline pieces:
 
@@ -208,21 +262,138 @@ If the bridge is not running, start it from `E:\googlecli\bridge`:
 .\start_bridge.ps1
 ```
 
-Use Gemini for bounded questions, not open-ended delegation. Good prompts:
+Use Gemini with AI-to-AI evidence packets, not open-ended delegation. Before the
+first consultation in a run, read `tools/mcgsctl/MCGSCTL_GEMINI_PROMPT.md` and
+send Gemini a request shaped by that file.
 
-- "Given this MCGS canvas screenshot and the current control spec, which object
-  looks misplaced or too small?"
-- "Here is the `FindCanvas`/drag/readback failure evidence. What failure modes
-  should I test next?"
-- "Review this layout JSON and preview screenshot for HMI usability issues."
-- "Compare these before/after screenshots and list likely GUI automation
-  mistakes."
-- "Given this property dialog screenshot/window tree, name each field and infer
-  what property-map key it should populate."
-- "Given this sanitized MCE/clipboard offset summary, which field hypothesis
-  should I test next?"
-- "Given this tool catalog fragment, which commands are likely read-only,
-  candidate-safe, or risky?"
+### Codex/Gemini Viewer And API
+
+Use the local viewer when the user wants to observe Codex/Gemini collaboration:
+
+- Viewer URL: `http://127.0.0.1:4000/codex-gemini`
+- Bridge working directory: `E:\googlecli\bridge`
+- Saved transcripts: `E:\googlecli\bridge\output\chat_sessions\`
+- Gemini-side preset prompt: `tools/mcgsctl/MCGSCTL_GEMINI_PROMPT.md`
+
+The viewer is intentionally read-only for the user: there is no normal visible
+chat composer. Codex sends Gemini packets through the bridge API, and the page
+displays the stored transcript. Use these endpoints:
+
+- `POST /bridge/chat/sessions`
+- `GET /bridge/chat/sessions`
+- `GET /bridge/chat/sessions/{sessionId}`
+- `POST /bridge/chat/sessions/{sessionId}/messages`
+
+The `GET` endpoints are read-only viewer paths and should work for the user
+without sending messages. The `POST` endpoints create local transcript records or
+call Gemini, so include bridge auth when auth mode is enabled.
+
+Prompt-work visibility rule: when the task needs to create, modify, or review
+durable prompt/rule files, route any Gemini consultation through
+`POST /bridge/chat/sessions/{sessionId}/messages` so the exchange is saved and
+visible to the user later. Do not use direct `/v1/chat/completions` for those
+prompt-work consultations because it bypasses the transcript viewer. If the task
+does not require prompt/rule changes, do not edit prompt files just to exercise
+the viewer or leave a visibility marker.
+
+For mcgsctl consultations, send the full text of
+`tools/mcgsctl/MCGSCTL_GEMINI_PROMPT.md` as `systemPrompt`. Default to the
+high-capacity settings the user requested:
+
+```json
+{
+  "model": "gemini-3.1-pro-preview",
+  "maxOutputTokens": 65536,
+  "thinkingLevel": "HIGH",
+  "includeFullContext": true
+}
+```
+
+If the endpoint returns 401, read `BRIDGE_API_KEY` from
+`E:\googlecli\bridge\.env` only to build the local Authorization header. Do not
+print the key, include it in prompts, commit it, or copy `.env`. The transcript
+page is not proof by itself; copy the accepted/rejected Gemini decision and the
+local verification result into the relevant evidence or status output.
+
+Allowed request types:
+
+- `closure_review`
+- `probe_design`
+- `failure_triage`
+- `visual_review`
+- `semantic_hypothesis`
+
+Codex request packet shape:
+
+```json
+{
+  "type": "closure_review",
+  "taskId": "",
+  "currentClaim": "",
+  "goal": "",
+  "toolOrFeature": {
+    "name": "",
+    "uiPath": "",
+    "commandId": "",
+    "category": "view|drawing|drawing-edit|property|management|semantic|layout|unknown"
+  },
+  "evidence": {
+    "beforeState": "",
+    "action": "",
+    "afterState": "",
+    "screenshots": [],
+    "windowTreeSummary": "",
+    "toolCatalogEntry": {},
+    "propertyReadback": {},
+    "semanticMap": {},
+    "propertyMap": {},
+    "mceOrClipboardDiffSummary": {},
+    "savedAndReopened": null,
+    "projectCheck": "",
+    "safetyVerify": "",
+    "candidateValidate": ""
+  },
+  "knownMissing": [],
+  "allowedActions": [],
+  "forbiddenActions": [],
+  "question": "",
+  "requiredOutput": [
+    "decisionLabel",
+    "proven",
+    "missing",
+    "recommendedProbe",
+    "expectedEvidence",
+    "failureMeaning",
+    "safety"
+  ]
+}
+```
+
+Expected Gemini response packet:
+
+```json
+{
+  "decisionLabel": "notClosedLoop",
+  "conclusion": "",
+  "proven": [],
+  "missing": [],
+  "recommendedProbe": {
+    "action": "",
+    "inputsNeeded": [],
+    "expectedLocalCommandOrWorkflow": "",
+    "expectedEvidence": "",
+    "minimumPassCondition": ""
+  },
+  "failureMeaning": [],
+  "safety": "candidate-safe|read-only|blocked-by-safety|needs-human|unknown-risk",
+  "confidence": "low|medium|high",
+  "doNotClaim": []
+}
+```
+
+Valid `decisionLabel` values are `closedLoopPass`,
+`readOnlyClosedLoopPass`, `notClosedLoop`, `needsProbe`,
+`blockedBySafety`, `blockedNeedsHuman`, and `invalidEvidence`.
 
 Rules for Gemini collaboration:
 
@@ -927,7 +1098,7 @@ past semantic mapping into full MCGS understanding:
 
 Gemini 可以随时参与，不需要等到某个固定节点。遇到 UI 字段命名、截图理解、工具用途判断、属性页结构、MCE/clipboard offset 假设、下一步探针优先级，都可以立即通过 E:\googlecli\bridge 问 Gemini 3.1 Pro Preview。禁止发送 .env、密钥、完整 .MCE、完整私有 blob；只能发送截图、窗口树、摘要、bounded hex window、schema、错误片段和小段代码。Gemini 只是顾问，最终以本地证据、build/test、readback、candidate validate 为准。
 
-完成标准：目标范围内没有最终 UNKNOWN，没有未解释的元件，没有静默缺失的属性；每个可发现工具都有记录，每个候选安全工具都有可逆 probe 或明确 blocker；property-map 能服务布局规划和后续修改；build/test 通过；文档/schema/runbook 同步；可验证里程碑 commit/push。
+完成标准：目标范围内没有最终 UNKNOWN，没有未解释的元件，没有静默缺失的属性；每个可发现工具都有记录，并且每个功能/工具都有 closure record。提示词中列出的功能不是白名单；如果运行中发现新的菜单、按钮、工具条命令、右键菜单、项目树动作、属性页控件、快捷键或命令 ID，也必须加入 tool-catalog / function-catalog / closure 队列。候选安全工具必须达到 `closedLoopPass` 或 `readOnlyClosedLoopPass`；不安全工具只能在已耗尽文件安全探针后记录为 `blockedBySafety` / `blockedNeedsHuman`，并写清楚具体原因和继续所需的人类/安全前置条件。`tool-sweep PASS`、命令 ID 已发现、按钮点过一次、截图有变化、普通 build/test 通过，都不能单独算“正常使用”。绘图创建和布局规划必须通过内部画布对象图、decoded rectangles、z-order/order、semantic/property-map、grouping、layout-plan 和 post-apply readback 判断遮挡/碰撞/布局合理性；截图只作为人工审计和异常发现，不作为主要遮挡证明。property-map 能服务布局规划和后续修改；build/test 通过；文档/schema/runbook 同步；可验证里程碑 commit/push。
 
 如果上一次报告里出现 property-map status=UNKNOWN、unresolvedPropertyCount、tool-sweep status=UNKNOWN、invokedCount=0、nextProbe、未验证字段、未调用工具，那么那不是完成报告，而是下一轮输入。commit/push 只是检查点，不准因此停下。直接读取这些 evidence，先处理 property-map 的 unresolved 队列，再处理 tool-sweep 的 uninvoked 工具队列；每完成一个小闭环就 build/test、必要时 commit/push，然后继续下一项。只有没有任何文件安全 nextProbe，或者下一步必须正式 apply FG2_HMI.MCE、真实 PLC/硬件动作、密钥、destructive git 时，才停下来问我。
 ```

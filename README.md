@@ -142,7 +142,17 @@ tools\mcgsctl\mcgsctl.ps1 mcgs tool-sweep --project .mcgsctl-work\layout-gui-smo
 tools\mcgsctl\mcgsctl.ps1 mcgs blocked-breakthrough-audit --closures .mcgsctl-runs\mcgs-tool-sweep\tool-closure-records.json --out .mcgsctl-runs\mcgs-blocked-breakthrough-audit
 ```
 
-`mcgs tool-catalog` writes inventory-level `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` writes `tool-sweep.json`, `tool-closure-records.json`, and a closure-backed `function-catalog.json` that joins each tool function to its closure status, closure evidence, missing evidence, and next probe. The stage-1 `status` only says whether inventory/probe accounting is complete; it is not a usability claim. Full usability is represented by `closureStatus`: candidate-safe tools must reach `closedLoopPass`, read-only tools must reach `readOnlyClosedLoopPass`, and unsafe tools must have `blockedBySafety` or `blockedNeedsHuman`. `notClosedLoop`, `needsProbe`, and `invalidEvidence` are continuation states.
+`mcgs tool-catalog` writes inventory-level `tool-catalog.json` and `function-catalog.json`. Toolbar command IDs are cataloged with source, UI path, enabled/hidden state, invocation route, safety class, support status, evidence path, and `nextProbe`. `mcgs tool-sweep` writes `tool-sweep.json`, `tool-closure-records.json`, and a closure-backed `function-catalog.json` that joins each tool function to its closure status, closure evidence, missing evidence, capability level, and next probe. The stage-1 `status` only says whether inventory/probe accounting is complete; it is not a usability claim. Full usability is represented by `closureStatus`: candidate-safe tools must reach `closedLoopPass`, read-only tools must reach `readOnlyClosedLoopPass`, and unsafe tools must have `blockedBySafety` or `blockedNeedsHuman`. `notClosedLoop`, `needsProbe`, and `invalidEvidence` are continuation states.
+
+Drawing capability is tracked by `capabilityLevel`:
+
+- `discovered`: command exists but no usable probe closure yet.
+- `invokable`: command/probe route is available but no drawing closure evidence.
+- `drawable`: L3 only; toolbar draw works, but property automation/workflow/layout integration are missing.
+- `configurable`: L4 only; property readback exists, workflow/layout integration still missing.
+- `layoutIntegrated`: L5; workflow + layout schema + save/reopen/readback are all in place.
+
+For L3/L4 drawing tools, `nextProbe` must stay non-empty even if `closureStatus=closedLoopPass`. Treat `drawableOnlyCount` and `layoutIntegratedCount` as the drawing capability progress metrics. Also keep `workflowFunctionCount` separate from `closureBackedFunctionCount`: the former is reusable workflow coverage, the latter is tool-level closure record count.
 
 `mcgs blocked-breakthrough-audit` is the follow-up gate for remaining `blockedBySafety` / `blockedNeedsHuman` tools. It writes `blocked-breakthrough-report.json`, records which substitute probes were considered, attaches Gemini review metadata when available, and requires every blocked item to be classified as `closedLoopPass`, `readOnlyClosedLoopPass`, or `hardBlocked` with no hidden `nextProbe`. A `hardBlocked` item is not a usability pass; it means the local file-safe route has been exhausted and the record states the human or safety condition needed to continue.
 

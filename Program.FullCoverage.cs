@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
@@ -2625,9 +2625,7 @@ internal static partial class Program
             blocked = blocked || documentedProbeBlocker;
             var status = probed ? "probed" : blocked ? "blocked" : tool.supportStatus;
             var closure = BuildMcgsToolClosureRecord(tool, status, probed, exactProbe, equivalentProbe, probe, documentedProbeBlocker ? documentedBlockerNextProbe : "");
-            var entryNextProbe = closure.closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman"
-                ? ""
-                : probed ? closure.nextProbe : documentedProbeBlocker ? documentedBlockerNextProbe : tool.nextProbe;
+            var entryNextProbe = closure.nextProbe;
             return new McgsToolSweepEntry
             {
                 toolId = tool.toolId,
@@ -2651,6 +2649,7 @@ internal static partial class Program
                 closureStatus = closure.closureStatus,
                 missingEvidence = closure.missingEvidence,
                 closureRecordPath = "tool-closure-records.json",
+                capabilityLevel = closure.capabilityLevel,
                 nextProbe = entryNextProbe
             };
         }).ToArray();
@@ -2693,6 +2692,8 @@ internal static partial class Program
         var blockedBySafetyCount = closureRecords.Count(r => r.closureStatus == "blockedBySafety");
         var blockedNeedsHumanCount = closureRecords.Count(r => r.closureStatus == "blockedNeedsHuman");
         var invalidEvidenceCount = closureRecords.Count(r => r.closureStatus == "invalidEvidence");
+        var layoutIntegratedCount = closureRecords.Count(r => r.capabilityLevel == "layoutIntegrated");
+        var drawableOnlyCount = closureRecords.Count(r => r.capabilityLevel == "drawable");
         var closureComplete = notClosedLoopCount == 0 && needsProbeClosureCount == 0 && invalidEvidenceCount == 0;
         var result = new
         {
@@ -2717,6 +2718,8 @@ internal static partial class Program
             blockedBySafetyCount,
             blockedNeedsHumanCount,
             invalidEvidenceCount,
+            layoutIntegratedCount,
+            drawableOnlyCount,
             closureComplete,
             entries,
             blockedReasons = new[]
@@ -2749,6 +2752,8 @@ internal static partial class Program
             blockedBySafetyCount,
             blockedNeedsHumanCount,
             invalidEvidenceCount,
+            layoutIntegratedCount,
+            drawableOnlyCount,
             records = closureRecords
         }, JsonOptions()), Encoding.UTF8);
         var closureBackedFunctions = catalog.Tools.Zip(closureRecords, (tool, closure) => new
@@ -2769,6 +2774,7 @@ internal static partial class Program
             safetyClass = tool.safetyClass,
             supportStatus = tool.supportStatus,
             closureStatus = closure.closureStatus,
+            capabilityLevel = closure.capabilityLevel,
             closureRecordPath = "tool-closure-records.json",
             closureEvidence = closure.candidateOrFixture,
             missingEvidence = closure.missingEvidence,
@@ -2780,9 +2786,7 @@ internal static partial class Program
             evidenceSource = string.IsNullOrWhiteSpace(closure.candidateOrFixture)
                 ? tool.evidenceSource
                 : closure.candidateOrFixture,
-            nextProbe = closure.closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman"
-                ? ""
-                : closure.nextProbe
+            nextProbe = closure.nextProbe
         }).Cast<object>().ToArray();
         var functionRecords = SupportedWorkflowFunctions().Cast<object>()
             .Concat(closureBackedFunctions)
@@ -2804,6 +2808,8 @@ internal static partial class Program
             blockedBySafetyCount,
             blockedNeedsHumanCount,
             invalidEvidenceCount,
+            layoutIntegratedCount,
+            drawableOnlyCount,
             functions = functionRecords
         }, JsonOptions()), Encoding.UTF8);
         Console.WriteLine("mcgs tool-sweep: " + outDir);
@@ -3059,8 +3065,9 @@ internal static partial class Program
             if (string.IsNullOrWhiteSpace(nextProbe))
                 nextProbe = "Provide a file-safe fixture or manual editor state that makes this command reversible before probing.";
         }
-        else if (sweepStatus.Equals("needs-precondition", StringComparison.OrdinalIgnoreCase) ||
-                 sweepStatus.Equals("needs-probe", StringComparison.OrdinalIgnoreCase))
+        else if ((sweepStatus.Equals("needs-precondition", StringComparison.OrdinalIgnoreCase) ||
+                  sweepStatus.Equals("needs-probe", StringComparison.OrdinalIgnoreCase)) &&
+                 !probed)
         {
             closureStatus = "needsProbe";
             if (string.IsNullOrWhiteSpace(nextProbe))
@@ -3146,12 +3153,14 @@ internal static partial class Program
         }
 
         var tableEditorClosed = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" && IsTableEditorCommand(tool);
+        var capabilityLevel = InferMcgsToolCapabilityLevel(tool, category, closureStatus, probed, probe);
         if (closureStatus is "blockedBySafety" or "blockedNeedsHuman")
             missing.AddRange(McgsToolBlockedClosureEvidence(tool, closureStatus, documentedBlockerNextProbe));
         if (closureStatus is "notClosedLoop" or "needsProbe" or "invalidEvidence")
             missing.AddRange(McgsToolMissingClosureEvidence(tool, category, probed, probe));
         if (closureStatus == "notClosedLoop" && string.IsNullOrWhiteSpace(nextProbe))
             nextProbe = DefaultMcgsToolClosureNextProbe(tool, category);
+        nextProbe = NormalizeCapabilityNextProbe(tool, closureStatus, capabilityLevel, nextProbe);
 
         var probeEvidenceKind = exactProbe != null ? "exact-tool" : equivalentProbe != null ? "equivalent-command" : "";
         var invocationEvidence = new List<string>();
@@ -3252,8 +3261,9 @@ internal static partial class Program
             rollbackPath = McgsToolRollbackPath(tool, closureStatus),
             safetyClass = tool.safetyClass,
             closureStatus = closureStatus,
+            capabilityLevel = capabilityLevel,
             missingEvidence = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            nextProbe = closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" or "blockedBySafety" or "blockedNeedsHuman" ? "" : nextProbe,
+            nextProbe = nextProbe,
             geminiReview = ""
         };
     }
@@ -3357,6 +3367,28 @@ internal static partial class Program
         return evidence.Contains("workflow run window.button.add-momentary", StringComparison.OrdinalIgnoreCase) ||
                evidence.Contains("window.indicator.add", StringComparison.OrdinalIgnoreCase) ||
                evidence.Contains("workflow run window.static-text.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.input-box.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.animation-button.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.combo-box.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.flow-block.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.percent-fill.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.slider-input.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.knob-input.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.rotating-meter.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.realtime-curve.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.bitmap.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.historical-curve.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.plan-curve.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.alarm-display.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.free-table.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.historical-table.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.saved-data-browser.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.line.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.arc.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.polyline.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.rounded-rect.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.ellipse.add", StringComparison.OrdinalIgnoreCase) ||
+               evidence.Contains("workflow run window.rectangle.add", StringComparison.OrdinalIgnoreCase) ||
                evidence.Contains("mutating workflow save/readback evidence", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -3629,8 +3661,70 @@ internal static partial class Program
             "management" =>
                 "Run a targeted management-command probe on a disposable candidate with before/action/after evidence, normalized project diff, side-effect accounting, and rollback/discard path.",
             _ =>
-               "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after evidence, side effects, normalized diff, and a concrete closure decision."
+                "Run a targeted mcgs tool-probe on a disposable candidate and capture before/action/after evidence, side effects, normalized diff, and a concrete closure decision."
         };
+    }
+
+    private static string InferMcgsToolCapabilityLevel(McgsToolEntry tool, string category, string closureStatus, bool probed, McgsToolProbeEvidence? probe)
+    {
+        if (category == "drawing-create")
+        {
+            if (IsDrawingCreateLayoutIntegrated(tool, closureStatus))
+                return "layoutIntegrated";
+            if (IsDrawingCreateConfigurable(closureStatus, probe))
+                return "configurable";
+            if (closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass")
+                return "drawable";
+            if (probed)
+                return "invokable";
+            return "discovered";
+        }
+
+        if (closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass" || probed)
+            return "invokable";
+
+        return "discovered";
+    }
+
+    private static bool IsDrawingCreateLayoutIntegrated(McgsToolEntry tool, string closureStatus)
+    {
+        if (closureStatus is not ("closedLoopPass" or "readOnlyClosedLoopPass"))
+            return false;
+        if (!tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var evidence = string.Join(" ", tool.evidenceSource, tool.expectedEffect, tool.invocationRoute);
+        return Regex.IsMatch(evidence, @"window\.[a-z0-9\-]+\.add", RegexOptions.IgnoreCase) ||
+               evidence.Contains("window.layout.apply", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDrawingCreateConfigurable(string closureStatus, McgsToolProbeEvidence? probe)
+    {
+        if (closureStatus is not ("closedLoopPass" or "readOnlyClosedLoopPass"))
+            return false;
+        if (probe == null || string.IsNullOrWhiteSpace(probe.Path))
+            return false;
+        var dir = Path.GetDirectoryName(FullPath(probe.Path));
+        if (string.IsNullOrWhiteSpace(dir))
+            return false;
+        return File.Exists(Path.Combine(dir, "property-dialog-closure.json")) ||
+               File.Exists(Path.Combine(dir, "property-readback.json"));
+    }
+
+    private static string NormalizeCapabilityNextProbe(McgsToolEntry tool, string closureStatus, string capabilityLevel, string nextProbe)
+    {
+        if (closureStatus is "blockedBySafety" or "blockedNeedsHuman")
+            return "";
+        if (capabilityLevel == "drawable")
+            return string.IsNullOrWhiteSpace(nextProbe)
+                ? $"L3 drawable only: automate property-dialog readback for {tool.toolId} (L4 configurable), then implement workflow dispatch + layout schema + save/reopen/readback verification (L5 layoutIntegrated)."
+                : nextProbe;
+        if (capabilityLevel == "configurable")
+            return string.IsNullOrWhiteSpace(nextProbe)
+                ? $"L4 configurable only: add workflow dispatch + layout schema + save/reopen/readback verification for {tool.toolId} to reach L5 layoutIntegrated."
+                : nextProbe;
+        if (closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass")
+            return "";
+        return nextProbe;
     }
 
     private static string[] McgsToolBlockedClosureEvidence(McgsToolEntry tool, string closureStatus, string documentedBlockerNextProbe)
@@ -3903,6 +3997,7 @@ internal static partial class Program
         public string closureStatus { get; set; } = "notClosedLoop";
         public string[] missingEvidence { get; set; } = Array.Empty<string>();
         public string closureRecordPath { get; set; } = "";
+        public string capabilityLevel { get; set; } = "discovered";
         public string nextProbe { get; set; } = "";
     }
 
@@ -4209,6 +4304,7 @@ internal static partial class Program
         public string rollbackPath { get; set; } = "";
         public string safetyClass { get; set; } = "";
         public string closureStatus { get; set; } = "notClosedLoop";
+        public string capabilityLevel { get; set; } = "discovered";
         public string[] missingEvidence { get; set; } = Array.Empty<string>();
         public string nextProbe { get; set; } = "";
         public string geminiReview { get; set; } = "";
@@ -4369,6 +4465,182 @@ internal static partial class Program
                 "WM_COMMAND 32907 then canvas drag on a candidate copy",
                 "creates a native static text/label object and verifies label text via property readback",
                 "workflow run window.static-text.add",
+                ""),
+            32936 => new KnownMcgsCommand(
+                "input box drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32936 then canvas drag on a candidate copy",
+                "creates an input-box object and verifies property tabs via property readback",
+                "workflow run window.input-box.add",
+                ""),
+            32939 => new KnownMcgsCommand(
+                "animation button drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32939 then canvas drag on a candidate copy",
+                "creates an animation-button object and verifies property tabs via property readback",
+                "workflow run window.animation-button.add",
+                ""),
+            32956 => new KnownMcgsCommand(
+                "combo box drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32956 then canvas drag on a candidate copy",
+                "creates a combo-box object and verifies property tabs via property readback",
+                "workflow run window.combo-box.add",
+                ""),
+            32937 => new KnownMcgsCommand(
+                "flow block drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32937 then canvas drag on a candidate copy",
+                "creates a flow-block object and verifies property tabs via property readback",
+                "workflow run window.flow-block.add",
+                ""),
+            32948 => new KnownMcgsCommand(
+                "percent-fill drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32948 then canvas drag on a candidate copy",
+                "creates a percent-fill object and verifies property tabs via property readback",
+                "workflow run window.percent-fill.add",
+                ""),
+            32940 => new KnownMcgsCommand(
+                "slider input drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32940 then canvas drag on a candidate copy",
+                "creates a slider-input object and verifies property tabs via property readback",
+                "workflow run window.slider-input.add",
+                ""),
+            32942 => new KnownMcgsCommand(
+                "knob input drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32942 then canvas drag on a candidate copy",
+                "creates a knob-input object and verifies property tabs via property readback",
+                "workflow run window.knob-input.add",
+                ""),
+            32949 => new KnownMcgsCommand(
+                "rotating meter drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32949 then canvas drag on a candidate copy",
+                "creates a rotating-meter object and verifies property tabs via property readback",
+                "workflow run window.rotating-meter.add",
+                ""),
+            32944 => new KnownMcgsCommand(
+                "realtime curve drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32944 then canvas drag on a candidate copy",
+                "creates a realtime-curve object and verifies property tabs via property readback",
+                "workflow run window.realtime-curve.add",
+                ""),
+            32908 => new KnownMcgsCommand(
+                "bitmap drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32908 then canvas drag on a candidate copy",
+                "creates a bitmap object and verifies property tabs via property readback",
+                "workflow run window.bitmap.add",
+                ""),
+            32945 => new KnownMcgsCommand(
+                "historical curve drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32945 then canvas drag on a candidate copy",
+                "creates a historical-curve object and verifies property tabs via property readback",
+                "workflow run window.historical-curve.add",
+                ""),
+            32955 => new KnownMcgsCommand(
+                "plan curve drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32955 then canvas drag on a candidate copy",
+                "creates a plan-curve object and verifies property tabs via property readback",
+                "workflow run window.plan-curve.add",
+                ""),
+            32943 => new KnownMcgsCommand(
+                "alarm display drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32943 then canvas drag on a candidate copy",
+                "creates an alarm-display object and verifies property tabs via property readback",
+                "workflow run window.alarm-display.add",
+                ""),
+            32946 => new KnownMcgsCommand(
+                "free table drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32946 then canvas drag on a candidate copy",
+                "creates a free-table object and verifies property tabs via property readback",
+                "workflow run window.free-table.add",
+                ""),
+            32947 => new KnownMcgsCommand(
+                "historical table drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32947 then canvas drag on a candidate copy",
+                "creates a historical-table object and verifies property tabs via property readback",
+                "workflow run window.historical-table.add",
+                ""),
+            32950 => new KnownMcgsCommand(
+                "saved-data browser drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32950 then canvas drag on a candidate copy",
+                "creates a saved-data-browser object and verifies property tabs via property readback",
+                "workflow run window.saved-data-browser.add",
+                ""),
+            32901 => new KnownMcgsCommand(
+                "line drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32901 then canvas drag on a candidate copy",
+                "creates a line object and verifies style/property tabs via property readback",
+                "workflow run window.line.add",
+                ""),
+            32902 => new KnownMcgsCommand(
+                "arc drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32902 then canvas drag on a candidate copy",
+                "creates an arc object and verifies style/property tabs via property readback",
+                "workflow run window.arc.add",
+                ""),
+            32904 => new KnownMcgsCommand(
+                "rounded-rectangle drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32904 then canvas drag on a candidate copy",
+                "creates a rounded rectangle object and verifies style/property tabs via property readback",
+                "workflow run window.rounded-rect.add",
+                ""),
+            32906 => new KnownMcgsCommand(
+                "polygon/polyline drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32906 then canvas drag on a candidate copy",
+                "creates a polyline object and verifies style/property tabs via property readback",
+                "workflow run window.polyline.add",
+                ""),
+            32905 => new KnownMcgsCommand(
+                "ellipse drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32905 then canvas drag on a candidate copy",
+                "creates an ellipse object and verifies style/property tabs via property readback",
+                "workflow run window.ellipse.add",
+                ""),
+            32903 => new KnownMcgsCommand(
+                "rectangle drawing tool",
+                "implemented",
+                "candidate-safe-mutation",
+                "WM_COMMAND 32903 then canvas drag on a candidate copy",
+                "creates a rectangle object and verifies style/property tabs via property readback",
+                "workflow run window.rectangle.add",
                 ""),
             32938 => new KnownMcgsCommand(
                 "standard button drawing tool",
@@ -5009,6 +5281,28 @@ internal static partial class Program
             "window.button.add-momentary",
             "window.indicator.add",
             "window.static-text.add",
+            "window.input-box.add",
+            "window.animation-button.add",
+            "window.combo-box.add",
+            "window.flow-block.add",
+            "window.percent-fill.add",
+            "window.slider-input.add",
+            "window.knob-input.add",
+            "window.rotating-meter.add",
+            "window.realtime-curve.add",
+            "window.bitmap.add",
+            "window.historical-curve.add",
+            "window.plan-curve.add",
+            "window.alarm-display.add",
+            "window.free-table.add",
+            "window.historical-table.add",
+            "window.saved-data-browser.add",
+            "window.line.add",
+            "window.arc.add",
+            "window.polyline.add",
+            "window.rounded-rect.add",
+            "window.ellipse.add",
+            "window.rectangle.add",
             "window.lamp.add-native",
             "window.layout.apply",
             "device.channel.map",
@@ -5122,6 +5416,28 @@ internal static partial class Program
         "window.button.add-momentary" => "create a momentary control button and verify press/release actions",
         "window.indicator.add" => "create a status-button indicator and verify readback",
         "window.static-text.add" => "create native static text through MCGS GUI",
+        "window.input-box.add" => "create an input-box object and verify property readback",
+        "window.animation-button.add" => "create an animation-button object and verify property readback",
+        "window.combo-box.add" => "create a combo-box object and verify property readback",
+        "window.flow-block.add" => "create a flow-block object and verify property readback",
+        "window.percent-fill.add" => "create a percent-fill object and verify property readback",
+        "window.slider-input.add" => "create a slider-input object and verify property readback",
+        "window.knob-input.add" => "create a knob-input object and verify property readback",
+        "window.rotating-meter.add" => "create a rotating-meter object and verify property readback",
+        "window.realtime-curve.add" => "create a realtime-curve object and verify property readback",
+        "window.bitmap.add" => "create a bitmap object and verify property readback",
+        "window.historical-curve.add" => "create a historical-curve object and verify property readback",
+        "window.plan-curve.add" => "create a plan-curve object and verify property readback",
+        "window.alarm-display.add" => "create an alarm-display object and verify property readback",
+        "window.free-table.add" => "create a free-table object and verify property readback",
+        "window.historical-table.add" => "create a historical-table object and verify property readback",
+        "window.saved-data-browser.add" => "create a saved-data-browser object and verify property readback",
+        "window.line.add" => "create a line drawing object and verify style/property readback",
+        "window.arc.add" => "create an arc drawing object and verify style/property readback",
+        "window.polyline.add" => "create a polyline drawing object and verify style/property readback",
+        "window.rounded-rect.add" => "create a rounded rectangle drawing object and verify style/property readback",
+        "window.ellipse.add" => "create an ellipse drawing object and verify style/property readback",
+        "window.rectangle.add" => "create a rectangle drawing object and verify style/property readback",
         "window.lamp.add-native" => "create a native animation display/lamp component through MCGS GUI",
         "window.layout.apply" => "apply an HMI layout through supported GUI object creation workflows",
         "device.channel.map" => "map Smart200 channel rows and record structured smart200Channels evidence",
@@ -5140,6 +5456,28 @@ internal static partial class Program
         "window.button.add-momentary" => new[] { "project candidate", "text", "variable", "canvas rectangle" },
         "window.indicator.add" => new[] { "project candidate", "text", "expression", "canvas rectangle" },
         "window.static-text.add" => new[] { "project candidate", "text", "canvas rectangle" },
+        "window.input-box.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.animation-button.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.combo-box.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.flow-block.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.percent-fill.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.slider-input.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.knob-input.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.rotating-meter.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.realtime-curve.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.bitmap.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.historical-curve.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.plan-curve.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.alarm-display.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.free-table.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.historical-table.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.saved-data-browser.add" => new[] { "project candidate", "id", "text", "canvas rectangle" },
+        "window.line.add" => new[] { "project candidate", "canvas rectangle", "line-color/line-style commands" },
+        "window.arc.add" => new[] { "project candidate", "canvas rectangle", "line-color/line-style commands" },
+        "window.polyline.add" => new[] { "project candidate", "canvas rectangle", "line-color/line-style commands" },
+        "window.rounded-rect.add" => new[] { "project candidate", "canvas rectangle", "fill/line/line-style commands" },
+        "window.ellipse.add" => new[] { "project candidate", "canvas rectangle", "fill/line/line-style commands" },
+        "window.rectangle.add" => new[] { "project candidate", "canvas rectangle", "fill/line/line-style commands" },
         "window.lamp.add-native" => new[] { "project candidate", "text", "variable/expression", "canvas rectangle" },
         "window.layout.apply" => new[] { "source/project candidate", "layout spec", "workdir" },
         "device.channel.map" => new[] { "source/project candidate", "area", "address", "count", "data-type-index", "connect-base" },
@@ -5177,6 +5515,28 @@ internal static partial class Program
         "window.button.add-momentary" => new[] { "standard-button", "momentary-button" },
         "window.indicator.add" => new[] { "standard-button", "status-button" },
         "window.static-text.add" => new[] { "native-static-text", "section-title", "static-label" },
+        "window.input-box.add" => new[] { "input-box" },
+        "window.animation-button.add" => new[] { "animation-button" },
+        "window.combo-box.add" => new[] { "combo-box" },
+        "window.flow-block.add" => new[] { "flow-block" },
+        "window.percent-fill.add" => new[] { "percent-fill" },
+        "window.slider-input.add" => new[] { "slider-input" },
+        "window.knob-input.add" => new[] { "knob-input" },
+        "window.rotating-meter.add" => new[] { "rotating-meter" },
+        "window.realtime-curve.add" => new[] { "realtime-curve" },
+        "window.bitmap.add" => new[] { "bitmap" },
+        "window.historical-curve.add" => new[] { "historical-curve" },
+        "window.plan-curve.add" => new[] { "plan-curve" },
+        "window.alarm-display.add" => new[] { "alarm-display" },
+        "window.free-table.add" => new[] { "free-table" },
+        "window.historical-table.add" => new[] { "historical-table" },
+        "window.saved-data-browser.add" => new[] { "saved-data-browser" },
+        "window.line.add" => new[] { "line" },
+        "window.arc.add" => new[] { "arc" },
+        "window.polyline.add" => new[] { "polyline" },
+        "window.rounded-rect.add" => new[] { "rounded-rectangle" },
+        "window.ellipse.add" => new[] { "ellipse" },
+        "window.rectangle.add" => new[] { "rectangle" },
         "window.lamp.add-native" => new[] { "native-lamp", "animation-display" },
         "window.layout.apply" => new[] { "layout-supported UI objects" },
         "device.channel.map" => new[] { "Smart200 channel rows", "Data objects" },
@@ -5189,6 +5549,28 @@ internal static partial class Program
         "window.button.add-momentary" => new[] { "button basic/action/script tabs" },
         "window.indicator.add" => new[] { "button basic/visibility/action/script tabs" },
         "window.static-text.add" => new[] { "label/static text property tabs" },
+        "window.input-box.add" => new[] { "input-box basic/style/input format tabs" },
+        "window.animation-button.add" => new[] { "animation-button basic/style/action tabs" },
+        "window.combo-box.add" => new[] { "combo-box basic/style/item tabs" },
+        "window.flow-block.add" => new[] { "flow-block basic/style/data tabs" },
+        "window.percent-fill.add" => new[] { "percent-fill basic/style/data tabs" },
+        "window.slider-input.add" => new[] { "slider-input basic/style/data tabs" },
+        "window.knob-input.add" => new[] { "knob-input basic/style/data tabs" },
+        "window.rotating-meter.add" => new[] { "rotating-meter basic/style/data tabs" },
+        "window.realtime-curve.add" => new[] { "realtime-curve basic/style/data tabs" },
+        "window.bitmap.add" => new[] { "bitmap basic/style/data tabs" },
+        "window.historical-curve.add" => new[] { "historical-curve basic/style/data tabs" },
+        "window.plan-curve.add" => new[] { "plan-curve basic/style/data tabs" },
+        "window.alarm-display.add" => new[] { "alarm-display basic/style/data tabs" },
+        "window.free-table.add" => new[] { "free-table basic/style/data tabs" },
+        "window.historical-table.add" => new[] { "historical-table basic/style/data tabs" },
+        "window.saved-data-browser.add" => new[] { "saved-data-browser basic/style/data tabs" },
+        "window.line.add" => new[] { "shape/style/basic property tabs" },
+        "window.arc.add" => new[] { "shape/style/basic property tabs" },
+        "window.polyline.add" => new[] { "shape/style/basic property tabs" },
+        "window.rounded-rect.add" => new[] { "shape/style/basic property tabs" },
+        "window.ellipse.add" => new[] { "shape/style/basic property tabs" },
+        "window.rectangle.add" => new[] { "shape/style/basic property tabs" },
         "window.lamp.add-native" => new[] { "animation display/lamp property tabs" },
         "window.layout.apply" => new[] { "property dialogs for each object kind in the layout" },
         "script.edit" => new[] { "script editor/check dialog" },
@@ -5200,6 +5582,28 @@ internal static partial class Program
         "window.button.add-momentary" => "reopen candidate, select object, verify label plus press=set1/release=clear0 action pages",
         "window.indicator.add" => "reopen candidate, select object, verify label, visibility expression, no operation, and empty script",
         "window.static-text.add" => "reopen candidate, select native label, verify label text",
+        "window.input-box.add" => "reopen candidate, select input-box object, verify property tabs and readback status",
+        "window.animation-button.add" => "reopen candidate, select animation-button object, verify property tabs and readback status",
+        "window.combo-box.add" => "reopen candidate, select combo-box object, verify property tabs and readback status",
+        "window.flow-block.add" => "reopen candidate, select flow-block object, verify property tabs and readback status",
+        "window.percent-fill.add" => "reopen candidate, select percent-fill object, verify property tabs and readback status",
+        "window.slider-input.add" => "reopen candidate, select slider-input object, verify property tabs and readback status",
+        "window.knob-input.add" => "reopen candidate, select knob-input object, verify property tabs and readback status",
+        "window.rotating-meter.add" => "reopen candidate, select rotating-meter object, verify property tabs and readback status",
+        "window.realtime-curve.add" => "reopen candidate, select realtime-curve object, verify property tabs and readback status",
+        "window.bitmap.add" => "reopen candidate, select bitmap object, verify property tabs and readback status",
+        "window.historical-curve.add" => "reopen candidate, select historical-curve object, verify property tabs and readback status",
+        "window.plan-curve.add" => "reopen candidate, select plan-curve object, verify property tabs and readback status",
+        "window.alarm-display.add" => "reopen candidate, select alarm-display object, verify property tabs and readback status",
+        "window.free-table.add" => "reopen candidate, select free-table object, verify property tabs and readback status",
+        "window.historical-table.add" => "reopen candidate, select historical-table object, verify property tabs and readback status",
+        "window.saved-data-browser.add" => "reopen candidate, select saved-data-browser object, verify property tabs and readback status",
+        "window.line.add" => "reopen candidate, select line object, verify style command effects and property tabs",
+        "window.arc.add" => "reopen candidate, select arc object, verify style command effects and property tabs",
+        "window.polyline.add" => "reopen candidate, select polyline object, verify style command effects and property tabs",
+        "window.rounded-rect.add" => "reopen candidate, select rounded rectangle object, verify style command effects and property tabs",
+        "window.ellipse.add" => "reopen candidate, select ellipse object, verify style command effects and property tabs",
+        "window.rectangle.add" => "reopen candidate, select rectangle object, verify style command effects and property tabs",
         "window.lamp.add-native" => "reopen candidate, select native animation display, verify text and display variable",
         "window.layout.apply" => "layout readback plus per-object workflow/readback evidence",
         "device.channel.map" => "reopen Smart200 table and compare smart200Channels with safety spec",

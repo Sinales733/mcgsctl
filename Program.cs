@@ -14,9 +14,32 @@ internal static partial class Program
 {
     private const uint SaveCommandId = 57603;
     private const uint CheckCommandId = 32786;
+    private const uint InputBoxCommandId = 32936;
+    private const uint AnimationButtonCommandId = 32939;
+    private const uint ComboBoxCommandId = 32956;
+    private const uint FlowBlockCommandId = 32937;
+    private const uint PercentFillCommandId = 32948;
+    private const uint SliderInputCommandId = 32940;
+    private const uint KnobInputCommandId = 32942;
+    private const uint RotatingMeterCommandId = 32949;
+    private const uint RealtimeCurveCommandId = 32944;
+    private const uint HistoricalCurveCommandId = 32945;
+    private const uint BitmapCommandId = 32908;
+    private const uint PlanCurveCommandId = 32955;
+    private const uint AlarmDisplayCommandId = 32943;
+    private const uint FreeTableCommandId = 32946;
+    private const uint HistoricalTableCommandId = 32947;
+    private const uint SavedDataBrowserCommandId = 32950;
+    private const uint ArcCommandId = 32902;
+    private const uint PolylineCommandId = 32906;
+    private const uint LineCommandId = 32901;
+    private const uint RoundedRectangleCommandId = 32904;
+    private const uint RectangleCommandId = 32903;
+    private const uint EllipseCommandId = 32905;
     private const uint NativeStaticTextCommandId = 32907;
     private const uint NativeLampCommandId = 32941;
     private const string AnimationEditButtonText = "\u52a8\u753b\u7ec4\u6001";
+    private const string NewWindowButtonText = "\u65b0\u5efa\u7a97\u53e3";
     private const string NativeStaticTextDialogTitle = "\u6807\u7b7e\u52a8\u753b\u7ec4\u6001\u5c5e\u6027\u8bbe\u7f6e";
     private const string NativeLampDialogTitle = "\u52a8\u753b\u663e\u793a\u6784\u4ef6\u5c5e\u6027\u8bbe\u7f6e";
     private const string ProcessName = "McgsSetE";
@@ -168,10 +191,33 @@ Commands:
   mcgsctl workflow run project.apply-candidate --source <official.mce> --candidate <candidate.mce> --approval <approval.json>
   mcgsctl workflow run project.rollback --rollback <rollbackDir> --target <official.mce>
   mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
+  mcgsctl workflow run user-window.add (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
   mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.static-text.add (--source <mce>|--project <copy.mce>) --text <label> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run window.lamp.add-native (--source <mce>|--project <copy.mce>) --text <label> --expression <expr> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.line.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--line-style-command <id>]
+  mcgsctl workflow run window.input-box.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.animation-button.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.combo-box.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.flow-block.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.percent-fill.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.slider-input.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.knob-input.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.rotating-meter.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.realtime-curve.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.historical-curve.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.bitmap.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.plan-curve.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.alarm-display.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.free-table.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.historical-table.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.saved-data-browser.add (--source <mce>|--project <copy.mce>) [--id <id>] [--text <label>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
+  mcgsctl workflow run window.arc.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--line-style-command <id>]
+  mcgsctl workflow run window.polyline.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--line-style-command <id>]
+  mcgsctl workflow run window.rounded-rect.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--fill-color-command <id>] [--line-style-command <id>]
+  mcgsctl workflow run window.ellipse.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--fill-color-command <id>] [--line-style-command <id>]
+  mcgsctl workflow run window.rectangle.add (--source <mce>|--project <copy.mce>) [--id <id>] [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>] [--line-color-command <id>] [--fill-color-command <id>] [--line-style-command <id>]
   mcgsctl workflow run window.button.add-momentary (--source <mce>|--project <copy.mce>) --text <label> --variable <name> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
   mcgsctl workflow run device.channel.map (--source <mce>|--project <copy.mce>) --area V --address 603 --count 4 [--data-type-index <n>] [--connect-base <name>] [--expected-channel <text>]
   mcgsctl workflow run script.edit (--source <mce>|--project <copy.mce>) (--text <script>|--file <txt>) [--event down|up] [--button-text <label>] [--verify-token <text>] [--allow-create-dataobjects]
@@ -1058,6 +1104,11 @@ Commands:
             return WorkflowLayoutApply(args);
         }
 
+        if (name.Equals("user-window.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowUserWindowAdd(args);
+        }
+
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowAddMomentaryButton(args);
@@ -1071,6 +1122,116 @@ Commands:
         if (name.Equals("window.lamp.add-native", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowNativeLampAdd(args);
+        }
+
+        if (name.Equals("window.line.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowLineAdd(args);
+        }
+
+        if (name.Equals("window.input-box.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowInputBoxAdd(args);
+        }
+
+        if (name.Equals("window.animation-button.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowAnimationButtonAdd(args);
+        }
+
+        if (name.Equals("window.combo-box.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowComboBoxAdd(args);
+        }
+
+        if (name.Equals("window.flow-block.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowFlowBlockAdd(args);
+        }
+
+        if (name.Equals("window.percent-fill.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowPercentFillAdd(args);
+        }
+
+        if (name.Equals("window.slider-input.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowSliderInputAdd(args);
+        }
+
+        if (name.Equals("window.knob-input.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowKnobInputAdd(args);
+        }
+
+        if (name.Equals("window.rotating-meter.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowRotatingMeterAdd(args);
+        }
+
+        if (name.Equals("window.realtime-curve.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowRealtimeCurveAdd(args);
+        }
+
+        if (name.Equals("window.historical-curve.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowHistoricalCurveAdd(args);
+        }
+
+        if (name.Equals("window.bitmap.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowBitmapAdd(args);
+        }
+
+        if (name.Equals("window.plan-curve.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowPlanCurveAdd(args);
+        }
+
+        if (name.Equals("window.alarm-display.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowAlarmDisplayAdd(args);
+        }
+
+        if (name.Equals("window.free-table.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowFreeTableAdd(args);
+        }
+
+        if (name.Equals("window.historical-table.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowHistoricalTableAdd(args);
+        }
+
+        if (name.Equals("window.saved-data-browser.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowSavedDataBrowserAdd(args);
+        }
+
+        if (name.Equals("window.arc.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowArcAdd(args);
+        }
+
+        if (name.Equals("window.polyline.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowPolylineAdd(args);
+        }
+
+        if (name.Equals("window.rounded-rect.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowRoundedRectangleAdd(args);
+        }
+
+        if (name.Equals("window.ellipse.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowEllipseAdd(args);
+        }
+
+        if (name.Equals("window.rectangle.add", StringComparison.OrdinalIgnoreCase))
+        {
+            return WorkflowRectangleAdd(args);
         }
 
         if (name.Equals("realtime-db.add", StringComparison.OrdinalIgnoreCase))
@@ -1686,6 +1847,172 @@ Commands:
         return match.Handle;
     }
 
+    private static int WorkflowUserWindowAdd(string[] args)
+    {
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "user-window-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "user-window.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            UiAutomation.SendCommand(main, 33955);
+            Thread.Sleep(700);
+
+            var userList = FindListViewByItemCount(main, 3);
+            var beforeWindows = UiAutomation.ListViewItems(userList)
+                .Select(item => new { item.Index, item.Texts })
+                .ToArray();
+            var beforeCount = beforeWindows.Length;
+
+            if (!ClickButtonByNormalizedText(main, mouse: true, NewWindowButtonText))
+                throw new InvalidOperationException("New window button was not found.");
+
+            var until = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+            ListViewItemInfo[] afterItems;
+            do
+            {
+                Thread.Sleep(300);
+                afterItems = UiAutomation.ListViewItems(userList);
+                if (afterItems.Length > beforeCount) break;
+            } while (DateTime.UtcNow < until);
+
+            if (afterItems.Length <= beforeCount)
+                throw new InvalidOperationException($"User-window count did not increase after clicking New Window. Before={beforeCount}, after={afterItems.Length}.");
+
+            var beforeKeys = beforeWindows
+                .Select(item => string.Join("\u001f", item.Texts))
+                .ToHashSet(StringComparer.Ordinal);
+            var createdItem = afterItems.FirstOrDefault(item =>
+                !beforeKeys.Contains(string.Join("\u001f", item.Texts)));
+            var createdIndex = createdItem?.Index ?? afterItems.Length - 1;
+            UiAutomation.ListViewSelectIndex(userList, createdIndex);
+            Thread.Sleep(250);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-new-window"));
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var reopenWindowCount = ReopenUserWindowListCount(project, editor, outDir,
+                TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            var countIncreased = afterItems.Length > beforeCount &&
+                                 reopenWindowCount == afterItems.Length;
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    beforeListCount = beforeCount,
+                    afterListCount = afterItems.Length,
+                    createdIndex,
+                    reopenWindowCount,
+                    beforeWindows,
+                    afterWindows = afterItems.Select(item => new { item.Index, item.Texts }).ToArray(),
+                    countIncreased
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            success = countIncreased;
+            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
+            {
+                afterItems.Length > beforeCount
+                    ? RequiredPass("user-window-list-count", $"{beforeCount}->{afterItems.Length}")
+                    : RequiredFail("user-window-list-count", "The user-window list did not gain a row."),
+                reopenWindowCount == afterItems.Length
+                    ? RequiredPass("reopen-user-window-count", reopenWindowCount.ToString())
+                    : RequiredFail("reopen-user-window-count", $"Reopen count {reopenWindowCount} did not match saved count {afterItems.Length}.")
+            }, extra: new Dictionary<string, object?>
+            {
+                ["createdUserWindowIndex"] = createdIndex,
+                ["createdUiObjects"] = Array.Empty<object>(),
+                ["touchedDataObjects"] = Array.Empty<string>(),
+                ["createdDataObjects"] = Array.Empty<string>(),
+                ["modifiedDataObjects"] = Array.Empty<string>()
+            });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("user window add evidence: " + outDir);
+            Console.WriteLine(success
+                ? "user window add verification: PASS"
+                : "user window add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int ReopenUserWindowListCount(string project, string editor, string outDir, TimeSpan timeout)
+    {
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared during reopen verification.");
+
+            UiAutomation.SendCommand(main, 33955);
+            Thread.Sleep(700);
+            var userList = FindListViewByItemCount(main, 4);
+            var items = UiAutomation.ListViewItems(userList);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-user-window-list"));
+            return items.Length;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
     private static int WorkflowAddMomentaryButton(string[] args)
     {
         var label = Required(args, "--text");
@@ -1709,9 +2036,6 @@ Commands:
         try
         {
             var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
-            if (beforeLabelCount > 0)
-                throw new InvalidOperationException("Button label already exists in MCE blobs before workflow: " + label);
 
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
@@ -1783,7 +2107,7 @@ Commands:
             main = IntPtr.Zero;
             var propertyReadbackVerified = ReopenVerifyMomentaryButton(project, editor, label, variable, windowIndex,
                 x, y, width, height, outDir, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)), afterSnapshot,
-                out var reopenVerified);
+                out var reopenTokenVerified, out var labelReadbackVerified);
             File.WriteAllText(Path.Combine(outDir, "result.json"),
                 JsonSerializer.Serialize(new
                 {
@@ -1797,19 +2121,19 @@ Commands:
                     variableIncreased,
                     variableFound,
                     propertyReadbackVerified,
-                    reopenVerified
+                    labelReadbackVerified,
+                    reopenTokenVerified
                 }, JsonOptions()),
                 Encoding.UTF8);
 
-            success = labelFound && variableFound && propertyReadbackVerified && reopenVerified;
+            success = labelReadbackVerified && variableFound && propertyReadbackVerified;
             WriteMutatingWorkflowResult(workflowProject, outDir, new[]
             {
-                labelFound ? RequiredPass("button-label-token", label) : RequiredFail("button-label-token", "Button label was not found in MCE evidence."),
+                labelReadbackVerified ? RequiredPass("button-label-readback", label) : RequiredFail("button-label-readback", "Reopened button text did not match expected label."),
                 variableFound ? RequiredPass("button-variable-token", variable) : RequiredFail("button-variable-token", "Variable token was not found in MCE evidence."),
                 propertyReadbackVerified
                     ? RequiredPass("momentary-press-release:" + variable, "press=set1, release=clear0")
-                    : RequiredFail("momentary-press-release:" + variable, "Momentary press/release property readback failed."),
-                reopenVerified ? RequiredPass("reopen-readback", label) : RequiredFail("reopen-readback", "Reopen readback failed.")
+                    : RequiredFail("momentary-press-release:" + variable, "Momentary press/release property readback failed.")
             }, extra: new Dictionary<string, object?>
             {
                 ["createdUiObjects"] = new[]
@@ -1820,7 +2144,7 @@ Commands:
                         text = label,
                         variable,
                         rect = new { x, y, width, height },
-                        readback = propertyReadbackVerified && reopenVerified ? "PASS" : "UNKNOWN"
+                        readback = propertyReadbackVerified && labelReadbackVerified ? "PASS" : "UNKNOWN"
                     }
                 },
                 ["touchedDataObjects"] = new[] { variable },
@@ -1912,7 +2236,7 @@ Commands:
             : BuildExpectedChannelTexts(access, area, address, count, dataTypeIndex);
         var expectedVariables = string.IsNullOrWhiteSpace(connectBase)
             ? Array.Empty<string>()
-            : BuildExpectedQuickConnectVariables(connectBase, count);
+            : BuildExpectedQuickConnectVariables(connectBase, count, dataTypeIndex);
         var allowExistingVariables = Has(args, "--allow-existing-variables");
         var allowExistingChannels = Has(args, "--allow-existing-channels");
 
@@ -2201,9 +2525,6 @@ Commands:
         try
         {
             var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
-            if (beforeLabelCount > 0)
-                throw new InvalidOperationException("Indicator label already exists in MCE blobs before workflow: " + label);
 
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
@@ -2386,9 +2707,6 @@ Commands:
         try
         {
             var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
-            if (beforeLabelCount > 0)
-                throw new InvalidOperationException("Native static text label already exists in MCE blobs before workflow: " + label);
 
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
@@ -2523,9 +2841,6 @@ Commands:
         try
         {
             var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
-            if (beforeLabelCount > 0)
-                throw new InvalidOperationException("Native lamp label already exists in MCE blobs before workflow: " + label);
 
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
@@ -2642,6 +2957,3587 @@ Commands:
         }
     }
 
+    private static int WorkflowLineAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("line-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 70);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "line-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.line.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)LineCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "line");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, LineCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    line = new { x1 = x, y1 = y, x2 = x + width, y2 = y + height },
+                    styleCommands = new
+                    {
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("line-class-delta", "CDrawLine count increased")
+                    : RequiredFail("line-class-delta", "CDrawLine class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("line-style-actions", "line color and line-style actions applied")
+                    : RequiredFail("line-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("line-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("line-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "line property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "line",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "line add verification: PASS"
+                : "line add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowInputBoxAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("input-box-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "input-box-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.input-box.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)InputBoxCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "input-box");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, InputBoxCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    inputBox = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("input-box-class-delta", "CDrawEdit count increased")
+                    : RequiredFail("input-box-class-delta", "CDrawEdit class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("input-box-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("input-box-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "input-box property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "input-box",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "input-box add verification: PASS"
+                : "input-box add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowAnimationButtonAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("animation-button-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "animation-button-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.animation-button.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)AnimationButtonCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "animation-button");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, AnimationButtonCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    animationButton = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("animation-button-class-delta", "CDrawMulBtn count increased")
+                    : RequiredFail("animation-button-class-delta", "CDrawMulBtn class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("animation-button-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("animation-button-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "animation-button property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "animation-button",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "animation-button add verification: PASS"
+                : "animation-button add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowComboBoxAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("combo-box-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "combo-box-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.combo-box.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)ComboBoxCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "combo-box");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, ComboBoxCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    comboBox = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("combo-box-class-delta", "CDrawComboBox count increased")
+                    : RequiredFail("combo-box-class-delta", "CDrawComboBox class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("combo-box-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("combo-box-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "combo-box property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "combo-box",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "combo-box add verification: PASS"
+                : "combo-box add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowFlowBlockAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("flow-block-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "flow-block-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.flow-block.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)FlowBlockCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "flow-block");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, FlowBlockCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    flowBlock = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("flow-block-class-delta", "CDrawFlow count increased")
+                    : RequiredFail("flow-block-class-delta", "CDrawFlow class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("flow-block-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("flow-block-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "flow-block property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "flow-block",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "flow-block add verification: PASS"
+                : "flow-block add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowPercentFillAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("percent-fill-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "percent-fill-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.percent-fill.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)PercentFillCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "percent-fill");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, PercentFillCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    percentFill = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("percent-fill-class-delta", "CDrawRate count increased")
+                    : RequiredFail("percent-fill-class-delta", "CDrawRate class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("percent-fill-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("percent-fill-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "percent-fill property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "percent-fill",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "percent-fill add verification: PASS"
+                : "percent-fill add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowSliderInputAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("slider-input-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "slider-input-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.slider-input.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)SliderInputCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "slider-input");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, SliderInputCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    sliderInput = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("slider-input-class-delta", "CDrawSlider count increased")
+                    : RequiredFail("slider-input-class-delta", "CDrawSlider class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("slider-input-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("slider-input-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "slider-input property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "slider-input",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "slider-input add verification: PASS"
+                : "slider-input add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowKnobInputAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("knob-input-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "knob-input-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.knob-input.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)KnobInputCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "knob-input");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, KnobInputCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    knobInput = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("knob-input-class-delta", "CDrawKnob count increased")
+                    : RequiredFail("knob-input-class-delta", "CDrawKnob class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("knob-input-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("knob-input-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "knob-input property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "knob-input",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "knob-input add verification: PASS"
+                : "knob-input add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowRotatingMeterAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("rotating-meter-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "rotating-meter-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.rotating-meter.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)RotatingMeterCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "rotating-meter");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, RotatingMeterCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    rotatingMeter = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("rotating-meter-class-delta", "CDrawRotateTbl count increased")
+                    : RequiredFail("rotating-meter-class-delta", "CDrawRotateTbl class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("rotating-meter-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("rotating-meter-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "rotating-meter property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "rotating-meter",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "rotating-meter add verification: PASS"
+                : "rotating-meter add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowRealtimeCurveAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("realtime-curve-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "realtime-curve-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.realtime-curve.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)RealtimeCurveCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "realtime-curve");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, RealtimeCurveCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    realtimeCurve = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("realtime-curve-class-delta", "CDrawPic count increased")
+                    : RequiredFail("realtime-curve-class-delta", "CDrawPic class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("realtime-curve-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("realtime-curve-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "realtime-curve property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "realtime-curve",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "realtime-curve add verification: PASS"
+                : "realtime-curve add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowHistoricalCurveAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("historical-curve-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 140);
+        var height = ParseInt(args, "--height", 45);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "historical-curve-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.historical-curve.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)HistoricalCurveCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "historical-curve");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, HistoricalCurveCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    historicalCurve = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("historical-curve-class-delta", "CDrawHisPic count increased")
+                    : RequiredFail("historical-curve-class-delta", "CDrawHisPic class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass("historical-curve-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("historical-curve-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "historical-curve property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "historical-curve",
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "historical-curve add verification: PASS"
+                : "historical-curve add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowDataDisplayLikeAdd(
+        string[] args,
+        string kind,
+        string workflowName,
+        uint commandId,
+        int defaultWidth = 140,
+        int defaultHeight = 45)
+    {
+        var objectId = Opt(args, "--id") ?? (kind + "-" + Timestamp());
+        var text = Opt(args, "--text") ?? "";
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", defaultWidth);
+        var height = ParseInt(args, "--height", defaultHeight);
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", kind + "-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, workflowName, outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)commandId);
+            var expectedClassLabel = expectedClasses.Length > 0
+                ? string.Join("/", expectedClasses)
+                : $"command {commandId}";
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, kind);
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, commandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    kind,
+                    text,
+                    semanticObjectId,
+                    windowIndex,
+                    rect = new { x, y, width, height },
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass(kind + "-class-delta", expectedClassLabel + " count increased")
+                    : RequiredFail(kind + "-class-delta", expectedClassLabel + " class-delta was not observed in blob_geometry evidence."),
+                readbackVerified
+                    ? RequiredPass(kind + "-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown(kind + "-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { kind + " property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind,
+                            text,
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? kind + " add verification: PASS"
+                : kind + " add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowPlanCurveAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "plan-curve", "window.plan-curve.add", PlanCurveCommandId);
+
+    private static int WorkflowBitmapAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "bitmap", "window.bitmap.add", BitmapCommandId, 180, 120);
+
+    private static int WorkflowAlarmDisplayAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "alarm-display", "window.alarm-display.add", AlarmDisplayCommandId);
+
+    private static int WorkflowFreeTableAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "free-table", "window.free-table.add", FreeTableCommandId, 180, 90);
+
+    private static int WorkflowHistoricalTableAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "historical-table", "window.historical-table.add", HistoricalTableCommandId, 180, 90);
+
+    private static int WorkflowSavedDataBrowserAdd(string[] args)
+        => WorkflowDataDisplayLikeAdd(args, "saved-data-browser", "window.saved-data-browser.add", SavedDataBrowserCommandId, 180, 90);
+
+    private static int WorkflowPolylineAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("polyline-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 70);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "polyline-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.polyline.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)PolylineCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "polyline");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, PolylineCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    polyline = new { x, y, width, height },
+                    styleCommands = new
+                    {
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("polyline-class-delta", "CDrawPoly/CDrawPolyLine count increased")
+                    : RequiredFail("polyline-class-delta", "polyline class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("polyline-style-actions", "line color and line-style actions applied")
+                    : RequiredFail("polyline-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("polyline-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("polyline-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "polyline property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "polyline",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "polyline add verification: PASS"
+                : "polyline add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowArcAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("arc-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 70);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "arc-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.arc.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)ArcCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "arc");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, ArcCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    arc = new { x, y, width, height },
+                    styleCommands = new
+                    {
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("arc-class-delta", "CDrawArc count increased")
+                    : RequiredFail("arc-class-delta", "CDrawArc class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("arc-style-actions", "line color and line-style actions applied")
+                    : RequiredFail("arc-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("arc-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("arc-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "arc property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "arc",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "arc add verification: PASS"
+                : "arc add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowRoundedRectangleAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("rounded-rect-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 70);
+        var fillColorCommand = ParseInt(args, "--fill-color-command", 32827);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipFillColor = Has(args, "--skip-fill-color");
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "rounded-rect-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.rounded-rect.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)RoundedRectangleCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "rounded-rect");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, RoundedRectangleCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipFillColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, fillColorCommand, "fill-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("fill-color command " + fillColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    roundedRectangle = new { x, y, width, height },
+                    styleCommands = new
+                    {
+                        fillColorCommand = skipFillColor ? (int?)null : fillColorCommand,
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("rounded-rect-class-delta", "CDrawRoundRect count increased")
+                    : RequiredFail("rounded-rect-class-delta", "CDrawRoundRect class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("rounded-rect-style-actions", "fill/line color and line-style actions applied")
+                    : RequiredFail("rounded-rect-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("rounded-rect-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("rounded-rect-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "rounded-rect property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "rounded-rectangle",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "rounded-rect add verification: PASS"
+                : "rounded-rect add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowEllipseAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("ellipse-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 10);
+        var y = ParseInt(args, "--y", 370);
+        var width = ParseInt(args, "--width", 120);
+        var height = ParseInt(args, "--height", 70);
+        var fillColorCommand = ParseInt(args, "--fill-color-command", 32827);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipFillColor = Has(args, "--skip-fill-color");
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "ellipse-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.ellipse.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)EllipseCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "ellipse");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, EllipseCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipFillColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, fillColorCommand, "fill-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("fill-color command " + fillColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    ellipse = new { x, y, width, height },
+                    styleCommands = new
+                    {
+                        fillColorCommand = skipFillColor ? (int?)null : fillColorCommand,
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("ellipse-class-delta", "CDrawEllipse count increased")
+                    : RequiredFail("ellipse-class-delta", "CDrawEllipse class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("ellipse-style-actions", "fill/line color and line-style actions applied")
+                    : RequiredFail("ellipse-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("ellipse-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("ellipse-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "ellipse property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "ellipse",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "ellipse add verification: PASS"
+                : "ellipse add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static int WorkflowRectangleAdd(string[] args)
+    {
+        var objectId = Opt(args, "--id") ?? ("rect-" + Timestamp());
+        var windowIndex = ParseInt(args, "--window-index", 2);
+        var x = ParseInt(args, "--x", 610);
+        var y = ParseInt(args, "--y", 320);
+        var width = ParseInt(args, "--width", 150);
+        var height = ParseInt(args, "--height", 90);
+        var fillColorCommand = ParseInt(args, "--fill-color-command", 32827);
+        var lineColorCommand = ParseInt(args, "--line-color-command", 32828);
+        var lineStyleCommand = ParseInt(args, "--line-style-command", 33000);
+        var skipFillColor = Has(args, "--skip-fill-color");
+        var skipLineColor = Has(args, "--skip-line-color");
+        var skipLineStyle = Has(args, "--skip-line-style");
+        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "rectangle-add-" + Timestamp()));
+        Directory.CreateDirectory(outDir);
+        var workflowProject = PrepareWorkflowProject(args, "window.rectangle.add", outDir);
+        var project = workflowProject.Project;
+
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        Process? process = null;
+        IntPtr main = IntPtr.Zero;
+        var saved = false;
+        var success = false;
+
+        var styleActions = new List<object>();
+        var styleErrors = new List<string>();
+        var semanticMapPath = "";
+        var semanticObjectId = objectId;
+        var propertyReadbackPath = "";
+        var propertyReadbackStatus = "UNKNOWN";
+        var propertyReadbackSelectionVerified = false;
+        var propertyReadbackTabCount = 0;
+        var classDelta = false;
+
+        try
+        {
+            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
+            var expectedClasses = ExpectedDrawingCreateClasses((int)RectangleCommandId);
+            var beforeClassCounts = CountBlobGeometryClasses(Path.Combine(beforeSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            });
+            if (process == null) return Fail("Failed to open editor.");
+            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
+
+            OpenAnimationConfiguration(process.Id, main, windowIndex, "rectangle");
+            var canvas = FindCanvas(main);
+            UiAutomation.SendCommand(main, RectangleCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
+            Thread.Sleep(600);
+            UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(350);
+
+            if (!skipFillColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, fillColorCommand, "fill-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("fill-color command " + fillColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineColor)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineColorCommand, "line-color", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-color command " + lineColorCommand + " failed: " + error);
+            }
+
+            if (!skipLineStyle)
+            {
+                if (TryApplyRectangleStyleAction(args, main, process.Id, outDir, lineStyleCommand, "line-style", out var action, out var error))
+                    styleActions.Add(action!);
+                else
+                    styleErrors.Add("line-style command " + lineStyleCommand + " failed: " + error);
+            }
+
+            UiAutomation.SendCommand(main, SaveCommandId);
+            Thread.Sleep(2000);
+            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-save"));
+            var afterSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
+            var afterClassCounts = CountBlobGeometryClasses(Path.Combine(afterSnapshot.ExportDir, "blob_geometry.json"), expectedClasses);
+            classDelta = expectedClasses.Any(cls => afterClassCounts.GetValueOrDefault(cls) > beforeClassCounts.GetValueOrDefault(cls));
+            saved = true;
+            CloseEditorProcess(process.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+
+            var semanticProbeOut = Path.Combine(outDir, "semantic-map");
+            Directory.CreateDirectory(semanticProbeOut);
+            var semanticArgs = new[]
+            {
+                "--project", project,
+                "--out", semanticProbeOut
+            };
+            CanvasSemanticMapProbe(semanticArgs);
+            semanticMapPath = Path.Combine(semanticProbeOut, "semantic-map.json");
+
+            if (File.Exists(semanticMapPath))
+            {
+                using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMapPath, Encoding.UTF8));
+                var explicitObj = FindSemanticMapObject(semanticDoc.RootElement, objectId);
+                if (explicitObj.ValueKind == JsonValueKind.Undefined)
+                    semanticObjectId = ResolveClosestSemanticObjectId(semanticDoc.RootElement, x, y, width, height, objectId);
+                else
+                    semanticObjectId = objectId;
+            }
+
+            var propertyReadbackOut = Path.Combine(outDir, "property-readback");
+            Directory.CreateDirectory(propertyReadbackOut);
+            var readbackArgs = new[]
+            {
+                "--project", project,
+                "--semantic-map", semanticMapPath,
+                "--object-id", semanticObjectId,
+                "--out", propertyReadbackOut,
+                "--probe-font"
+            };
+            CanvasPropertyReadback(readbackArgs);
+            propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
+            if (File.Exists(propertyReadbackPath))
+            {
+                using var readbackDoc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = readbackDoc.RootElement;
+                propertyReadbackStatus = JsonStringAny(root, "status", "Status") ?? "UNKNOWN";
+                propertyReadbackSelectionVerified = JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true;
+                var tabs = root.TryGetProperty("tabs", out var lowerTabs) ? lowerTabs :
+                           root.TryGetProperty("Tabs", out var upperTabs) ? upperTabs : default;
+                if (tabs.ValueKind == JsonValueKind.Array)
+                    propertyReadbackTabCount = tabs.GetArrayLength();
+            }
+
+            File.WriteAllText(Path.Combine(outDir, "result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    project,
+                    objectId,
+                    semanticObjectId,
+                    windowIndex,
+                    rectangle = new { x, y, width, height },
+                    styleCommands = new
+                    {
+                        fillColorCommand = skipFillColor ? (int?)null : fillColorCommand,
+                        lineColorCommand = skipLineColor ? (int?)null : lineColorCommand,
+                        lineStyleCommand = skipLineStyle ? (int?)null : lineStyleCommand
+                    },
+                    styleActions,
+                    styleErrors,
+                    expectedClasses,
+                    classDelta,
+                    semanticMapPath,
+                    propertyReadbackPath,
+                    propertyReadbackStatus,
+                    propertyReadbackSelectionVerified,
+                    propertyReadbackTabCount
+                }, JsonOptions()),
+                Encoding.UTF8);
+
+            var styleChecksPass = styleErrors.Count == 0;
+            var readbackVerified = propertyReadbackStatus.Equals("PASS", StringComparison.OrdinalIgnoreCase) &&
+                                   propertyReadbackSelectionVerified &&
+                                   propertyReadbackTabCount > 0;
+            success = classDelta && styleChecksPass && readbackVerified;
+
+            var checks = new List<ResultCheck>
+            {
+                classDelta
+                    ? RequiredPass("rectangle-class-delta", "CDrawRect count increased")
+                    : RequiredFail("rectangle-class-delta", "CDrawRect class-delta was not observed in blob_geometry evidence."),
+                styleChecksPass
+                    ? RequiredPass("rectangle-style-actions", "fill/line color and line-style actions applied")
+                    : RequiredFail("rectangle-style-actions", string.Join(" | ", styleErrors)),
+                readbackVerified
+                    ? RequiredPass("rectangle-property-readback", "property dialog tabs captured after reopen selection")
+                    : RequiredUnknown("rectangle-property-readback", "Property readback is incomplete. See property-readback evidence.")
+            };
+
+            WriteMutatingWorkflowResult(workflowProject, outDir, checks,
+                readbackVerified ? Array.Empty<string>() : new[] { "rectangle property readback did not satisfy PASS/selectionVerified/tab-count checks" },
+                new Dictionary<string, object?>
+                {
+                    ["createdUiObjects"] = new[]
+                    {
+                        new
+                        {
+                            id = objectId,
+                            kind = "rectangle",
+                            text = "",
+                            rect = new { x, y, width, height },
+                            readback = readbackVerified ? "PASS" : "UNKNOWN"
+                        }
+                    },
+                    ["touchedDataObjects"] = Array.Empty<string>(),
+                    ["createdDataObjects"] = Array.Empty<string>(),
+                    ["modifiedDataObjects"] = Array.Empty<string>(),
+                    ["controlEvidence"] = Array.Empty<object>(),
+                    ["semanticObjectId"] = semanticObjectId,
+                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                });
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.WriteLine("workflow evidence: " + outDir);
+            Console.WriteLine(success
+                ? "rectangle add verification: PASS"
+                : "rectangle add verification: CHECK EVIDENCE");
+            return success ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            if (process != null)
+            {
+                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
+            }
+            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
+            Console.Error.WriteLine("workflow failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saved); } catch { }
+            }
+        }
+    }
+
+    private static bool TryApplyRectangleStyleAction(string[] args, IntPtr main, int pid, string outDir,
+        int commandId, string stage, out object? evidence, out string error)
+    {
+        evidence = null;
+        error = "";
+        try
+        {
+            UiAutomation.SendCommand(main, (uint)commandId);
+            Thread.Sleep(350);
+            var stageOut = Path.Combine(outDir, "style-" + SafeFile(stage));
+            Directory.CreateDirectory(stageOut);
+            evidence = commandId == 33000
+                ? ApplyLineStylePopupAction(args, stageOut, pid, commandId)
+                : ApplyColorPaletteAction(args, stageOut, pid, commandId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            evidence = new
+            {
+                schemaVersion = 1,
+                status = "FAIL",
+                stage,
+                commandId,
+                error = ex.Message
+            };
+            return false;
+        }
+    }
+
+    private static string ResolveClosestSemanticObjectId(JsonElement semanticRoot,
+        int x, int y, int width, int height, string fallback)
+    {
+        var objects = semanticRoot.TryGetProperty("Objects", out var upperObjects) ? upperObjects :
+                      semanticRoot.TryGetProperty("objects", out var lowerObjects) ? lowerObjects : default;
+        if (objects.ValueKind != JsonValueKind.Array)
+            return fallback;
+
+        var bestId = fallback;
+        var bestScore = long.MaxValue;
+        foreach (var obj in objects.EnumerateArray())
+        {
+            var id = JsonStringAny(obj, "Id", "id");
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+            var rect = obj.TryGetProperty("Rect", out var upperRect) ? upperRect :
+                       obj.TryGetProperty("rect", out var lowerRect) ? lowerRect : default;
+            if (rect.ValueKind != JsonValueKind.Object)
+                continue;
+            var ox = LayoutJsonIntAny(rect, "X", "x");
+            var oy = LayoutJsonIntAny(rect, "Y", "y");
+            var ow = LayoutJsonIntAny(rect, "Width", "width");
+            var oh = LayoutJsonIntAny(rect, "Height", "height");
+            if (ox == null || oy == null || ow == null || oh == null)
+                continue;
+            var score = Math.Abs(ox.Value - x) +
+                        Math.Abs(oy.Value - y) +
+                        Math.Abs(ow.Value - width) +
+                        Math.Abs(oh.Value - height);
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestId = id!;
+            }
+        }
+
+        return bestId;
+    }
+
     private static int WorkflowScriptEdit(string[] args)
     {
         var script = Opt(args, "--text");
@@ -2694,9 +6590,6 @@ Commands:
         try
         {
             var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-            var beforeLabelCount = beforeSnapshot.CountBlobToken(label);
-            if (beforeLabelCount > 0)
-                throw new InvalidOperationException("Script button label already exists in MCE blobs before workflow: " + label);
 
             process = Process.Start(new ProcessStartInfo(editor, Quote(project))
             {
@@ -3230,10 +7123,15 @@ Commands:
         return Array.Empty<string>();
     }
 
-    private static string[] BuildExpectedQuickConnectVariables(string connectBase, int count)
+    private static string[] BuildExpectedQuickConnectVariables(string connectBase, int count, int dataTypeIndex)
     {
         if (count <= 0) return Array.Empty<string>();
-        if (count == 1) return new[] { connectBase };
+        if (count == 1)
+        {
+            // Smart200 non-bit V types keep the channel-number suffix even for a
+            // single quick-connect row. Bit channels preserve the historical name.
+            return dataTypeIndex >= 8 ? new[] { connectBase + "00" } : new[] { connectBase };
+        }
         return Enumerable.Range(0, count)
             .Select(i => connectBase + i.ToString("00"))
             .ToArray();
@@ -3564,9 +7462,10 @@ Commands:
 
     private static bool ReopenVerifyMomentaryButton(string project, string editor, string label, string variable,
         int windowIndex, int x, int y, int width, int height, string outDir, TimeSpan timeout,
-        MceSnapshot afterSaveSnapshot, out bool tokenReopenVerified)
+        MceSnapshot afterSaveSnapshot, out bool tokenReopenVerified, out bool labelReadbackVerified)
     {
         tokenReopenVerified = false;
+        labelReadbackVerified = false;
         Process? process = null;
         IntPtr main = IntPtr.Zero;
         try
@@ -3598,6 +7497,8 @@ Commands:
             var dialog = UiAutomation.WaitForWindow(process.Id, "标准按钮构件属性设置", "#32770", TimeSpan.FromSeconds(8));
             if (dialog == IntPtr.Zero) throw new TimeoutException("Button property dialog was not found during momentary readback.");
             Thread.Sleep(300);
+
+            labelReadbackVerified = VerifyStandardButtonText(dialog, label);
 
             var tab = FindFirstChild(dialog, "SysTabControl32", null);
             UiAutomation.TabSelectIndex(tab, 1, mouse: true);
@@ -3632,6 +7533,7 @@ Commands:
                     pressReadback,
                     releaseReadback,
                     scriptEmpty,
+                    labelReadbackVerified,
                     tokenReopenVerified
                 }, JsonOptions()), Encoding.UTF8);
             return pressOk && releaseOk && scriptEmpty;
@@ -4203,6 +8105,26 @@ Commands:
                 Thread.Sleep(150);
             }
         }
+    }
+
+    private static bool VerifyStandardButtonText(IntPtr dialog, string label)
+    {
+        var tab = FindFirstChild(dialog, "SysTabControl32", null);
+        UiAutomation.TabSelectIndex(tab, 0, mouse: true);
+        Thread.Sleep(300);
+
+        foreach (var stateButton in new[] { "抬起状态", "按下状态" })
+        {
+            if (!ClickButtonByNormalizedText(dialog, mouse: true, stateButton))
+                return false;
+            Thread.Sleep(150);
+            var edit = FindBaseButtonTextEdit(dialog);
+            var actual = Native.GetText(edit);
+            if (!string.Equals(actual, label, StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
     }
 
     private static void PasteTextWithKeyboard(IntPtr edit, string text)
