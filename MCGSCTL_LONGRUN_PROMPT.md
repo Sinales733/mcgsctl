@@ -1114,3 +1114,47 @@ When finishing a run, answer in Chinese and include:
 - GUI checks actually performed
 - explicit skipped checks and why
 - risks that remain before touching the official `FG2_HMI.MCE`
+
+## 2026-05-07 Review-Driven Repair Addendum
+
+The external MCGS review PDF concluded that current mcgsctl drawing capability is
+not proven complete. On every resumed drawing/layout/tool-closure run, read
+`tools/mcgsctl/MCGSCTL_REVIEW_REPAIR_PLAN.md` and treat it as the current repair
+contract. Older reports that say `ALL PHASES COMPLETED`,
+`drawableOnlyCount=0`, `layoutIntegratedCount=25`, or `tool-sweep status=PASS`
+are historical claims, not final proof.
+
+The first repair target is not another demo. It is the foundation:
+
+1. prove the correct named user window is opened;
+2. prove the current canvas is the intended animation edit canvas;
+3. prove coordinate calibration from logical layout coordinates to actual canvas
+   client coordinates;
+4. block automatic layout on `UNKNOWN` internal object map;
+5. re-audit existing drawing workflows for pseudo-closure;
+6. keep `nextProbe` until L5 proof includes property-dialog readback,
+   save/reopen persistence, internal occupancy/z-order evidence, and
+   `layout.apply` integration.
+
+Do not stop because a checkpoint was pushed or because old evidence says the
+queue is zero. If the stricter review plan finds missing evidence, continue with
+the next file-safe probe.
+
+## 2026-05-08 Follow-Up Addendum
+
+GPT Pro's follow-up after the latest Codex run says the direction is improving
+but warns against premature L5 promotion. Apply this rule in every long run:
+
+- `rectangle`, `rounded-rectangle`, `arc`, `polyline`, `ellipse`, and
+  `saved-data-browser` are `L4-pass` / `L5-candidate` until a full
+  `layout.apply` smoke proves coordinate calibration, internal occupancy,
+  layout readback, save/reopen, and validators.
+- `free-table` and `historical-table` remain blocked or partial until table
+  readback classifies object property vs table-cell popup vs table workbench vs
+  user-window property vs selection failure.
+- FullCoverage must not infer `layoutIntegrated` from static workflow names or
+  `supportStatus=implemented`; it must read recent evidence.
+- Every clamp must write `requestedRect`, `appliedRect`, `clamped`, and
+  `clampReason`.
+- All `window.*.add` workflows must share the verified canvas-opening route,
+  support `--window-name`, and write selected-window/canvas-state evidence.

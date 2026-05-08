@@ -773,13 +773,29 @@ public sealed class LayoutTests : IDisposable
     }
 
     [Fact]
+    public void InternalOccupancyWithoutCoordinateCalibrationIsUnknown()
+    {
+        var json = ValidLayout();
+        json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
+        var layout = WriteLayout("internal-no-calibration", json);
+        var map = WriteCanvasObjects("internal-no-calibration", reliable: true);
+
+        var result = TestCli.Run("layout", "validate", "--layout", layout, "--canvas-objects", map);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("\"Status\": \"UNKNOWN\"", result.Stdout);
+        Assert.Contains("coordinate-calibration", result.Stdout);
+    }
+
+    [Fact]
     public void InternalOccupancyWithoutCanvasObjectsIsUnknown()
     {
         var json = ValidLayout();
         json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
         var layout = WriteLayout("internal-no-map", json);
+        var calibration = WriteCoordinateCalibration("internal-no-map", pass: true);
 
-        var result = TestCli.Run("layout", "validate", "--layout", layout);
+        var result = TestCli.Run("layout", "validate", "--layout", layout, "--coordinate-calibration", calibration);
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("\"Status\": \"UNKNOWN\"", result.Stdout);
@@ -797,9 +813,10 @@ public sealed class LayoutTests : IDisposable
         };
         var layout = WriteLayout("internal-map", json);
         var map = WriteCanvasObjects("internal-map", reliable: true);
+        var calibration = WriteCoordinateCalibration("internal-map", pass: true);
         var previewDir = Path.Combine(_root, "internal-map-preview");
 
-        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--coordinate-calibration", calibration, "--out", previewDir);
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(File.Exists(Path.Combine(previewDir, "layout-plan.json")));
@@ -821,9 +838,10 @@ public sealed class LayoutTests : IDisposable
         };
         var layout = WriteLayout("internal-object-rect-map", json);
         var map = WriteCanvasObjectRectMap("internal-object-rect-map");
+        var calibration = WriteCoordinateCalibration("internal-object-rect-map", pass: true);
         var previewDir = Path.Combine(_root, "internal-object-rect-map-preview");
 
-        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--coordinate-calibration", calibration, "--out", previewDir);
 
         Assert.Equal(0, result.ExitCode);
         var planJson = File.ReadAllText(Path.Combine(previewDir, "layout-plan.json"), Encoding.UTF8);
@@ -844,9 +862,10 @@ public sealed class LayoutTests : IDisposable
         };
         var layout = WriteLayout("internal-semantic-map", json);
         var map = WriteCanvasSemanticMap("internal-semantic-map");
+        var calibration = WriteCoordinateCalibration("internal-semantic-map", pass: true);
         var previewDir = Path.Combine(_root, "internal-semantic-map-preview");
 
-        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--out", previewDir);
+        var result = TestCli.Run("layout", "preview", "--layout", layout, "--canvas-objects", map, "--coordinate-calibration", calibration, "--out", previewDir);
 
         Assert.Equal(0, result.ExitCode);
         var planJson = File.ReadAllText(Path.Combine(previewDir, "layout-plan.json"), Encoding.UTF8);
@@ -863,8 +882,9 @@ public sealed class LayoutTests : IDisposable
         json["placement"] = new JsonObject { ["mode"] = "internal-occupancy" };
         var layout = WriteLayout("internal-unreliable", json);
         var map = WriteCanvasObjects("internal-unreliable", reliable: false);
+        var calibration = WriteCoordinateCalibration("internal-unreliable", pass: true);
 
-        var result = TestCli.Run("layout", "validate", "--layout", layout, "--canvas-objects", map);
+        var result = TestCli.Run("layout", "validate", "--layout", layout, "--canvas-objects", map, "--coordinate-calibration", calibration);
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("\"Status\": \"UNKNOWN\"", result.Stdout);
@@ -906,6 +926,21 @@ public sealed class LayoutTests : IDisposable
                 }
             },
             ["dangerousOutputs"] = dangerous ? new JsonArray(address) : new JsonArray()
+        };
+        File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+        return path;
+    }
+
+    private string WriteCoordinateCalibration(string name, bool pass)
+    {
+        var path = Path.Combine(_root, name + ".coordinate-calibration.json");
+        var json = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["status"] = pass ? "PASS" : "UNKNOWN",
+            ["unknownReasons"] = pass
+                ? new JsonArray()
+                : new JsonArray("calibration evidence is missing")
         };
         File.WriteAllText(path, json.ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
         return path;

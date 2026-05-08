@@ -9,8 +9,10 @@ It does not patch `.MCE` private blobs. `workflow run window.layout.apply` uses 
 ```powershell
 tools\mcgsctl\mcgsctl.ps1 layout validate --layout layouts\ptz-basic.json --safety safety-spec.json
 tools\mcgsctl\mcgsctl.ps1 layout preview --layout layouts\ptz-basic.json --out .mcgsctl-runs\layout-preview --safety safety-spec.json
+tools\mcgsctl\mcgsctl.ps1 canvas verify-state --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-verify-state --window-index 0
+tools\mcgsctl\mcgsctl.ps1 canvas coordinate-calibrate --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-coordinate-calibration --window-index 0
 tools\mcgsctl\mcgsctl.ps1 canvas inspect --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --out .mcgsctl-runs\canvas-inspect
-tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json
+tools\mcgsctl\mcgsctl.ps1 workflow run window.layout.apply --source FG2_HMI.MCE --workdir .mcgsctl-work\layout-gui-smoke --layout layouts\ptz-basic.json --safety safety-spec.json --canvas-objects .mcgsctl-runs\canvas-semantic-map\canvas-objects.json --coordinate-calibration .mcgsctl-runs\canvas-coordinate-calibration\coordinate-calibration.json
 tools\mcgsctl\mcgsctl.ps1 layout readback --project .mcgsctl-work\layout-gui-smoke\candidate.MCE --layout layouts\ptz-basic.json --out .mcgsctl-runs\layout-readback
 ```
 
@@ -160,7 +162,14 @@ Section indicators are auto-planned in the upper safe area after the controls in
 
 Screenshots are evidence only. They are not used as the primary source for automatic placement.
 
-Automatic placement requires a reliable internal canvas object map:
+Automatic placement requires both:
+
+1. `canvas verify-state` proving the target user window/canvas context.
+2. `canvas coordinate-calibrate` status `PASS` plus a reliable internal canvas object map.
+
+Without calibration evidence, `layout validate/preview/readback/workflow run window.layout.apply` with `--placement internal-occupancy` remains `UNKNOWN` by design.
+
+Internal-occupancy placement example:
 
 ```powershell
 tools\mcgsctl\mcgsctl.ps1 canvas mce-object-map-probe `
@@ -196,7 +205,8 @@ tools\mcgsctl\mcgsctl.ps1 layout preview `
   --layout layouts\ptz-basic.json `
   --out .mcgsctl-runs\layout-preview-auto `
   --placement internal-occupancy `
-  --canvas-objects .mcgsctl-runs\canvas-semantic-map\canvas-objects.json
+  --canvas-objects .mcgsctl-runs\canvas-semantic-map\canvas-objects.json `
+  --coordinate-calibration .mcgsctl-runs\canvas-coordinate-calibration\coordinate-calibration.json
 ```
 
 `canvas inspect` remains available for UIA/MSAA/WM_GETOBJECT diagnostics. On current MCGS 7.7 profiles, the self-drawn animation canvas may expose no child geometry through those channels, so the preferred automatic-placement source is `canvas mce-object-map-probe`.

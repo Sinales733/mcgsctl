@@ -163,6 +163,38 @@ internal static partial class Program
 
     private static void RecordOpenPopups(int pid, string state)
     {
+        if (string.IsNullOrWhiteSpace(_dialogEvidenceRoot)) return;
+
+        try
+        {
+            var popupMenus = UiAutomation.GetPopupMenus(pid).ToArray();
+            if (popupMenus.Length > 0)
+            {
+                var popupItemsPath = Path.Combine(_dialogEvidenceRoot, "popup-items.jsonl");
+                foreach (var popup in popupMenus)
+                {
+                    var record = new
+                    {
+                        timestamp = DateTimeOffset.Now.ToString("O"),
+                        pid,
+                        state,
+                        popupWindow = popup.Window,
+                        items = popup.Items.Select(item => new
+                        {
+                            item.Index,
+                            item.Id,
+                            item.Text
+                        }).ToArray()
+                    };
+                    File.AppendAllText(popupItemsPath, JsonSerializer.Serialize(record, JsonlOptions()) + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+        }
+        catch
+        {
+            // Popup item introspection is best-effort and must not break the primary workflow.
+        }
+
         foreach (var popup in UiAutomation.TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32768"))
             RecordDialogEvidence("popups.jsonl", pid, popup, "observed", state);
     }

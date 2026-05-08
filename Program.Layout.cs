@@ -62,6 +62,8 @@ internal static partial class Program
         public string Status { get; set; } = "NOT_REQUESTED";
         public string PlacementSource { get; set; } = "layout";
         public string? CanvasObjects { get; set; }
+        public string? CoordinateCalibration { get; set; }
+        public string CoordinateCalibrationStatus { get; set; } = "NOT_REQUESTED";
         public string ObjectProvider { get; set; } = "none";
         public bool ReliableGeometry { get; set; }
         public int Margin { get; set; }
@@ -86,7 +88,7 @@ internal static partial class Program
     private static int Layout(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl layout validate|preview|readback --layout <layout.json> [--safety <safety-spec.json>]");
+            return Fail("Usage: mcgsctl layout validate|preview|readback --layout <layout.json> [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--coordinate-calibration <coordinate-calibration.json>] [--placement explicit|internal-occupancy]");
 
         return args[1].ToLowerInvariant() switch
         {
@@ -103,7 +105,8 @@ internal static partial class Program
         {
             var layout = FullPath(RequiredLayoutPath(args));
             var safety = OptionalFullPath(Opt(args, "--safety"));
-            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
+            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")),
+                OptionalFullPath(Opt(args, "--coordinate-calibration")), Opt(args, "--placement"));
             WriteJson(result);
             WriteLayoutValidationOutput(args, result, null);
             return result.Status == "PASS" ? 0 : 2;
@@ -123,7 +126,8 @@ internal static partial class Program
             var safety = OptionalFullPath(Opt(args, "--safety"));
             var outDir = FullPath(Required(args, "--out"));
             Directory.CreateDirectory(outDir);
-            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
+            var result = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")),
+                OptionalFullPath(Opt(args, "--coordinate-calibration")), Opt(args, "--placement"));
             WriteLayoutPreviewFiles(result, outDir);
             Console.WriteLine("layout preview: " + outDir);
             return result.Status == "PASS" ? 0 : 2;
@@ -144,7 +148,8 @@ internal static partial class Program
             var outDir = FullPath(Required(args, "--out"));
             Directory.CreateDirectory(outDir);
             var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-            var validation = BuildLayoutValidation(layout, safetyPath: null, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
+            var validation = BuildLayoutValidation(layout, safetyPath: null, OptionalFullPath(Opt(args, "--canvas-objects")),
+                OptionalFullPath(Opt(args, "--coordinate-calibration")), Opt(args, "--placement"));
             if (validation.Status != "PASS")
             {
                 File.WriteAllText(Path.Combine(outDir, "layout-readback.json"),
@@ -287,7 +292,8 @@ internal static partial class Program
         {
             var layout = FullPath(RequiredLayoutPath(args));
             var safety = OptionalFullPath(Opt(args, "--safety"));
-            var validation = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")), Opt(args, "--placement"));
+            var validation = BuildLayoutValidation(layout, safety, OptionalFullPath(Opt(args, "--canvas-objects")),
+                OptionalFullPath(Opt(args, "--coordinate-calibration")), Opt(args, "--placement"));
             var previewDir = Path.Combine(outDir, "layout-preview");
             WriteLayoutPreviewFiles(validation, previewDir);
             if (validation.Status != "PASS")
@@ -540,6 +546,7 @@ internal static partial class Program
         string layoutPath,
         string? safetyPath,
         string? canvasObjectsPath = null,
+        string? coordinateCalibrationPath = null,
         string? placementModeOverride = null)
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(layoutPath, Encoding.UTF8));
@@ -563,7 +570,7 @@ internal static partial class Program
         result.Objects.AddRange(ReadSectionLayoutObjects(root, style, windowIndex));
         var placementMode = placementModeOverride ?? ReadPlacementMode(root);
         if (placementMode.Equals("internal-occupancy", StringComparison.OrdinalIgnoreCase))
-            ApplyInternalOccupancyPlacement(result, canvasObjectsPath, style, ReadPlacementMargin(root, style));
+            ApplyInternalOccupancyPlacement(result, canvasObjectsPath, coordinateCalibrationPath, style, ReadPlacementMargin(root, style));
         else if (!placementMode.Equals("explicit", StringComparison.OrdinalIgnoreCase) &&
                  !placementMode.Equals("layout", StringComparison.OrdinalIgnoreCase))
             result.BlockedReasons.Add("unsupported placement mode: " + placementMode);
@@ -598,7 +605,18 @@ internal static partial class Program
         return Math.Max(80, Math.Max(4, style.Grid * 4));
     }
 
-    private static void ApplyInternalOccupancyPlacement(LayoutValidationResult result, string? canvasObjectsPath, LayoutStyle style, int placementMargin)
+    private sealed class CoordinateCalibrationInfo
+    {
+        public string Status { get; set; } = "UNKNOWN";
+        public List<string> UnknownReasons { get; } = new();
+    }
+
+    private static void ApplyInternalOccupancyPlacement(
+        LayoutValidationResult result,
+        string? canvasObjectsPath,
+        string? coordinateCalibrationPath,
+        LayoutStyle style,
+        int placementMargin)
     {
         result.PlacementSource = "internal-occupancy";
         var plan = new LayoutPlacementPlan
@@ -606,9 +624,34 @@ internal static partial class Program
             Status = "UNKNOWN",
             PlacementSource = "internal-occupancy",
             CanvasObjects = canvasObjectsPath,
+            CoordinateCalibration = coordinateCalibrationPath,
             Margin = placementMargin
         };
         result.PlacementPlan = plan;
+
+        if (string.IsNullOrWhiteSpace(coordinateCalibrationPath))
+        {
+            plan.UnknownReasons.Add("internal occupancy placement requires --coordinate-calibration <coordinate-calibration.json>");
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
+        if (!File.Exists(coordinateCalibrationPath))
+        {
+            plan.UnknownReasons.Add("coordinate calibration evidence not found: " + coordinateCalibrationPath);
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
+        var calibration = LoadCoordinateCalibrationInfo(coordinateCalibrationPath);
+        plan.CoordinateCalibrationStatus = calibration.Status;
+        if (!calibration.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            var reason = "coordinate calibration status is not PASS: " + calibration.Status;
+            if (calibration.UnknownReasons.Count > 0)
+                reason += " (" + string.Join("; ", calibration.UnknownReasons) + ")";
+            plan.UnknownReasons.Add(reason);
+            result.UnknownReasons.AddRange(plan.UnknownReasons);
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(canvasObjectsPath))
         {
@@ -689,6 +732,21 @@ internal static partial class Program
 
         plan.BlockedReasons.Add("no free rectangle large enough for layout after applying canvas occupancy");
         result.BlockedReasons.AddRange(plan.BlockedReasons);
+    }
+
+    private static CoordinateCalibrationInfo LoadCoordinateCalibrationInfo(string path)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        var root = doc.RootElement;
+        var info = new CoordinateCalibrationInfo
+        {
+            Status = JsonStringAny(root, "status", "Status") ?? "UNKNOWN"
+        };
+        foreach (var reason in JsonStringArrayAny(root, "unknownReasons", "UnknownReasons"))
+            info.UnknownReasons.Add(reason);
+        foreach (var reason in JsonStringArrayAny(root, "blockedReasons", "BlockedReasons"))
+            info.UnknownReasons.Add(reason);
+        return info;
     }
 
     private static bool RectsOverlap(CanvasOccupiedRect a, CanvasOccupiedRect b)

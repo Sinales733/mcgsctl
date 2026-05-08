@@ -4,7 +4,8 @@ This file is the durable continuation contract for long-running, checkpointed
 MCGS/MCGSE closure work. Read it after `AGENTS.md`,
 `MCGSCTL_LONGRUN_PROMPT.md`, `MCGSCTL_FULL_COVERAGE_PROMPT.md`,
 `MCGSCTL_GEMINI_PROMPT.md`, and
-`MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md` whenever:
+`MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md`, plus
+`MCGSCTL_REVIEW_REPAIR_PLAN.md`, whenever:
 
 - the context was compressed;
 - the thread was resumed after a long run;
@@ -15,6 +16,10 @@ MCGS/MCGSE closure work. Read it after `AGENTS.md`,
 
 Do not rely on chat memory for queue order or stopping conditions. Re-read this
 file and the latest machine evidence every time.
+
+The 2026-05-07 review plan supersedes old "ALL PHASES COMPLETED" drawing
+reports. If a resume packet says all drawing tools are complete, re-audit it
+against `MCGSCTL_REVIEW_REPAIR_PLAN.md` before trusting the claim.
 
 ## Current Checkpoint Anchor
 
@@ -63,6 +68,7 @@ At the beginning of every relay run:
    - `tools/mcgsctl/MCGSCTL_FULL_COVERAGE_PROMPT.md`
    - `tools/mcgsctl/MCGSCTL_GEMINI_PROMPT.md`
    - `tools/mcgsctl/MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md`
+   - `tools/mcgsctl/MCGSCTL_REVIEW_REPAIR_PLAN.md`
    - this file
 3. Run `git status --short`.
 4. Locate the newest relevant evidence under `.mcgsctl-runs` and
@@ -84,7 +90,34 @@ Use this order unless the newest evidence proves a stronger dependency:
 0. `capability-level-reporting` — **COMPLETED** (commit f12e179).
    - `capabilityLevel` field exists; `drawableOnlyCount`/`layoutIntegratedCount`
      in sweep summaries; tests pass. Do not repeat this work.
-   - Proceed directly to item 1.
+   - Proceed directly to item 0.5.
+0.5. `review-repair-foundation`
+   - Re-audit current "completed" drawing/tool claims against
+     `MCGSCTL_REVIEW_REPAIR_PLAN.md`.
+   - Implement or repair correct target user-window opening, canvas edit-state
+     verification, and coordinate calibration before trusting layout or tool
+     closure.
+   - Any old `layoutIntegrated` claim without canvas-state, coordinate,
+     property-dialog, save/reopen, and internal occupancy evidence stays open
+     with `nextProbe`.
+   - Apply the 2026-05-08 follow-up rules: L4-pass/L5-candidate tools are not
+     final L5; table tools require explicit scope classification; FullCoverage
+     cannot infer L5 from static workflow names; clamp and canvas-opening
+     evidence must be recorded.
+0.6. `table-scope-repair`
+   - Process `free-table` before `historical-table`.
+   - Classify property-readback as `objectPropertyOpened`,
+     `tableCellPopupOpened`, `tableWorkbenchOpened`,
+     `userWindowPropertyOpened`, or `selectionFailed`.
+   - If table-cell popup opens, implement table object frame selection before
+     retrying readback.
+   - If table workbench opens, record `propertyScope=table-workbench`; do not
+     mark ordinary object property PASS.
+0.7. `fullcoverage-l5-downgrade`
+   - Change capability inference so `supportStatus=implemented` and workflow
+     names never directly produce `layoutIntegrated`.
+   - Require recent workflow result, property readback, layout apply, layout
+     readback, and candidate validation evidence for L5.
 1. `drawing-create` (L3→L5 upgrade)
    - Prove that drawing tools create real MCGS objects, can configure
      properties, and can be driven by `layout.apply`.
@@ -416,4 +449,3 @@ report. Include:
 - what the last failure proved and did not prove;
 - build/test/commit/push state;
 - Gemini transcript session if any.
-

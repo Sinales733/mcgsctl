@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -250,11 +251,13 @@ internal static partial class Program
     private static int Canvas(string[] args)
     {
         if (args.Length < 2)
-            return Fail("Usage: mcgsctl canvas inspect|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe|property-map-probe|property-readback --project <candidate.mce> --out <dir> OR canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font] OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
+            return Fail("Usage: mcgsctl canvas inspect|verify-state|coordinate-calibrate|context-menu-probe|clipboard-probe|toolbar-probe|mce-geometry-probe|mce-object-map-probe|semantic-map-probe|property-map-probe|property-readback --project <candidate.mce> --out <dir> [--window-index <n>|--window-name <text>] OR canvas property-readback --project <candidate.mce> --semantic-map <semantic-map.json> --object-id <id> --out <dir> [--probe-font] [--target-x <n> --target-y <n> --target-width <n> --target-height <n>] [--require-non-window-dialog] [--ignore-displayed-text] OR canvas mce-blob-diff-probe --before <a.mce> --after <b.mce> --out <dir>");
 
         return args[1].ToLowerInvariant() switch
         {
             "inspect" => CanvasInspect(args),
+            "verify-state" => CanvasVerifyState(args),
+            "coordinate-calibrate" => CanvasCoordinateCalibrate(args),
             "context-menu-probe" => CanvasContextMenuProbe(args),
             "clipboard-probe" => CanvasClipboardProbe(args),
             "toolbar-probe" => CanvasToolbarProbe(args),
@@ -291,6 +294,218 @@ internal static partial class Program
         {
             File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
             Console.Error.WriteLine("canvas inspect failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private static int CanvasVerifyState(string[] args)
+    {
+        var outDir = FullPath(Required(args, "--out"));
+        Directory.CreateDirectory(outDir);
+        Process? process = null;
+        var main = IntPtr.Zero;
+        try
+        {
+            using var session = OpenCanvasProbeSession(args, outDir, "verify-state", out process, out main);
+            var map = BuildCanvasObjectMap(session.ProjectCopy, session.ProjectSha256, session.WindowIndex, session.Main, session.Canvas);
+            var mainRect = UiAutomation.GetWindowRect(session.Main);
+            var mainClientRect = mainRect;
+            var canvasRect = UiAutomation.GetWindowRect(session.Canvas);
+            var canvasClientRect = canvasRect;
+            var (dpiX, dpiY) = TryReadCanvasDpi(session.Canvas);
+            var toolbars = CollectToolbarProbeEntries(process!.Id, session.Main);
+            var toolboxWindow = FindTopLevelWindowByText(process.Id, "工具箱");
+            var scrollbars = UiAutomation.EnumerateChildren(session.Canvas)
+                .Where(h => Native.GetClass(h).Contains("ScrollBar", StringComparison.OrdinalIgnoreCase))
+                .Select(WindowInfo.FromHandle)
+                .ToArray();
+
+            var state = new
+            {
+                schemaVersion = 1,
+                status = "PASS",
+                createdAt = DateTimeOffset.Now.ToString("O"),
+                project = session.ProjectCopy,
+                projectSha256 = session.ProjectSha256,
+                requestedWindowIndex = session.RequestedWindowIndex,
+                requestedWindowName = session.RequestedWindowName,
+                selectedWindowIndex = session.WindowIndex,
+                selectedWindowTexts = session.SelectedUserWindow.Texts,
+                selectionSource = session.SelectionSource,
+                userWindowItems = session.UserWindows.Select(item => new { item.Index, item.Texts }).ToArray(),
+                mainWindow = WindowInfo.FromHandle(session.Main),
+                mainRect = new { mainRect.Left, mainRect.Top, mainRect.Width, mainRect.Height },
+                mainClientRect = new { mainClientRect.Left, mainClientRect.Top, mainClientRect.Width, mainClientRect.Height },
+                canvasWindow = WindowInfo.FromHandle(session.Canvas),
+                canvasRect = new { canvasRect.Left, canvasRect.Top, canvasRect.Width, canvasRect.Height },
+                canvasClientRect = new { canvasClientRect.Left, canvasClientRect.Top, canvasClientRect.Width, canvasClientRect.Height },
+                borderInsets = new
+                {
+                    left = canvasClientRect.Left - canvasRect.Left,
+                    top = canvasClientRect.Top - canvasRect.Top,
+                    right = canvasRect.Right - canvasClientRect.Right,
+                    bottom = canvasRect.Bottom - canvasClientRect.Bottom
+                },
+                dpi = new { x = dpiX, y = dpiY },
+                toolbarCount = toolbars.Length,
+                toolbars,
+                toolboxWindow = toolboxWindow == IntPtr.Zero ? null : WindowInfo.FromHandle(toolboxWindow),
+                scrollbars,
+                canvasObjectMapStatus = map.Status,
+                canvasObjectMapReliableGeometry = map.ReliableGeometry,
+                canvasObjectProvider = map.ObjectProvider,
+                blockedReasons = Array.Empty<string>()
+            };
+
+            File.WriteAllText(Path.Combine(outDir, "canvas-state.json"),
+                JsonSerializer.Serialize(state, JsonOptions()), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(outDir, "canvas-objects.json"),
+                JsonSerializer.Serialize(map, JsonOptions()), Encoding.UTF8);
+            File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(session.Main), Encoding.UTF8);
+            File.WriteAllLines(Path.Combine(outDir, "top-window-tree.txt"),
+                UiAutomation.TopWindowsForPid(process.Id).SelectMany(UiAutomation.WindowTreeLines), Encoding.UTF8);
+            TryScreenshot(session.Main, Path.Combine(outDir, "main-window.png"));
+            TryScreenshot(session.Canvas, Path.Combine(outDir, "canvas-window.png"));
+            Console.WriteLine("canvas verify-state: " + outDir);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            Console.Error.WriteLine("canvas verify-state failed: " + ex.Message);
+            return 1;
+        }
+        finally
+        {
+            if (process != null && !process.HasExited)
+            {
+                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
+            }
+        }
+    }
+
+    private static int CanvasCoordinateCalibrate(string[] args)
+    {
+        var outDir = FullPath(Required(args, "--out"));
+        Directory.CreateDirectory(outDir);
+        var requestedX = ParseInt(args, "--x", 120);
+        var requestedY = ParseInt(args, "--y", 120);
+        var requestedWidth = Math.Max(8, ParseInt(args, "--width", 180));
+        var requestedHeight = Math.Max(8, ParseInt(args, "--height", 120));
+        var tolerance = Math.Max(1, ParseInt(args, "--tolerance", 12));
+        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
+        var timeout = TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20));
+
+        Process? process = null;
+        var main = IntPtr.Zero;
+        try
+        {
+            using var session = OpenCanvasProbeSession(args, outDir, "coordinate-calibrate", out process, out main);
+            var beforeMap = BuildCanvasObjectMap(session.ProjectCopy, session.ProjectSha256, session.WindowIndex, session.Main, session.Canvas);
+            File.WriteAllText(Path.Combine(outDir, "before-canvas-objects.json"),
+                JsonSerializer.Serialize(beforeMap, JsonOptions()), Encoding.UTF8);
+
+            UiAutomation.SendCommand(session.Main, RectangleCommandId);
+            Thread.Sleep(300);
+            UiAutomation.DragPoint(session.Canvas, requestedX, requestedY, requestedX + requestedWidth, requestedY + requestedHeight, mouse: true);
+            Thread.Sleep(700);
+            UiAutomation.ClickPoint(session.Canvas, requestedX + requestedWidth / 2, requestedY + requestedHeight / 2,
+                MouseButton.Left, doubleClick: false, mouse: true);
+            Thread.Sleep(300);
+            UiAutomation.SendCommand(session.Main, SaveCommandId);
+            Thread.Sleep(1800);
+
+            var afterMap = BuildCanvasObjectMap(session.ProjectCopy, session.ProjectSha256, session.WindowIndex, session.Main, session.Canvas);
+            File.WriteAllText(Path.Combine(outDir, "after-save-canvas-objects.json"),
+                JsonSerializer.Serialize(afterMap, JsonOptions()), Encoding.UTF8);
+            var afterMatch = FindBestCalibrationRect(afterMap, beforeMap, requestedX, requestedY, requestedWidth, requestedHeight);
+            var afterDistance = afterMatch == null ? int.MaxValue : RectDistance(afterMatch, requestedX, requestedY, requestedWidth, requestedHeight);
+
+            CloseEditorProcess(process!.Id, main, saveIntent: true);
+            process = null;
+            main = IntPtr.Zero;
+            var persistedProjectSha256 = Sha256(session.ProjectCopy);
+
+            process = Process.Start(new ProcessStartInfo(editor, Quote(session.ProjectCopy))
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
+            }) ?? throw new InvalidOperationException("Failed to reopen editor for coordinate calibration.");
+            main = WaitForMainWindow(process.Id, timeout);
+            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
+            main = UiAutomation.FindMainWindow(process.Id);
+            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared during coordinate calibration reopen.");
+
+            var reopenSelection = OpenAnimationConfiguration(process.Id, main, session.WindowIndex, session.RequestedWindowName, "canvas coordinate-calibrate reopen");
+            var reopenCanvas = ResolveAnimationCanvasWithRetry(main, reopenSelection, outDir, "coordinate-calibrate-reopen");
+            var reopenMap = BuildCanvasObjectMap(session.ProjectCopy, persistedProjectSha256, reopenSelection.SelectedIndex, main, reopenCanvas);
+            File.WriteAllText(Path.Combine(outDir, "reopen-canvas-objects.json"),
+                JsonSerializer.Serialize(reopenMap, JsonOptions()), Encoding.UTF8);
+            var reopenMatch = FindBestCalibrationRect(reopenMap, null, requestedX, requestedY, requestedWidth, requestedHeight);
+            var reopenDistance = reopenMatch == null ? int.MaxValue : RectDistance(reopenMatch, requestedX, requestedY, requestedWidth, requestedHeight);
+
+            var unknownReasons = new List<string>();
+            if (!afterMap.ReliableGeometry || !afterMap.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                unknownReasons.Add("after-save canvas object map is not reliable");
+            if (!reopenMap.ReliableGeometry || !reopenMap.Status.Equals("PASS", StringComparison.OrdinalIgnoreCase))
+                unknownReasons.Add("reopen canvas object map is not reliable");
+            if (afterMatch == null) unknownReasons.Add("no after-save object map rectangle matched the calibration rectangle");
+            if (reopenMatch == null) unknownReasons.Add("no reopen object map rectangle matched the calibration rectangle");
+            if (afterMatch != null && afterDistance > tolerance)
+                unknownReasons.Add("after-save calibration delta exceeds tolerance: " + afterDistance);
+            if (reopenMatch != null && reopenDistance > tolerance)
+                unknownReasons.Add("reopen calibration delta exceeds tolerance: " + reopenDistance);
+
+            var status = unknownReasons.Count == 0 ? "PASS" : "UNKNOWN";
+            var result = new
+            {
+                schemaVersion = 1,
+                status,
+                createdAt = DateTimeOffset.Now.ToString("O"),
+                project = session.ProjectCopy,
+                projectSha256 = persistedProjectSha256,
+                requestedWindowIndex = session.RequestedWindowIndex,
+                requestedWindowName = session.RequestedWindowName,
+                selectedWindowIndex = session.WindowIndex,
+                requestedRect = new { x = requestedX, y = requestedY, width = requestedWidth, height = requestedHeight },
+                tolerance,
+                afterSave = new
+                {
+                    mapStatus = afterMap.Status,
+                    mapReliableGeometry = afterMap.ReliableGeometry,
+                    mapProvider = afterMap.ObjectProvider,
+                    matchedRect = afterMatch == null ? null : new { afterMatch.X, afterMatch.Y, afterMatch.Width, afterMatch.Height, afterMatch.Source, afterMatch.Confidence },
+                    totalDelta = afterMatch == null ? (int?)null : afterDistance
+                },
+                reopen = new
+                {
+                    mapStatus = reopenMap.Status,
+                    mapReliableGeometry = reopenMap.ReliableGeometry,
+                    mapProvider = reopenMap.ObjectProvider,
+                    matchedRect = reopenMatch == null ? null : new { reopenMatch.X, reopenMatch.Y, reopenMatch.Width, reopenMatch.Height, reopenMatch.Source, reopenMatch.Confidence },
+                    totalDelta = reopenMatch == null ? (int?)null : reopenDistance
+                },
+                unknownReasons
+            };
+            File.WriteAllText(Path.Combine(outDir, "coordinate-calibration.json"),
+                JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
+            File.WriteAllLines(Path.Combine(outDir, "reopen-window-tree.txt"), UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+            TryScreenshot(main, Path.Combine(outDir, "reopen-main-window.png"));
+            TryScreenshot(reopenCanvas, Path.Combine(outDir, "reopen-canvas-window.png"));
+            Console.WriteLine("canvas coordinate-calibrate: " + outDir);
+            return status == "PASS" ? 0 : 2;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
+            Console.Error.WriteLine("canvas coordinate-calibrate failed: " + ex.Message);
             return 1;
         }
         finally
@@ -562,6 +777,88 @@ internal static partial class Program
     private static IntPtr FindTopLevelWindowByText(int pid, string text)
         => UiAutomation.TopWindowsForPid(pid)
             .FirstOrDefault(h => Native.GetText(h).Equals(text, StringComparison.OrdinalIgnoreCase));
+
+    private static object[] CollectToolbarProbeEntries(int pid, IntPtr main)
+    {
+        var toolbarHandles = new List<(IntPtr Handle, string Scope, IntPtr Owner)>();
+        void AddToolbar(IntPtr handle, string scope, IntPtr owner)
+        {
+            if (handle == IntPtr.Zero || toolbarHandles.Any(t => t.Handle == handle))
+                return;
+            if (Native.GetClass(handle).Contains("ToolbarWindow32", StringComparison.OrdinalIgnoreCase))
+                toolbarHandles.Add((handle, scope, owner));
+        }
+
+        foreach (var child in UiAutomation.EnumerateChildren(main))
+            AddToolbar(child, "main-descendant", main);
+
+        foreach (var top in UiAutomation.TopWindowsForPid(pid))
+        {
+            AddToolbar(top, "top-level", top);
+            foreach (var child in UiAutomation.EnumerateChildren(top))
+                AddToolbar(child, "top-level-descendant", top);
+        }
+
+        return toolbarHandles
+            .Select(t => new
+            {
+                scope = t.Scope,
+                ownerWindow = WindowInfo.FromHandle(t.Owner),
+                window = WindowInfo.FromHandle(t.Handle),
+                buttons = UiAutomation.ToolbarButtons(t.Handle)
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static (float X, float Y) TryReadCanvasDpi(IntPtr canvas)
+    {
+        try
+        {
+            using var graphics = Graphics.FromHwnd(canvas);
+            return (graphics.DpiX, graphics.DpiY);
+        }
+        catch
+        {
+            return (0f, 0f);
+        }
+    }
+
+    private static CanvasOccupiedRect? FindBestCalibrationRect(
+        CanvasObjectMap current,
+        CanvasObjectMap? baseline,
+        int expectedX,
+        int expectedY,
+        int expectedWidth,
+        int expectedHeight)
+    {
+        var candidates = current.OccupiedRectangles.AsEnumerable();
+        if (baseline != null)
+        {
+            var known = baseline.OccupiedRectangles
+                .Select(RectSignature)
+                .ToHashSet(StringComparer.Ordinal);
+            var delta = current.OccupiedRectangles
+                .Where(rect => !known.Contains(RectSignature(rect)))
+                .ToArray();
+            if (delta.Length > 0)
+                candidates = delta;
+        }
+
+        return candidates
+            .OrderBy(rect => RectDistance(rect, expectedX, expectedY, expectedWidth, expectedHeight))
+            .ThenByDescending(rect => rect.Confidence.Equals("high", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault();
+    }
+
+    private static int RectDistance(CanvasOccupiedRect rect, int x, int y, int width, int height)
+        => Math.Abs(rect.X - x) +
+           Math.Abs(rect.Y - y) +
+           Math.Abs(rect.Width - width) +
+           Math.Abs(rect.Height - height);
+
+    private static string RectSignature(CanvasOccupiedRect rect)
+        => $"{rect.X},{rect.Y},{rect.Width},{rect.Height}";
 
     private static int CanvasMceGeometryProbe(string[] args)
     {
@@ -2176,7 +2473,21 @@ internal static partial class Program
         public required string ProjectCopy { get; init; }
         public required string ProjectSha256 { get; init; }
         public required int WindowIndex { get; init; }
+        public string? RequestedWindowName { get; init; }
+        public required int RequestedWindowIndex { get; init; }
+        public required string SelectionSource { get; init; }
+        public required ListViewItemInfo[] UserWindows { get; init; }
+        public required ListViewItemInfo SelectedUserWindow { get; init; }
         public void Dispose() { }
+    }
+
+    private sealed class UserWindowSelectionResult
+    {
+        public required IntPtr ListView { get; init; }
+        public required ListViewItemInfo[] Items { get; init; }
+        public required ListViewItemInfo SelectedItem { get; init; }
+        public required int SelectedIndex { get; init; }
+        public required string SelectionSource { get; init; }
     }
 
     private static CanvasProbeSession OpenCanvasProbeSession(
@@ -2188,7 +2499,9 @@ internal static partial class Program
     {
         var project = RequiredPath(args, "--project");
         var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-        var windowIndex = ParseInt(args, "--window-index", 0);
+        var requestedWindowIndex = OptInt(args, "--window-index");
+        var requestedWindowName = Opt(args, "--window-name");
+        var windowIndex = requestedWindowIndex ?? 0;
         var timeout = TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20));
         var copyDir = Path.Combine(outDir, label + "-copy");
         Directory.CreateDirectory(copyDir);
@@ -2205,19 +2518,8 @@ internal static partial class Program
         HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
         main = UiAutomation.FindMainWindow(process.Id);
         if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
-        OpenAnimationConfiguration(process.Id, main, windowIndex, "canvas " + label);
-        IntPtr canvas;
-        try
-        {
-            canvas = FindCanvas(main);
-        }
-        catch
-        {
-            File.WriteAllLines(Path.Combine(outDir, label + "-no-canvas.window-tree.txt"),
-                UiAutomation.WindowTreeLines(main), Encoding.UTF8);
-            TryScreenshot(main, Path.Combine(outDir, label + "-no-canvas-main.png"));
-            throw;
-        }
+        var selection = OpenAnimationConfiguration(process.Id, main, requestedWindowIndex ?? windowIndex, requestedWindowName, "canvas " + label);
+        var canvas = ResolveAnimationCanvasWithRetry(main, selection, outDir, label);
         return new CanvasProbeSession
         {
             Process = process,
@@ -2225,8 +2527,97 @@ internal static partial class Program
             Canvas = canvas,
             ProjectCopy = projectCopy,
             ProjectSha256 = projectSha,
-            WindowIndex = windowIndex
+            WindowIndex = selection.SelectedIndex,
+            RequestedWindowName = requestedWindowName,
+            RequestedWindowIndex = requestedWindowIndex ?? windowIndex,
+            SelectionSource = selection.SelectionSource,
+            UserWindows = selection.Items,
+            SelectedUserWindow = selection.SelectedItem
         };
+    }
+
+    private static UserWindowSelectionResult OpenAnimationConfiguration(
+        int pid,
+        IntPtr main,
+        int requestedWindowIndex,
+        string? requestedWindowName,
+        string context)
+    {
+        UiAutomation.SendCommand(main, 33955);
+        Thread.Sleep(700);
+
+        var userList = FindListViewByItemCount(main, 3);
+        var items = UiAutomation.ListViewItems(userList);
+        if (items.Length == 0)
+            throw new InvalidOperationException("User-window list is empty while opening animation configuration for " + context + ".");
+
+        var selectedIndex = requestedWindowIndex;
+        var selectionSource = "index";
+        if (!string.IsNullOrWhiteSpace(requestedWindowName))
+        {
+            var byName = items.FirstOrDefault(item =>
+                item.Texts.Any(text => text.Contains(requestedWindowName, StringComparison.OrdinalIgnoreCase)));
+            if (byName == null)
+                throw new InvalidOperationException("Requested user window was not found: " + requestedWindowName + ".");
+            selectedIndex = byName.Index;
+            selectionSource = "name";
+        }
+
+        if (selectedIndex < 0 || selectedIndex >= items.Length)
+            throw new ArgumentOutOfRangeException(nameof(requestedWindowIndex),
+                $"Requested user-window index {selectedIndex} is out of range [0,{items.Length - 1}] for {context}.");
+
+        UiAutomation.ListViewSelectIndex(userList, selectedIndex);
+        Thread.Sleep(250);
+        if (!ClickButtonByNormalizedText(main, mouse: true, AnimationEditButtonText))
+            throw new InvalidOperationException("Animation configuration button was not found for " + context + ".");
+        Thread.Sleep(1000);
+        RecordOpenPopups(pid, "animation-config." + SafeFile(context));
+
+        var selected = items.FirstOrDefault(item => item.Index == selectedIndex) ?? items[selectedIndex];
+        return new UserWindowSelectionResult
+        {
+            ListView = userList,
+            Items = items,
+            SelectedItem = selected,
+            SelectedIndex = selectedIndex,
+            SelectionSource = selectionSource
+        };
+    }
+
+    private static IntPtr ResolveAnimationCanvasWithRetry(IntPtr main, UserWindowSelectionResult selection, string outDir, string label)
+    {
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                return FindCanvas(main);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+
+            try { UiAutomation.ListViewSelectIndex(selection.ListView, selection.SelectedIndex); } catch { }
+            Thread.Sleep(150);
+
+            var clicked = ClickButtonByNormalizedText(main, mouse: true, AnimationEditButtonText);
+            if (!clicked)
+            {
+                try { UiAutomation.ListViewDoubleClickIndex(selection.ListView, selection.SelectedIndex, mouse: true); } catch { }
+            }
+
+            Thread.Sleep(1200);
+        }
+
+        File.WriteAllLines(Path.Combine(outDir, label + "-no-canvas.window-tree.txt"),
+            UiAutomation.WindowTreeLines(main), Encoding.UTF8);
+        TryScreenshot(main, Path.Combine(outDir, label + "-no-canvas-main.png"));
+
+        if (lastError != null)
+            throw new InvalidOperationException("Animation canvas was not found after retry.", lastError);
+        throw new InvalidOperationException("Animation canvas was not found after retry.");
     }
 
     private static CanvasObjectMap BuildCanvasObjectMap(string project, string projectSha, int windowIndex, IntPtr main, IntPtr canvas)

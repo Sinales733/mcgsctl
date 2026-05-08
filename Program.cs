@@ -30,6 +30,7 @@ internal static partial class Program
     private const uint FreeTableCommandId = 32946;
     private const uint HistoricalTableCommandId = 32947;
     private const uint SavedDataBrowserCommandId = 32950;
+    private const uint SelectArrowCommandId = 32900;
     private const uint ArcCommandId = 32902;
     private const uint PolylineCommandId = 32906;
     private const uint LineCommandId = 32901;
@@ -39,7 +40,6 @@ internal static partial class Program
     private const uint NativeStaticTextCommandId = 32907;
     private const uint NativeLampCommandId = 32941;
     private const string AnimationEditButtonText = "\u52a8\u753b\u7ec4\u6001";
-    private const string NewWindowButtonText = "\u65b0\u5efa\u7a97\u53e3";
     private const string NativeStaticTextDialogTitle = "\u6807\u7b7e\u52a8\u753b\u7ec4\u6001\u5c5e\u6027\u8bbe\u7f6e";
     private const string NativeLampDialogTitle = "\u52a8\u753b\u663e\u793a\u6784\u4ef6\u5c5e\u6027\u8bbe\u7f6e";
     private const string ProcessName = "McgsSetE";
@@ -191,7 +191,6 @@ Commands:
   mcgsctl workflow run project.apply-candidate --source <official.mce> --candidate <candidate.mce> --approval <approval.json>
   mcgsctl workflow run project.rollback --rollback <rollbackDir> --target <official.mce>
   mcgsctl workflow run safety.verify --project <candidate.mce> --spec <safety-spec.json> --evidence-dir <runDir> [--awl <plc.awl>]
-  mcgsctl workflow run user-window.add (--source <mce>|--project <copy.mce>) [--workdir <dir>] [--out <dir>]
   mcgsctl workflow run window.layout.apply (--source <mce>|--project <copy.mce>) --layout <layout.json> [--workdir <dir>] [--safety <safety-spec.json>] [--canvas-objects <canvas-objects.json>] [--placement explicit|internal-occupancy]
   mcgsctl workflow run realtime-db.add (--source <mce>|--project <copy.mce>) --name <object> [--type switch|numeric|string|event|group] [--initial <value>] [--unit <text>] [--note <text>]
   mcgsctl workflow run window.static-text.add (--source <mce>|--project <copy.mce>) --text <label> [--window-index <n>] [--x <n> --y <n> --width <n> --height <n>]
@@ -1104,11 +1103,6 @@ Commands:
             return WorkflowLayoutApply(args);
         }
 
-        if (name.Equals("user-window.add", StringComparison.OrdinalIgnoreCase))
-        {
-            return WorkflowUserWindowAdd(args);
-        }
-
         if (name.Equals("window.button.add-momentary", StringComparison.OrdinalIgnoreCase))
         {
             return WorkflowAddMomentaryButton(args);
@@ -1847,172 +1841,6 @@ Commands:
         return match.Handle;
     }
 
-    private static int WorkflowUserWindowAdd(string[] args)
-    {
-        var outDir = FullPath(Opt(args, "--out") ?? Path.Combine(".mcgsctl-runs", "user-window-add-" + Timestamp()));
-        Directory.CreateDirectory(outDir);
-        var workflowProject = PrepareWorkflowProject(args, "user-window.add", outDir);
-        var project = workflowProject.Project;
-
-        var editor = FullPath(Opt(args, "--editor") ?? EnvOrDefault("MCGS_EDITOR", DefaultEditor()));
-        Process? process = null;
-        IntPtr main = IntPtr.Zero;
-        var saved = false;
-        var success = false;
-
-        try
-        {
-            var beforeSnapshot = ExportMceSnapshot(project, Path.Combine(outDir, "mce-before"));
-
-            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
-            {
-                UseShellExecute = true,
-                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
-            });
-            if (process == null) return Fail("Failed to open editor.");
-            main = WaitForMainWindow(process.Id, TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
-            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
-            main = UiAutomation.FindMainWindow(process.Id);
-            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
-
-            UiAutomation.SendCommand(main, 33955);
-            Thread.Sleep(700);
-
-            var userList = FindListViewByItemCount(main, 3);
-            var beforeWindows = UiAutomation.ListViewItems(userList)
-                .Select(item => new { item.Index, item.Texts })
-                .ToArray();
-            var beforeCount = beforeWindows.Length;
-
-            if (!ClickButtonByNormalizedText(main, mouse: true, NewWindowButtonText))
-                throw new InvalidOperationException("New window button was not found.");
-
-            var until = DateTime.UtcNow + TimeSpan.FromSeconds(8);
-            ListViewItemInfo[] afterItems;
-            do
-            {
-                Thread.Sleep(300);
-                afterItems = UiAutomation.ListViewItems(userList);
-                if (afterItems.Length > beforeCount) break;
-            } while (DateTime.UtcNow < until);
-
-            if (afterItems.Length <= beforeCount)
-                throw new InvalidOperationException($"User-window count did not increase after clicking New Window. Before={beforeCount}, after={afterItems.Length}.");
-
-            var beforeKeys = beforeWindows
-                .Select(item => string.Join("\u001f", item.Texts))
-                .ToHashSet(StringComparer.Ordinal);
-            var createdItem = afterItems.FirstOrDefault(item =>
-                !beforeKeys.Contains(string.Join("\u001f", item.Texts)));
-            var createdIndex = createdItem?.Index ?? afterItems.Length - 1;
-            UiAutomation.ListViewSelectIndex(userList, createdIndex);
-            Thread.Sleep(250);
-            CaptureProcessWindows(process.Id, Path.Combine(outDir, "after-new-window"));
-
-            UiAutomation.SendCommand(main, SaveCommandId);
-            Thread.Sleep(2000);
-            ExportMceSnapshot(project, Path.Combine(outDir, "mce-after"));
-            saved = true;
-            CloseEditorProcess(process.Id, main, saveIntent: true);
-            process = null;
-            main = IntPtr.Zero;
-
-            var reopenWindowCount = ReopenUserWindowListCount(project, editor, outDir,
-                TimeSpan.FromSeconds(ParseInt(args, "--timeout", 20)));
-            var countIncreased = afterItems.Length > beforeCount &&
-                                 reopenWindowCount == afterItems.Length;
-
-            File.WriteAllText(Path.Combine(outDir, "result.json"),
-                JsonSerializer.Serialize(new
-                {
-                    project,
-                    beforeListCount = beforeCount,
-                    afterListCount = afterItems.Length,
-                    createdIndex,
-                    reopenWindowCount,
-                    beforeWindows,
-                    afterWindows = afterItems.Select(item => new { item.Index, item.Texts }).ToArray(),
-                    countIncreased
-                }, JsonOptions()),
-                Encoding.UTF8);
-
-            success = countIncreased;
-            WriteMutatingWorkflowResult(workflowProject, outDir, new[]
-            {
-                afterItems.Length > beforeCount
-                    ? RequiredPass("user-window-list-count", $"{beforeCount}->{afterItems.Length}")
-                    : RequiredFail("user-window-list-count", "The user-window list did not gain a row."),
-                reopenWindowCount == afterItems.Length
-                    ? RequiredPass("reopen-user-window-count", reopenWindowCount.ToString())
-                    : RequiredFail("reopen-user-window-count", $"Reopen count {reopenWindowCount} did not match saved count {afterItems.Length}.")
-            }, extra: new Dictionary<string, object?>
-            {
-                ["createdUserWindowIndex"] = createdIndex,
-                ["createdUiObjects"] = Array.Empty<object>(),
-                ["touchedDataObjects"] = Array.Empty<string>(),
-                ["createdDataObjects"] = Array.Empty<string>(),
-                ["modifiedDataObjects"] = Array.Empty<string>()
-            });
-            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
-            Console.WriteLine("user window add evidence: " + outDir);
-            Console.WriteLine(success
-                ? "user window add verification: PASS"
-                : "user window add verification: CHECK EVIDENCE");
-            return success ? 0 : 1;
-        }
-        catch (Exception ex)
-        {
-            File.WriteAllText(Path.Combine(outDir, "failure.txt"), ex.ToString(), Encoding.UTF8);
-            if (process != null)
-            {
-                try { CaptureProcessWindows(process.Id, Path.Combine(outDir, "failure")); } catch { }
-            }
-            WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
-            Console.Error.WriteLine("workflow failed: " + ex.Message);
-            return 1;
-        }
-        finally
-        {
-            if (process != null && !process.HasExited)
-            {
-                try { CloseEditorProcess(process.Id, main, saved); } catch { }
-            }
-        }
-    }
-
-    private static int ReopenUserWindowListCount(string project, string editor, string outDir, TimeSpan timeout)
-    {
-        Process? process = null;
-        IntPtr main = IntPtr.Zero;
-        try
-        {
-            process = Process.Start(new ProcessStartInfo(editor, Quote(project))
-            {
-                UseShellExecute = true,
-                WorkingDirectory = Path.GetDirectoryName(editor) ?? Environment.CurrentDirectory
-            });
-            if (process == null) throw new InvalidOperationException("Failed to reopen editor.");
-            main = WaitForMainWindow(process.Id, timeout);
-            HandleStartupDialogs(process.Id, TimeSpan.FromSeconds(10));
-            main = UiAutomation.FindMainWindow(process.Id);
-            if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared during reopen verification.");
-
-            UiAutomation.SendCommand(main, 33955);
-            Thread.Sleep(700);
-            var userList = FindListViewByItemCount(main, 4);
-            var items = UiAutomation.ListViewItems(userList);
-            CaptureProcessWindows(process.Id, Path.Combine(outDir, "reopen-user-window-list"));
-            return items.Length;
-        }
-        finally
-        {
-            if (process != null && !process.HasExited)
-            {
-                try { CloseEditorProcess(process.Id, main, saveIntent: false); } catch { }
-            }
-        }
-    }
-
     private static int WorkflowAddMomentaryButton(string[] args)
     {
         var label = Required(args, "--text");
@@ -2061,6 +1889,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, 32938);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -2550,6 +2383,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, 32938);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -2723,6 +2561,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, NativeStaticTextCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
@@ -2857,6 +2700,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, NativeLampCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             var dialog = OpenCanvasObjectPropertyDialog(process.Id, main, canvas, x, y, width, height,
@@ -3011,6 +2859,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, LineCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -3071,7 +2924,14 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -3229,6 +3089,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, InputBoxCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -3267,15 +3132,24 @@ Commands:
 
             var propertyReadbackOut = Path.Combine(outDir, "property-readback");
             Directory.CreateDirectory(propertyReadbackOut);
-            var readbackArgs = new[]
+            var readbackArgs = new List<string>
             {
                 "--project", project,
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--ignore-displayed-text"
             };
-            CanvasPropertyReadback(readbackArgs);
+            readbackArgs.Add("--require-non-window-dialog");
+
+            CanvasPropertyReadback(readbackArgs.ToArray());
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
             if (File.Exists(propertyReadbackPath))
             {
@@ -3421,6 +3295,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, AnimationButtonCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -3459,15 +3338,24 @@ Commands:
 
             var propertyReadbackOut = Path.Combine(outDir, "property-readback");
             Directory.CreateDirectory(propertyReadbackOut);
-            var readbackArgs = new[]
+            var readbackArgs = new List<string>
             {
                 "--project", project,
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--ignore-displayed-text"
             };
-            CanvasPropertyReadback(readbackArgs);
+            readbackArgs.Add("--require-non-window-dialog");
+
+            CanvasPropertyReadback(readbackArgs.ToArray());
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
             if (File.Exists(propertyReadbackPath))
             {
@@ -3613,6 +3501,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, ComboBoxCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -3651,15 +3544,23 @@ Commands:
 
             var propertyReadbackOut = Path.Combine(outDir, "property-readback");
             Directory.CreateDirectory(propertyReadbackOut);
-            var readbackArgs = new[]
+            var readbackArgs = new List<string>
             {
                 "--project", project,
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--ignore-displayed-text"
             };
-            CanvasPropertyReadback(readbackArgs);
+            readbackArgs.Add("--require-non-window-dialog");
+            CanvasPropertyReadback(readbackArgs.ToArray());
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
             if (File.Exists(propertyReadbackPath))
             {
@@ -3805,6 +3706,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, FlowBlockCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -3849,7 +3755,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -3997,6 +3911,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, PercentFillCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -4041,7 +3960,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -4189,6 +4116,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, SliderInputCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -4233,7 +4165,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -4381,6 +4321,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, KnobInputCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -4425,7 +4370,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -4573,6 +4526,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, RotatingMeterCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -4617,7 +4575,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -4765,6 +4731,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, RealtimeCurveCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -4809,7 +4780,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -4957,6 +4936,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, HistoricalCurveCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -5001,7 +4985,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -5111,6 +5103,7 @@ Commands:
         var objectId = Opt(args, "--id") ?? (kind + "-" + Timestamp());
         var text = Opt(args, "--text") ?? "";
         var windowIndex = ParseInt(args, "--window-index", 2);
+        var windowName = Opt(args, "--window-name");
         var x = ParseInt(args, "--x", 10);
         var y = ParseInt(args, "--y", 370);
         var width = ParseInt(args, "--width", defaultWidth);
@@ -5154,10 +5147,25 @@ Commands:
             main = UiAutomation.FindMainWindow(process.Id);
             if (main == IntPtr.Zero) throw new TimeoutException("MCGS main window disappeared while handling startup dialogs.");
 
-            OpenAnimationConfiguration(process.Id, main, windowIndex, kind);
+            var selection = OpenAnimationConfiguration(process.Id, main, windowIndex, windowName, kind);
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, commandId);
             Thread.Sleep(300);
+            var requestedRect = new { x, y, width, height };
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
+            var appliedRect = new { x, y, width, height };
+            var rectClamped = requestedRect.x != appliedRect.x ||
+                              requestedRect.y != appliedRect.y ||
+                              requestedRect.width != appliedRect.width ||
+                              requestedRect.height != appliedRect.height;
+            var clampReason = rectClamped
+                ? "requested rectangle exceeded canvas client bounds; clamped to keep GUI gesture inside canvas"
+                : "";
+            var canvasRect = UiAutomation.GetWindowRect(canvas);
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -5196,15 +5204,31 @@ Commands:
 
             var propertyReadbackOut = Path.Combine(outDir, "property-readback");
             Directory.CreateDirectory(propertyReadbackOut);
-            var readbackArgs = new[]
+            var readbackArgs = new List<string>
             {
                 "--project", project,
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--ignore-displayed-text"
             };
-            CanvasPropertyReadback(readbackArgs);
+            if (!(kind.Equals("free-table", StringComparison.OrdinalIgnoreCase) ||
+                  kind.Equals("historical-table", StringComparison.OrdinalIgnoreCase)))
+            {
+                readbackArgs.Add("--require-non-window-dialog");
+            }
+            else
+            {
+                readbackArgs.Add("--table-object-frame-select");
+            }
+            CanvasPropertyReadback(readbackArgs.ToArray());
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
             if (File.Exists(propertyReadbackPath))
             {
@@ -5226,7 +5250,19 @@ Commands:
                     kind,
                     text,
                     semanticObjectId,
-                    windowIndex,
+                    requestedWindowIndex = windowIndex,
+                    requestedWindowName = windowName,
+                    selectedWindowIndex = selection.SelectedIndex,
+                    selectedWindowTexts = selection.SelectedItem.Texts,
+                    selectionSource = selection.SelectionSource,
+                    canvasHwnd = "0x" + canvas.ToInt64().ToString("X"),
+                    canvasRect = new { canvasRect.Left, canvasRect.Top, canvasRect.Width, canvasRect.Height },
+                    canvasStateEvidence = "after-save/window-tree.txt + semantic-map + property-readback",
+                    windowIndex = selection.SelectedIndex,
+                    requestedRect,
+                    appliedRect,
+                    clamped = rectClamped,
+                    clampReason,
                     rect = new { x, y, width, height },
                     expectedClasses,
                     classDelta,
@@ -5273,7 +5309,19 @@ Commands:
                     ["modifiedDataObjects"] = Array.Empty<string>(),
                     ["controlEvidence"] = Array.Empty<object>(),
                     ["semanticObjectId"] = semanticObjectId,
-                    ["propertyReadbackStatus"] = propertyReadbackStatus
+                    ["propertyReadbackStatus"] = propertyReadbackStatus,
+                    ["requestedWindowIndex"] = windowIndex,
+                    ["requestedWindowName"] = windowName,
+                    ["selectedWindowIndex"] = selection.SelectedIndex,
+                    ["selectedWindowTexts"] = selection.SelectedItem.Texts,
+                    ["selectionSource"] = selection.SelectionSource,
+                    ["canvasHwnd"] = "0x" + canvas.ToInt64().ToString("X"),
+                    ["canvasRect"] = new { canvasRect.Left, canvasRect.Top, canvasRect.Width, canvasRect.Height },
+                    ["canvasStateEvidence"] = "after-save/window-tree.txt + semantic-map + property-readback",
+                    ["requestedRect"] = requestedRect,
+                    ["appliedRect"] = appliedRect,
+                    ["clamped"] = rectClamped,
+                    ["clampReason"] = clampReason
                 });
             WriteWorkflowAuditEnd(outDir, workflowProject, saved, success);
             Console.WriteLine("workflow evidence: " + outDir);
@@ -5374,6 +5422,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, PolylineCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -5434,7 +5487,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -5597,6 +5658,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, ArcCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -5657,7 +5723,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -5822,6 +5896,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, RoundedRectangleCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -5890,7 +5969,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -6056,6 +6143,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, EllipseCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -6124,7 +6216,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -6290,6 +6390,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, RectangleCommandId);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -6358,7 +6463,15 @@ Commands:
                 "--semantic-map", semanticMapPath,
                 "--object-id", semanticObjectId,
                 "--out", propertyReadbackOut,
-                "--probe-font"
+                "--window-index", windowIndex.ToString(),
+                "--target-x", x.ToString(),
+                "--target-y", y.ToString(),
+                "--target-width", width.ToString(),
+                "--target-height", height.ToString(),
+                "--probe-font",
+                "--prefer-double-click",
+                "--require-non-window-dialog",
+                "--ignore-displayed-text"
             };
             CanvasPropertyReadback(readbackArgs);
             propertyReadbackPath = Path.Combine(propertyReadbackOut, "property-readback.json");
@@ -6615,6 +6728,11 @@ Commands:
             var canvas = FindCanvas(main);
             UiAutomation.SendCommand(main, 32938);
             Thread.Sleep(300);
+            var clamped = ClampDrawRectToCanvas(canvas, x, y, width, height);
+            x = clamped.X;
+            y = clamped.Y;
+            width = clamped.Width;
+            height = clamped.Height;
             UiAutomation.DragPoint(canvas, x, y, x + width, y + height, mouse: true);
             Thread.Sleep(600);
             UiAutomation.ClickPoint(canvas, x + width / 2, y + height / 2, MouseButton.Left, doubleClick: false, mouse: true);
@@ -7271,6 +7389,25 @@ Commands:
                     continue;
                 }
 
+                if (title.Contains("Mcgs嵌入版组态环境", StringComparison.OrdinalIgnoreCase) ||
+                    ContainsAny(text, "退出组态环境"))
+                {
+                    RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "click-yes", "startup.exit-config-env");
+                    ClickButtonByNormalizedText(dialog, mouse: true,
+                        "是(&Y)", "是(Y)", "是", "确认", "确定", "Yes");
+                    handled = true;
+                    continue;
+                }
+
+                if (ContainsAny(text, "是否保存", "保存修改", "是否将更改保存"))
+                {
+                    RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "click-no", "startup.discard-save");
+                    ClickButtonByNormalizedText(dialog, mouse: true,
+                        "否(&N)", "否(N)", "不保存", "否", "No", "取消");
+                    handled = true;
+                    continue;
+                }
+
                 RecordDialogEvidence("startup-dialogs.jsonl", pid, dialog, "unexpected", "startup");
                 throw new InvalidOperationException("Unexpected startup dialog: " + ShortDialogText(dialog));
             }
@@ -7638,26 +7775,128 @@ Commands:
         }
     }
 
-    private static void OpenAnimationConfiguration(int pid, IntPtr main, int windowIndex, string context)
+    private static UserWindowSelectionResult OpenAnimationConfiguration(int pid, IntPtr main, int windowIndex, string context)
+        => OpenAnimationConfiguration(pid, main, windowIndex, requestedWindowName: null, context);
+
+    private static bool IsWindowPropertyDialogText(string? text)
+        => !string.IsNullOrWhiteSpace(text) &&
+           ContainsAny(text,
+               "用户窗口属性设置",
+               "用户窗口属性",
+               "window property",
+               "Mcgs嵌入版组态环境",
+               "退出组态环境",
+               "是否保存",
+               "save changes");
+
+    private static (int X, int Y)[] BuildCanvasSelectionPoints(int x, int y, int width, int height, bool edgeFirst)
     {
-        UiAutomation.SendCommand(main, 33955);
-        Thread.Sleep(700);
-        var userList = FindListViewByItemCount(main, 3);
-        UiAutomation.ListViewSelectIndex(userList, windowIndex);
-        Thread.Sleep(250);
-        if (!ClickButtonByNormalizedText(main, mouse: true, AnimationEditButtonText))
-            throw new InvalidOperationException("Animation configuration button was not found for " + context + ".");
-        Thread.Sleep(1000);
-        RecordOpenPopups(pid, "animation-config." + SafeFile(context));
+        var inset = edgeFirst
+            ? 1
+            : Math.Clamp(Math.Min(width, height) / 6, 2, 12);
+        var left = x + inset;
+        var top = y + inset;
+        var right = x + Math.Max(1, width - inset - 1);
+        var bottom = y + Math.Max(1, height - inset - 1);
+        var centerX = x + width / 2;
+        var centerY = y + height / 2;
+        var edgePoints = new[]
+        {
+            (X: left, Y: top),
+            (X: right, Y: top),
+            (X: left, Y: bottom),
+            (X: right, Y: bottom),
+            (X: centerX, Y: top),
+            (X: left, Y: centerY),
+            (X: right, Y: centerY),
+            (X: centerX, Y: bottom)
+        };
+        var centerPoint = (X: centerX, Y: centerY);
+        return edgeFirst
+            ? edgePoints.Append(centerPoint).Distinct().ToArray()
+            : new[] { centerPoint }.Concat(edgePoints).Distinct().ToArray();
+    }
+
+    private static (int X, int Y)[] BuildTableObjectFrameSelectionPoints(int x, int y, int width, int height)
+    {
+        var edgeInset = Math.Clamp(Math.Min(width, height) / 24, 1, 4);
+        var left = Math.Max(1, x + edgeInset);
+        var right = Math.Max(left, x + Math.Max(1, width - edgeInset - 1));
+        var top = Math.Max(1, y + edgeInset);
+        var bottom = Math.Max(top, y + Math.Max(1, height - edgeInset - 1));
+        var centerX = x + width / 2;
+        var centerY = y + height / 2;
+        return new[]
+        {
+            (X: left, Y: top),
+            (X: right, Y: top),
+            (X: left, Y: bottom),
+            (X: right, Y: bottom),
+            (X: centerX, Y: top),
+            (X: centerX, Y: bottom),
+            (X: left, Y: centerY),
+            (X: right, Y: centerY)
+        }.Distinct().ToArray();
+    }
+
+    private sealed class CanvasPropertyDialogSelectionException : InvalidOperationException
+    {
+        public CanvasPropertyDialogSelectionException(string classification, string message) : base(message)
+        {
+            Classification = classification;
+        }
+
+        public string Classification { get; }
     }
 
     private static IntPtr OpenCanvasObjectPropertyDialog(int pid, IntPtr main, IntPtr canvas,
-        int x, int y, int width, int height, string expectedTitle, bool preferCommand)
+        int x, int y, int width, int height, string expectedTitle, bool preferCommand,
+        bool requireNonWindowDialog = false, bool skipDoubleClick = false, bool tableObjectFrameSelect = false)
     {
+        static bool HasPropertyPopupItem(PopupMenuInfo popup)
+            => popup.Items.Any(i =>
+            {
+                var text = CompactLabel(i.Text);
+                return text.Contains(CompactLabel("属性"), StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains(CompactLabel("property"), StringComparison.OrdinalIgnoreCase);
+            });
+
+        static bool LooksLikeTableCellPopup(PopupMenuInfo popup)
+        {
+            if (popup.Items.Length == 0) return false;
+            if (HasPropertyPopupItem(popup)) return false;
+            var tableMenuIds = new HashSet<uint>
+            {
+                33110, 33112, 33113, 33114, 33115, 33116, 33117, 33118, 33119, 33122, 33123, 33094
+            };
+            var tableIdHits = popup.Items.Count(i => i.Id.HasValue && tableMenuIds.Contains(i.Id.Value));
+            var tableTextHits = popup.Items.Count(i =>
+            {
+                var text = CompactLabel(i.Text);
+                return text.Contains(CompactLabel("表元"), StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains(CompactLabel("增加一行"), StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains(CompactLabel("删除一行"), StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains(CompactLabel("增加一列"), StringComparison.OrdinalIgnoreCase) ||
+                       text.Contains(CompactLabel("删除一列"), StringComparison.OrdinalIgnoreCase);
+            });
+            return tableIdHits >= 6 || tableTextHits >= 2;
+        }
+
+        bool IsForbiddenDialog(IntPtr dialog)
+        {
+            if (!requireNonWindowDialog) return false;
+            var title = Native.GetText(dialog);
+            if (IsWindowPropertyDialogText(title)) return true;
+            return IsWindowPropertyDialogText(DialogText(dialog));
+        }
+
         bool MatchesExpected(IntPtr dialog)
-            => string.IsNullOrWhiteSpace(expectedTitle) ||
-               Native.GetText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase) ||
-               DialogText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase);
+        {
+            if (IsForbiddenDialog(dialog)) return false;
+            if (string.IsNullOrWhiteSpace(expectedTitle)) return true;
+            return Native.GetText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase) ||
+                   DialogText(dialog).Contains(expectedTitle, StringComparison.OrdinalIgnoreCase);
+        }
 
         IntPtr TryExpected(TimeSpan timeout)
             => WaitForTopWindow(pid,
@@ -7666,48 +7905,256 @@ Commands:
                      MatchesExpected(h),
                 timeout);
 
-        void CloseWrongDialogs(string state)
+        var forbiddenDialogHits = 0;
+        var tableCellPopupHits = 0;
+
+        void ResetCanvasSelectionMode()
         {
-            foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h =>
-                         Native.GetClass(h) == "#32770" &&
-                         Native.IsWindowVisible(h) &&
-                         !MatchesExpected(h)))
+            try
             {
-                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "close-unexpected", state);
-                UiAutomation.CloseWindow(dialog);
-                Thread.Sleep(250);
+                UiAutomation.SendCommand(main, (int)SelectArrowCommandId);
+                Thread.Sleep(120);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                UiAutomation.ActivateForInput(canvas);
+                SendKeys.SendWait("{ESC}");
+                Thread.Sleep(120);
+            }
+            catch
+            {
             }
         }
 
-        var cx = x + width / 2;
-        var cy = y + height / 2;
-        UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: false, mouse: true);
-        Thread.Sleep(250);
-
-        if (preferCommand)
+        IntPtr TryMarqueeSelectionFallback(string state)
         {
-            UiAutomation.SendCommand(main, 32785);
-            var byCommand = TryExpected(TimeSpan.FromSeconds(3));
-            if (byCommand != IntPtr.Zero) return byCommand;
-            CloseWrongDialogs("object-property.command");
+            try
+            {
+                ResetCanvasSelectionMode();
+                var startX = Math.Max(1, x - 4);
+                var startY = Math.Max(1, y - 4);
+                var endX = Math.Max(startX + 6, x + width + 4);
+                var endY = Math.Max(startY + 6, y + height + 4);
+                UiAutomation.DragPoint(canvas, startX, startY, endX, endY, mouse: true);
+                Thread.Sleep(260);
+                UiAutomation.ClickPoint(canvas, Math.Max(1, x + width / 2), Math.Max(1, y + height / 2),
+                    MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(160);
+                UiAutomation.SendCommand(main, 32785);
+                var byMarquee = TryExpected(TimeSpan.FromSeconds(3));
+                if (byMarquee != IntPtr.Zero) return byMarquee;
+                CloseWrongDialogs(state);
+            }
+            catch
+            {
+            }
+
+            return IntPtr.Zero;
         }
 
-        UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: true, mouse: true);
-        var byDoubleClick = TryExpected(TimeSpan.FromSeconds(4));
-        if (byDoubleClick != IntPtr.Zero) return byDoubleClick;
-        CloseWrongDialogs("object-property.double-click");
-
-        if (!preferCommand)
+        void CloseWrongDialogs(string state)
         {
-            UiAutomation.ClickPoint(canvas, cx, cy, MouseButton.Left, doubleClick: false, mouse: true);
+            var wrongDialogs = UiAutomation.TopWindowsForPid(pid).Where(h =>
+                         Native.GetClass(h) == "#32770" &&
+                         Native.IsWindowVisible(h) &&
+                         !MatchesExpected(h))
+                .ToArray();
+
+            foreach (var dialog in wrongDialogs)
+            {
+                RecordDialogEvidence("dialogs.jsonl", pid, dialog, "close-unexpected", state);
+                if (IsWindowPropertyDialogText(Native.GetText(dialog)) || IsWindowPropertyDialogText(DialogText(dialog)))
+                    forbiddenDialogHits++;
+                ClickButtonByNormalizedText(dialog, mouse: true,
+                    "取消(&C)", "取消", "关闭(&C)", "关闭", "否(&N)", "否", "No");
+                Thread.Sleep(150);
+                UiAutomation.CloseWindow(dialog);
+                Thread.Sleep(250);
+            }
+
+            if (wrongDialogs.Length > 0)
+            {
+                try { UiAutomation.HandleCloseDialogs(pid, saveIntent: false, TimeSpan.FromSeconds(2)); } catch { }
+                Thread.Sleep(200);
+            }
+
+            if (requireNonWindowDialog && forbiddenDialogHits >= 2)
+                throw new CanvasPropertyDialogSelectionException(
+                    "userWindowPropertyOpened",
+                    "Repeatedly opened user-window/environment property dialogs while selecting object properties; target coordinates are likely outside a selectable object.");
+        }
+
+        var selectionPoints = tableObjectFrameSelect
+            ? BuildTableObjectFrameSelectionPoints(x, y, width, height)
+            : BuildCanvasSelectionPoints(x, y, width, height, edgeFirst: requireNonWindowDialog);
+        var effectiveSkipDoubleClick = skipDoubleClick || tableObjectFrameSelect;
+
+        foreach (var point in selectionPoints)
+        {
+            ResetCanvasSelectionMode();
+            UiAutomation.ClickPoint(canvas, point.X, point.Y, MouseButton.Left, doubleClick: false, mouse: true);
             Thread.Sleep(250);
-            UiAutomation.SendCommand(main, 32785);
-            var byFallbackCommand = TryExpected(TimeSpan.FromSeconds(3));
-            if (byFallbackCommand != IntPtr.Zero) return byFallbackCommand;
-            CloseWrongDialogs("object-property.fallback-command");
+
+            if (preferCommand)
+            {
+                UiAutomation.SendCommand(main, 32785);
+                var byCommand = TryExpected(TimeSpan.FromSeconds(3));
+                if (byCommand != IntPtr.Zero) return byCommand;
+                CloseWrongDialogs("object-property.command");
+            }
+
+            if (!effectiveSkipDoubleClick && !requireNonWindowDialog)
+            {
+                UiAutomation.ClickPoint(canvas, point.X, point.Y, MouseButton.Left, doubleClick: true, mouse: true);
+                var byDoubleClick = TryExpected(TimeSpan.FromSeconds(4));
+                if (byDoubleClick != IntPtr.Zero) return byDoubleClick;
+                CloseWrongDialogs("object-property.double-click");
+            }
+
+            if (!preferCommand)
+            {
+                UiAutomation.ClickPoint(canvas, point.X, point.Y, MouseButton.Left, doubleClick: false, mouse: true);
+                Thread.Sleep(250);
+                UiAutomation.SendCommand(main, 32785);
+                var byFallbackCommand = TryExpected(TimeSpan.FromSeconds(3));
+                if (byFallbackCommand != IntPtr.Zero) return byFallbackCommand;
+                CloseWrongDialogs("object-property.fallback-command");
+            }
+
+            var byMarqueeCommand = TryMarqueeSelectionFallback("object-property.marquee-command");
+            if (byMarqueeCommand != IntPtr.Zero) return byMarqueeCommand;
+
+            try
+            {
+                UiAutomation.ActivateForInput(canvas);
+                SendKeys.SendWait("%{ENTER}");
+                var byAltEnter = TryExpected(TimeSpan.FromSeconds(4));
+                if (byAltEnter != IntPtr.Zero) return byAltEnter;
+                CloseWrongDialogs("object-property.alt-enter");
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                UiAutomation.ClickPoint(canvas, point.X, point.Y, MouseButton.Right, doubleClick: false, mouse: true);
+                Thread.Sleep(240);
+                RecordOpenPopups(pid, "object-property.right-click");
+                var popups = UiAutomation.GetPopupMenus(pid).ToArray();
+                var popup = popups
+                    .OrderByDescending(HasPropertyPopupItem)
+                    .ThenByDescending(LooksLikeTableCellPopup)
+                    .ThenByDescending(p => p.Window.Top)
+                    .FirstOrDefault();
+                if (popup != null)
+                {
+                    var propertyItem = popup.Items.FirstOrDefault(i =>
+                        CompactLabel(i.Text).Contains(CompactLabel("属性"), StringComparison.OrdinalIgnoreCase) ||
+                        CompactLabel(i.Text).Contains(CompactLabel("property"), StringComparison.OrdinalIgnoreCase));
+                    if (propertyItem != null)
+                    {
+                        var invoked = false;
+                        try
+                        {
+                            UiAutomation.ChoosePopupItem(popup, propertyItem.Index, null, null, exact: false, mouse: true);
+                            invoked = true;
+                        }
+                        catch
+                        {
+                        }
+
+                        if (!invoked && propertyItem.Id.HasValue && propertyItem.Id.Value > 0)
+                        {
+                            UiAutomation.SendCommand(main, propertyItem.Id.Value);
+                            invoked = true;
+                        }
+
+                        if (invoked)
+                        {
+                            var byRightClickMenu = TryExpected(TimeSpan.FromSeconds(4));
+                            if (byRightClickMenu != IntPtr.Zero) return byRightClickMenu;
+                            CloseWrongDialogs("object-property.right-click-property");
+                        }
+                    }
+                    else if (popups.Any(LooksLikeTableCellPopup))
+                    {
+                        tableCellPopupHits++;
+                        if (!tableObjectFrameSelect)
+                        {
+                            var byTableFallback = TryMarqueeSelectionFallback("object-property.table-cell-popup");
+                            if (byTableFallback != IntPtr.Zero) return byTableFallback;
+
+                            throw new CanvasPropertyDialogSelectionException(
+                                "tableCellPopupOpened",
+                                "Table-cell context menu repeatedly opened while probing object properties; table object selection did not reach object-level property dialog.");
+                        }
+
+                        try
+                        {
+                            UiAutomation.ActivateForInput(canvas);
+                            SendKeys.SendWait("{ESC}");
+                            Thread.Sleep(120);
+                        }
+                        catch
+                        {
+                        }
+
+                        continue;
+                    }
+                }
+            }
+            catch (CanvasPropertyDialogSelectionException)
+            {
+                throw;
+            }
+            catch
+            {
+            }
+            finally
+            {
+                try
+                {
+                    UiAutomation.ActivateForInput(canvas);
+                    SendKeys.SendWait("{ESC}");
+                    Thread.Sleep(120);
+                }
+                catch
+                {
+                }
+            }
         }
 
-        throw new TimeoutException("Expected object property dialog was not found: " + expectedTitle);
+        if (tableCellPopupHits > 0)
+            throw new CanvasPropertyDialogSelectionException(
+                "tableCellPopupOpened",
+                "Table-cell context menu was observed, and object-level property dialog was not reachable for the selected table rectangle.");
+
+        var mdiInfo = UiAutomation.GetMdiInfo(main);
+        var activeMdi = ParseHwnd(mdiInfo.ActiveMdiHandle);
+        if (activeMdi != IntPtr.Zero && activeMdi != main)
+        {
+            var activeText = Native.GetText(activeMdi);
+            if (ContainsAny(activeText, "工作台", "Workbench", "worksheet"))
+            {
+                var hasTableEditorControls = UiAutomation.EnumerateChildren(activeMdi).Any(h =>
+                    Native.GetClass(h).Equals("SysTabControl32", StringComparison.OrdinalIgnoreCase) ||
+                    Native.GetClass(h).Equals("SysListView32", StringComparison.OrdinalIgnoreCase));
+                if (hasTableEditorControls)
+                {
+                    RecordDialogEvidence("dialogs.jsonl", pid, activeMdi, "table-editor-fallback", "object-property.mdi-active");
+                    return activeMdi;
+                }
+            }
+        }
+
+        throw new CanvasPropertyDialogSelectionException(
+            "selectionFailed",
+            "Expected object property dialog was not found: " + expectedTitle);
     }
 
     private static void ConfigureNativeStaticText(IntPtr dialog, string label)
@@ -7997,6 +8444,13 @@ Commands:
 
     private static void CloseEditorProcess(int pid, IntPtr main, bool saveIntent)
     {
+        Process? process = null;
+        try { process = Process.GetProcessById(pid); }
+        catch
+        {
+            process = null;
+        }
+
         var hwnd = main != IntPtr.Zero ? main : UiAutomation.FindMainWindow(pid);
         foreach (var dialog in UiAutomation.TopWindowsForPid(pid).Where(h => h != hwnd && Native.GetClass(h) == "#32770"))
         {
@@ -8009,6 +8463,21 @@ Commands:
             Thread.Sleep(500);
             UiAutomation.CloseWindow(hwnd);
             UiAutomation.HandleCloseDialogs(pid, saveIntent, TimeSpan.FromSeconds(12));
+        }
+
+        if (process == null) return;
+        try
+        {
+            if (process.HasExited) return;
+            if (process.WaitForExit(3000)) return;
+            try { process.CloseMainWindow(); } catch { }
+            if (process.WaitForExit(3000)) return;
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
+        catch
+        {
+            // Closing the editor is best-effort; callers already treat close failures as non-fatal cleanup issues.
         }
     }
 
@@ -8056,6 +8525,28 @@ Commands:
             });
         if (canvas == IntPtr.Zero) throw new InvalidOperationException("Animation canvas was not found.");
         return canvas;
+    }
+
+    private static (int X, int Y, int Width, int Height) ClampDrawRectToCanvas(
+        IntPtr canvas,
+        int x,
+        int y,
+        int width,
+        int height,
+        int margin = 2)
+    {
+        var canvasRect = UiAutomation.GetWindowRect(canvas);
+        var maxWidth = Math.Max(8, canvasRect.Width - margin * 2);
+        var maxHeight = Math.Max(8, canvasRect.Height - margin * 2);
+        var clampedWidth = Math.Max(8, Math.Min(width, maxWidth));
+        var clampedHeight = Math.Max(8, Math.Min(height, maxHeight));
+        var minX = Math.Max(1, margin);
+        var minY = Math.Max(1, margin);
+        var maxX = Math.Max(minX, canvasRect.Width - clampedWidth - margin);
+        var maxY = Math.Max(minY, canvasRect.Height - clampedHeight - margin);
+        var clampedX = Math.Clamp(x, minX, maxX);
+        var clampedY = Math.Clamp(y, minY, maxY);
+        return (clampedX, clampedY, clampedWidth, clampedHeight);
     }
 
     private static IntPtr FindFirstChild(IntPtr root, string className, string? text)
@@ -10229,11 +10720,87 @@ internal static class UiAutomation
 
     public static bool HandleCloseDialogs(int pid, bool saveIntent, TimeSpan timeout)
     {
+        static string CompactDialogLabel(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            var sb = new StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                if (char.IsWhiteSpace(ch) ||
+                    ch == '&' ||
+                    ch == '(' ||
+                    ch == ')' ||
+                    ch == '[' ||
+                    ch == ']')
+                {
+                    continue;
+                }
+                sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        static bool LabelMatches(string actual, string expected)
+        {
+            var actualCompact = CompactDialogLabel(actual);
+            var expectedCompact = CompactDialogLabel(expected);
+            if (actualCompact.Length == 0 || expectedCompact.Length == 0) return false;
+            return actualCompact.Equals(expectedCompact, StringComparison.OrdinalIgnoreCase) ||
+                   actualCompact.Contains(expectedCompact, StringComparison.OrdinalIgnoreCase);
+        }
+
         var until = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < until)
         {
             var main = FindMainWindow(pid);
             if (main == IntPtr.Zero) return true;
+
+            foreach (var popup in TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32768"))
+            {
+                try
+                {
+                    Native.SetForegroundWindow(popup);
+                    SendKeys.SendWait("{ESC}");
+                    Thread.Sleep(120);
+                }
+                catch
+                {
+                }
+
+                if (Native.IsWindow(popup) && Native.IsWindowVisible(popup))
+                {
+                    CloseWindow(popup);
+                    Thread.Sleep(120);
+                }
+            }
+
+            foreach (var auxWindow in TopWindowsForPid(pid).Where(h =>
+                         h != main &&
+                         Native.GetClass(h) != "#32770" &&
+                         Native.IsWindowVisible(h)))
+            {
+                var auxText = Native.GetText(auxWindow);
+                if (!(auxText.Contains("用户窗口属性设置", StringComparison.OrdinalIgnoreCase) ||
+                      auxText.Contains("用户窗口属性", StringComparison.OrdinalIgnoreCase) ||
+                      auxText.Contains("window property", StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                try
+                {
+                    Native.SetForegroundWindow(auxWindow);
+                    SendKeys.SendWait("{ESC}");
+                    Thread.Sleep(180);
+                }
+                catch
+                {
+                }
+
+                if (Native.IsWindow(auxWindow) && Native.IsWindowVisible(auxWindow))
+                {
+                    CloseWindow(auxWindow);
+                    Thread.Sleep(240);
+                }
+            }
 
             foreach (var dialog in TopWindowsForPid(pid).Where(h => Native.GetClass(h) == "#32770"))
             {
@@ -10241,11 +10808,21 @@ internal static class UiAutomation
                 var dialogText = title + "\n" + string.Join("\n", EnumerateChildren(dialog).Select(Native.GetText));
                 var buttons = EnumerateChildren(dialog)
                     .Where(h => Native.GetClass(h).Contains("Button", StringComparison.OrdinalIgnoreCase))
-                    .Select(h => new { Handle = h, Text = Native.GetText(h) })
+                    .Select(h =>
+                    {
+                        var text = Native.GetText(h);
+                        return new { Handle = h, Text = text, Compact = CompactDialogLabel(text) };
+                    })
                     .ToList();
 
                 string[] preferred;
-                if (dialogText.Contains("退出组态环境", StringComparison.OrdinalIgnoreCase) ||
+                if (dialogText.Contains("用户窗口属性设置", StringComparison.OrdinalIgnoreCase) ||
+                    dialogText.Contains("用户窗口属性", StringComparison.OrdinalIgnoreCase) ||
+                    dialogText.Contains("window property", StringComparison.OrdinalIgnoreCase))
+                {
+                    preferred = new[] { "取消(&C)", "取消(C)", "取消", "关闭(&C)", "关闭", "否(&N)", "否", "No" };
+                }
+                else if (dialogText.Contains("退出组态环境", StringComparison.OrdinalIgnoreCase) ||
                     dialogText.Contains("退出组态", StringComparison.OrdinalIgnoreCase))
                 {
                     preferred = new[] { "是(&Y)", "是", "Yes", "确定" };
@@ -10258,16 +10835,29 @@ internal static class UiAutomation
                 }
                 else
                 {
-                    preferred = new[] { "是(&Y)", "是", "Yes", "确定", "否(&N)", "否", "No" };
+                    preferred = new[] { "取消(&C)", "取消(C)", "取消", "关闭(&C)", "关闭", "否(&N)", "否", "No", "确定", "确认", "OK", "是(&Y)", "是", "Yes" };
                 }
 
+                var clicked = false;
                 foreach (var label in preferred)
                 {
-                    var button = buttons.FirstOrDefault(b => b.Text.Equals(label, StringComparison.OrdinalIgnoreCase));
+                    var compact = CompactDialogLabel(label);
+                    if (compact.Length == 0) continue;
+                    var button = buttons.FirstOrDefault(b =>
+                        LabelMatches(b.Text, label) ||
+                        b.Compact.Equals(compact, StringComparison.OrdinalIgnoreCase) ||
+                        b.Compact.Contains(compact, StringComparison.OrdinalIgnoreCase));
                     if (button == null) continue;
                     Native.SendMessage(button.Handle, Native.BM_CLICK, IntPtr.Zero, IntPtr.Zero);
                     Thread.Sleep(500);
+                    clicked = true;
                     break;
+                }
+
+                if (!clicked)
+                {
+                    CloseWindow(dialog);
+                    Thread.Sleep(350);
                 }
             }
 

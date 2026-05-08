@@ -54,6 +54,8 @@ Use this loop:
 
 1. Re-read `AGENTS.md`, `MCGSCTL_LONGRUN_PROMPT.md`, this file,
    `MCGSCTL_GEMINI_PROMPT.md`, `MCGSCTL_UNATTENDED_RELAY_PROMPT.md`,
+   `MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md`,
+   `MCGSCTL_REVIEW_REPAIR_PLAN.md`,
    `git status`, current diffs, and latest `.mcgsctl-runs` / `.mcgsctl-work`
    evidence.
 2. Load the current queues:
@@ -92,6 +94,23 @@ Stopping rules:
   until `capabilityLevel=layoutIntegrated`. See
   `tools/mcgsctl/MCGSCTL_DRAWING_CAPABILITY_REPAIR_PROMPT.md` for the full
   L1–L5 taxonomy and repair work order.
+
+The 2026-05-07 external review found that older `layoutIntegrated` and
+"ALL PHASES COMPLETED" reports can still be pseudo-closures if they do not
+prove correct canvas state, coordinate calibration, tool-specific gestures,
+property-dialog readback, save/reopen persistence, and internal layout
+evidence. See `tools/mcgsctl/MCGSCTL_REVIEW_REPAIR_PLAN.md`; apply the stricter
+rule when reports conflict.
+
+The 2026-05-08 follow-up adds a hard FullCoverage rule: static implementation
+metadata is not capability evidence. `supportStatus=implemented`, declared
+workflow names, and evidence text containing `window.<kind>.add` or
+`window.layout.apply` must not infer `layoutIntegrated`. L5 requires real recent
+evidence: workflow result PASS, property readback PASS, layout apply PASS,
+layout readback PASS, coordinate calibration PASS, and candidate validation
+PASS. If a table tool has recent failure, table-cell popup, workbench-only, or
+missing property-readback evidence, downgrade or block it even if a workflow name
+exists.
 
 Only stop when there are no remaining file-safe probes, or when the next action
 requires human approval for official `FG2_HMI.MCE` apply, real hardware/PLC

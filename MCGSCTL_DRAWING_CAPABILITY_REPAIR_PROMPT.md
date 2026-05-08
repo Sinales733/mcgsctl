@@ -10,6 +10,48 @@ and actual user-facing drawing capability. Read it after `AGENTS.md`,
 - a function-catalog or tool-sweep report is being interpreted;
 - context was compressed and drawing capability status must be reconstructed.
 
+## 2026-05-07 Review Override
+
+The external MCGS review PDF delivered on 2026-05-07 supersedes any optimistic
+"ALL PHASES COMPLETED" wording below. Treat this file's old completion tables as
+historical claims that must be re-audited through
+`MCGSCTL_REVIEW_REPAIR_PLAN.md`.
+
+Current rule: no drawing/control/edit tool may be called user-facing usable
+unless the evidence proves the full chain for the intended target canvas:
+
+1. correct named user window opened through the project tree or equivalent route;
+2. animation canvas edit state verified by `canvas.verify-state` or equivalent;
+3. screen/client/logical coordinate transform calibrated;
+4. tool-selected state and exact gesture sequence recorded;
+5. created object type, geometry, and MCE/export diff verified;
+6. property dialog writes and readback verified;
+7. save/reopen persistence verified;
+8. collision/occlusion/z-order checked from internal canvas evidence;
+9. `layout.apply` schema, dispatch, workflow result, readback, and validators
+   prove L5.
+
+`closedLoopPass`, `layoutIntegratedCount`, `drawableOnlyCount=0`, and ordinary
+build/test PASS do not override this review. If any item above lacks evidence,
+restore `nextProbe` and continue file-safe repair work.
+
+## 2026-05-08 Follow-Up Override
+
+Treat single-tool GUI workflow PASS as `L4-pass` or `L5-candidate`, not final
+L5, until `layout.apply` proves coordinate calibration, internal occupancy,
+layout readback, and validators. The current L5-candidate list includes
+`rectangle`, `rounded-rectangle`, `arc`, `polyline`, `ellipse`, and
+`saved-data-browser` unless newer evidence proves the full L5 chain.
+
+`free-table` and `historical-table` are not layout-integrated while table object
+selection/readback is unresolved. Their readback must classify the scope as
+object property, table-cell popup, table workbench, user-window property, or
+selection failure.
+
+Any workflow that clamps coordinates must record requested/applied rectangles
+and clamp reason. Any workflow using a canvas must record requested and selected
+window identity plus canvas state evidence.
+
 ## The Problem This File Exists To Prevent
 
 Previous Codex runs reported `closedLoopPass` for ~23 drawing-create tools and

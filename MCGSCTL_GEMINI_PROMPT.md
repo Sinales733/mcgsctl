@@ -70,6 +70,15 @@ answering.
 
 Codex should send one of these request types:
 
+- `review_repair_audit`: audit a previous "complete" claim against the
+  2026-05-07 review plan and identify missing L4/L5 evidence.
+- `canvas_state_review`: decide whether the evidence proves the intended user
+  window and animation canvas are open and coordinate-calibrated.
+- `table_scope_review`: classify table property evidence as object-level
+  property, table-cell popup, table workbench, user-window property, or
+  selection failure.
+- `capability_ledger_review`: decide whether FullCoverage/capability logic is
+  over-promoting a tool from implemented/L4-candidate to L5.
 - `closure_review`: decide whether a tool/function/property is closed-loop
   usable.
 - `probe_design`: design the next smallest file-safe probe.
@@ -166,6 +175,54 @@ Use only these `decisionLabel` values:
 - `invalidEvidence`
 
 ## Closure Standards
+
+### Review-Driven Repair Standard
+
+If Codex sends an older report claiming `ALL PHASES COMPLETED`,
+`drawableOnlyCount=0`, `layoutIntegratedCount=25`, `tool-sweep status=PASS`, or
+`closureComplete=true`, do not accept it as proof. Audit the claim against the
+review plan:
+
+- correct named user window opened
+- animation edit canvas verified
+- coordinate transform calibrated
+- selected tool state proved
+- tool-specific gesture proved
+- object type/geometry proved
+- property dialog write/readback proved
+- save/reopen persistence proved
+- internal occupancy/z-order evidence proved
+- `layout.apply` schema/dispatch/readback/validators proved
+
+If any required layer is missing, return `notClosedLoop` or `needsProbe`, and
+name the smallest next local probe.
+
+### Table Scope Standard
+
+For `free-table` and `historical-table`, never accept generic property readback
+PASS until the scope is classified. Return one of:
+
+- `objectPropertyOpened`
+- `tableCellPopupOpened`
+- `tableWorkbenchOpened`
+- `userWindowPropertyOpened`
+- `selectionFailed`
+
+If Codex sends evidence of a table-cell popup, recommend table object frame
+selection: arrow tool, outer frame, corners, and border points before center or
+double-click. If Codex sends evidence of an MDI/workbench, require
+`propertyScope=table-workbench` and do not treat it as ordinary object property
+PASS unless object-level table fields are read, changed safely, saved, reopened,
+and read back.
+
+### Capability Ledger Standard
+
+Do not let FullCoverage infer L5 from `supportStatus=implemented`, workflow
+names, or strings like `window.<kind>.add`. L5 requires real recent evidence:
+workflow result PASS, property readback PASS, layout apply PASS, layout readback
+PASS, coordinate calibration PASS, and candidate validation PASS. Table tools
+with recent failure, table-cell popup, workbench-only, or missing readback
+evidence must be downgraded or blocked.
 
 ### View And UI Toggle Tools
 

@@ -3669,9 +3669,9 @@ internal static partial class Program
     {
         if (category == "drawing-create")
         {
-            if (IsDrawingCreateLayoutIntegrated(tool, closureStatus))
+            if (IsDrawingCreateLayoutIntegrated(tool, closureStatus, probe))
                 return "layoutIntegrated";
-            if (IsDrawingCreateConfigurable(closureStatus, probe))
+            if (IsDrawingCreateConfigurable(tool, closureStatus, probe))
                 return "configurable";
             if (closureStatus is "closedLoopPass" or "readOnlyClosedLoopPass")
                 return "drawable";
@@ -3686,28 +3686,158 @@ internal static partial class Program
         return "discovered";
     }
 
-    private static bool IsDrawingCreateLayoutIntegrated(McgsToolEntry tool, string closureStatus)
-    {
-        if (closureStatus is not ("closedLoopPass" or "readOnlyClosedLoopPass"))
-            return false;
-        if (!tool.supportStatus.Equals("implemented", StringComparison.OrdinalIgnoreCase))
-            return false;
-        var evidence = string.Join(" ", tool.evidenceSource, tool.expectedEffect, tool.invocationRoute);
-        return Regex.IsMatch(evidence, @"window\.[a-z0-9\-]+\.add", RegexOptions.IgnoreCase) ||
-               evidence.Contains("window.layout.apply", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsDrawingCreateConfigurable(string closureStatus, McgsToolProbeEvidence? probe)
+    private static bool IsDrawingCreateLayoutIntegrated(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
     {
         if (closureStatus is not ("closedLoopPass" or "readOnlyClosedLoopPass"))
             return false;
         if (probe == null || string.IsNullOrWhiteSpace(probe.Path))
             return false;
-        var dir = Path.GetDirectoryName(FullPath(probe.Path));
-        if (string.IsNullOrWhiteSpace(dir))
+        var evidence = ReadDrawingCapabilityLedgerEvidence(probe.Path);
+        if (IsTableDrawingTool(tool) &&
+            (evidence.TableCellPopupOpened || evidence.TableWorkbenchOpened || evidence.UserWindowPropertyOpened || !evidence.ObjectLevelPropertyDialog))
             return false;
-        return File.Exists(Path.Combine(dir, "property-dialog-closure.json")) ||
-               File.Exists(Path.Combine(dir, "property-readback.json"));
+
+        return evidence.WorkflowResultPass &&
+               evidence.WorkflowClassDeltaPass &&
+               evidence.PropertyReadbackPass &&
+               evidence.SelectionVerified &&
+               evidence.LayoutApplyPass &&
+               evidence.LayoutReadbackPass &&
+               evidence.CoordinateCalibrationPass &&
+               evidence.CandidateValidatePass;
+    }
+
+    private static bool IsDrawingCreateConfigurable(McgsToolEntry tool, string closureStatus, McgsToolProbeEvidence? probe)
+    {
+        if (closureStatus is not ("closedLoopPass" or "readOnlyClosedLoopPass"))
+            return false;
+        if (probe == null || string.IsNullOrWhiteSpace(probe.Path))
+            return false;
+        var evidence = ReadDrawingCapabilityLedgerEvidence(probe.Path);
+        if (IsTableDrawingTool(tool) &&
+            (evidence.TableCellPopupOpened || evidence.TableWorkbenchOpened || evidence.UserWindowPropertyOpened || !evidence.ObjectLevelPropertyDialog))
+            return false;
+
+        return evidence.PropertyReadbackPass && evidence.SelectionVerified;
+    }
+
+    private static bool IsTableDrawingTool(McgsToolEntry tool)
+    {
+        var commandId = tool.commandId.GetValueOrDefault();
+        if (commandId is 32946 or 32947) return true;
+        var text = string.Join(" ", tool.toolId, tool.displayName, tool.expectedEffect, tool.evidenceSource);
+        return text.Contains("free-table", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("historical-table", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DrawingCapabilityLedgerEvidence ReadDrawingCapabilityLedgerEvidence(string probePath)
+    {
+        var evidence = new DrawingCapabilityLedgerEvidence();
+        if (string.IsNullOrWhiteSpace(probePath))
+            return evidence;
+
+        var dir = Path.GetDirectoryName(FullPath(probePath));
+        if (string.IsNullOrWhiteSpace(dir))
+            return evidence;
+
+        var resultPath = Path.Combine(dir, "result.json");
+        if (File.Exists(resultPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(resultPath, Encoding.UTF8));
+                var root = doc.RootElement;
+                evidence.WorkflowResultPass = JsonBoolAny(root, "success", "Success") == true ||
+                                              string.Equals(JsonStringAny(root, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase);
+                evidence.WorkflowClassDeltaPass = JsonBoolAny(root, "classDelta", "ClassDelta") == true;
+                evidence.PropertyReadbackPass = string.Equals(
+                    JsonStringAny(root, "propertyReadbackStatus", "PropertyReadbackStatus"), "PASS",
+                    StringComparison.OrdinalIgnoreCase);
+                evidence.SelectionVerified = JsonBoolAny(root, "propertyReadbackSelectionVerified", "PropertyReadbackSelectionVerified") == true;
+            }
+            catch
+            {
+                // Keep UNKNOWN defaults and let capability remain downgraded.
+            }
+        }
+
+        var propertyReadbackCandidates = new[]
+        {
+            Path.Combine(dir, "property-readback.json"),
+            Path.Combine(dir, "property-readback", "property-readback.json")
+        };
+        foreach (var propertyReadbackPath in propertyReadbackCandidates)
+        {
+            if (!File.Exists(propertyReadbackPath)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(propertyReadbackPath, Encoding.UTF8));
+                var root = doc.RootElement;
+                if (string.Equals(JsonStringAny(root, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase))
+                    evidence.PropertyReadbackPass = true;
+                if (JsonBoolAny(root, "selectionVerified", "SelectionVerified") == true)
+                    evidence.SelectionVerified = true;
+                evidence.TableCellPopupOpened |= string.Equals(
+                    JsonStringAny(root, "tableScopeClassification", "TableScopeClassification"),
+                    "tableCellPopupOpened", StringComparison.OrdinalIgnoreCase);
+                evidence.TableWorkbenchOpened |= string.Equals(
+                    JsonStringAny(root, "tableScopeClassification", "TableScopeClassification"),
+                    "tableWorkbenchOpened", StringComparison.OrdinalIgnoreCase);
+                evidence.UserWindowPropertyOpened |= string.Equals(
+                    JsonStringAny(root, "tableScopeClassification", "TableScopeClassification"),
+                    "userWindowPropertyOpened", StringComparison.OrdinalIgnoreCase);
+                if (JsonBoolAny(root, "objectLevelPropertyDialog", "ObjectLevelPropertyDialog") == true)
+                    evidence.ObjectLevelPropertyDialog = true;
+            }
+            catch
+            {
+                // Keep UNKNOWN defaults and let capability remain downgraded.
+            }
+        }
+
+        evidence.LayoutApplyPass = AnyStatusPass(
+            Path.Combine(dir, "layout-apply-result.json"),
+            Path.Combine(dir, "layout-apply", "layout-apply-result.json"),
+            Path.Combine(dir, "layout", "layout-apply-result.json"));
+        evidence.LayoutReadbackPass = AnyStatusPass(
+            Path.Combine(dir, "layout-readback.json"),
+            Path.Combine(dir, "layout-readback", "layout-readback.json"),
+            Path.Combine(dir, "layout", "layout-readback.json"));
+        evidence.CoordinateCalibrationPass = AnyStatusPass(
+            Path.Combine(dir, "coordinate-calibration.json"),
+            Path.Combine(dir, "coordinate-calibration", "coordinate-calibration.json"));
+        evidence.CandidateValidatePass = AnyStatusPass(
+            Path.Combine(dir, "candidate-validate.json"),
+            Path.Combine(dir, "candidate-validate-result.json"),
+            Path.Combine(dir, "candidate-summary.json"),
+            Path.Combine(dir, "validate.json"));
+
+        return evidence;
+    }
+
+    private static bool AnyStatusPass(params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+                var root = doc.RootElement;
+                if (string.Equals(JsonStringAny(root, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (string.Equals(JsonStringAny(root, "verdict", "Verdict"), "apply-ready", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (JsonBoolAny(root, "success", "Success") == true)
+                    return true;
+            }
+            catch
+            {
+                // Ignore parse failures and keep searching candidate evidence.
+            }
+        }
+
+        return false;
     }
 
     private static string NormalizeCapabilityNextProbe(McgsToolEntry tool, string closureStatus, string capabilityLevel, string nextProbe)
@@ -4393,6 +4523,22 @@ internal static partial class Program
         bool CandidateSafeMutationUnexpectedFunctionalDiff, bool CandidateSafeMutationNotFunctional,
         bool CandidateSafeEditorContextOnlyModeToggle, bool NewWindowObserved, bool ProjectCopyHashChanged, string Context, bool UnknownRiskHashDriftExplained,
         bool DrawingCreateClosurePass, bool DrawingEditClosurePass);
+
+    private sealed class DrawingCapabilityLedgerEvidence
+    {
+        public bool WorkflowResultPass { get; set; }
+        public bool WorkflowClassDeltaPass { get; set; }
+        public bool PropertyReadbackPass { get; set; }
+        public bool SelectionVerified { get; set; }
+        public bool LayoutApplyPass { get; set; }
+        public bool LayoutReadbackPass { get; set; }
+        public bool CoordinateCalibrationPass { get; set; }
+        public bool CandidateValidatePass { get; set; }
+        public bool TableCellPopupOpened { get; set; }
+        public bool TableWorkbenchOpened { get; set; }
+        public bool UserWindowPropertyOpened { get; set; }
+        public bool ObjectLevelPropertyDialog { get; set; }
+    }
 
     private sealed record StyleObjectNonMutationEvidence(string Status, int CommandId,
         bool ObjectPropertiesUnchanged, int ComparedPropertyCount, string Path);
@@ -5785,18 +5931,38 @@ internal static partial class Program
             var semanticMap = FullPath(Required(args, "--semantic-map"));
             var objectId = Required(args, "--object-id");
             var expectedTitle = Opt(args, "--expected-title") ?? "";
+            var ignoreDisplayedText = Has(args, "--ignore-displayed-text");
+            var requireNonWindowDialog = Has(args, "--require-non-window-dialog");
+            var skipDoubleClick = Has(args, "--skip-double-click");
             var preferCommand = !Has(args, "--prefer-double-click");
+            var targetX = OptInt(args, "--target-x");
+            var targetY = OptInt(args, "--target-y");
+            var targetWidth = OptInt(args, "--target-width");
+            var targetHeight = OptInt(args, "--target-height");
+            var targetOverrideProvided = targetX.HasValue || targetY.HasValue || targetWidth.HasValue || targetHeight.HasValue;
+            if (targetOverrideProvided && (!targetX.HasValue || !targetY.HasValue || !targetWidth.HasValue || !targetHeight.HasValue))
+                throw new ArgumentException("--target-x/--target-y/--target-width/--target-height must be provided together.");
+
             using var semanticDoc = JsonDocument.Parse(File.ReadAllText(semanticMap, Encoding.UTF8));
             var target = FindSemanticMapObject(semanticDoc.RootElement, objectId);
-            if (target.ValueKind == JsonValueKind.Undefined)
+            var targetFound = target.ValueKind != JsonValueKind.Undefined;
+            if (!targetFound && !targetOverrideProvided)
                 throw new ArgumentException("Object was not found in semantic map: " + objectId);
 
-            var rect = target.TryGetProperty("Rect", out var upperRect) ? upperRect :
-                       target.TryGetProperty("rect", out var lowerRect) ? lowerRect : default;
-            var x = LayoutJsonIntAny(rect, "X", "x") ?? 0;
-            var y = LayoutJsonIntAny(rect, "Y", "y") ?? 0;
-            var width = LayoutJsonIntAny(rect, "Width", "width") ?? 0;
-            var height = LayoutJsonIntAny(rect, "Height", "height") ?? 0;
+            var rect = targetFound
+                ? target.TryGetProperty("Rect", out var upperRect) ? upperRect :
+                  target.TryGetProperty("rect", out var lowerRect) ? lowerRect : default
+                : default;
+            var semanticKind = targetFound
+                ? JsonStringAny(target, "SemanticKind", "semanticKind") ?? ""
+                : "";
+            var tableObjectFrameSelect = Has(args, "--table-object-frame-select") ||
+                                         semanticKind.Equals("free-table", StringComparison.OrdinalIgnoreCase) ||
+                                         semanticKind.Equals("historical-table", StringComparison.OrdinalIgnoreCase);
+            var x = targetOverrideProvided ? targetX!.Value : LayoutJsonIntAny(rect, "X", "x") ?? 0;
+            var y = targetOverrideProvided ? targetY!.Value : LayoutJsonIntAny(rect, "Y", "y") ?? 0;
+            var width = targetOverrideProvided ? targetWidth!.Value : LayoutJsonIntAny(rect, "Width", "width") ?? 0;
+            var height = targetOverrideProvided ? targetHeight!.Value : LayoutJsonIntAny(rect, "Height", "height") ?? 0;
             if (width <= 0 || height <= 0)
                 throw new InvalidOperationException("Semantic map object has no positive rectangle: " + objectId);
 
@@ -5805,8 +5971,63 @@ internal static partial class Program
             var revealOverlap = Has(args, "--reveal-overlap-delete")
                 ? TryRevealOverlapByDelete(process.Id, session.Main, session.Canvas, x, y, width, height, outDir)
                 : null;
-            var dialog = OpenCanvasObjectPropertyDialog(process.Id, session.Main, session.Canvas,
-                x, y, width, height, expectedTitle, preferCommand);
+            IntPtr dialog;
+            try
+            {
+                dialog = OpenCanvasObjectPropertyDialog(process.Id, session.Main, session.Canvas,
+                    x, y, width, height, expectedTitle, preferCommand, requireNonWindowDialog, skipDoubleClick,
+                    tableObjectFrameSelect: tableObjectFrameSelect);
+            }
+            catch (CanvasPropertyDialogSelectionException selectionEx)
+            {
+                var selectionResult = new
+                {
+                    schemaVersion = 1,
+                    status = "UNKNOWN",
+                    project = session.ProjectCopy,
+                    projectSha256 = session.ProjectSha256,
+                    createdAt = DateTimeOffset.Now.ToString("O"),
+                    semanticMap,
+                    objectId,
+                    targetFound,
+                    semanticKind,
+                    displayedText = targetFound ? JsonStringAny(target, "DisplayedText", "displayedText") ?? "" : "",
+                    ignoreDisplayedText,
+                    selectionVerified = false,
+                    displayedTextMatched = false,
+                    dialogTitle = "",
+                    requireNonWindowDialog,
+                    skipDoubleClick,
+                    tableObjectFrameSelect,
+                    targetRectSource = targetOverrideProvided ? "workflow-target-rect" : "semantic-map-object-rect",
+                    rect = new { x, y, width, height },
+                    tableScopeClassification = selectionEx.Classification,
+                    propertyScope = selectionEx.Classification.Equals("tableCellPopupOpened", StringComparison.OrdinalIgnoreCase)
+                        ? "table-cell-popup"
+                        : selectionEx.Classification.Equals("userWindowPropertyOpened", StringComparison.OrdinalIgnoreCase)
+                            ? "user-window-property"
+                            : "selection-failed",
+                    objectLevelPropertyDialog = false,
+                    tableWorkbenchVerified = false,
+                    blockedReasons = new[] { selectionEx.Message },
+                    revealOverlap,
+                    evidenceSource = "property-dialog-readback",
+                    nextProbe = selectionEx.Classification.Equals("tableCellPopupOpened", StringComparison.OrdinalIgnoreCase)
+                        ? (tableObjectFrameSelect
+                            ? "table-object-frame-select was exhausted; capture object-frame selection evidence, then probe table popup F9/workbench path and verify object-level table property read/write with save/reopen readback."
+                            : "Use table-object-frame-select (outer frame/corner/edge points with arrow tool) and retry WM_COMMAND 32785 without center-point double-click fallback.")
+                        : "Retry object selection with verified canvas-state and calibrated coordinates."
+                };
+                File.WriteAllText(Path.Combine(outDir, "property-readback.json"),
+                    JsonSerializer.Serialize(selectionResult, JsonOptions()), Encoding.UTF8);
+                File.WriteAllLines(Path.Combine(outDir, "window-tree.txt"), UiAutomation.WindowTreeLines(session.Main), Encoding.UTF8);
+                File.WriteAllLines(Path.Combine(outDir, "top-window-tree.txt"),
+                    UiAutomation.TopWindowsForPid(process.Id).SelectMany(UiAutomation.WindowTreeLines), Encoding.UTF8);
+                TryScreenshot(session.Main, Path.Combine(outDir, "main-window.png"));
+                TryScreenshot(session.Canvas, Path.Combine(outDir, "canvas-window.png"));
+                Console.Error.WriteLine("canvas property-readback blocked: " + selectionEx.Classification + " - " + selectionEx.Message);
+                return 2;
+            }
 
             var tab = UiAutomation.EnumerateChildren(dialog)
                 .FirstOrDefault(h => Native.GetClass(h).Equals("SysTabControl32", StringComparison.OrdinalIgnoreCase));
@@ -5846,10 +6067,38 @@ internal static partial class Program
             var permissionDialog = Has(args, "--probe-permissions")
                 ? TryProbePermissionDialog(process.Id, dialog, outDir)
                 : null;
-            var displayedText = JsonStringAny(target, "DisplayedText", "displayedText") ?? "";
-            var selectionVerified = string.IsNullOrWhiteSpace(displayedText) ||
-                DialogTabsContainText(tabs, displayedText);
-            var status = tabs.Count > 0 && selectionVerified ? "PASS" : "UNKNOWN";
+            var displayedText = targetFound
+                ? JsonStringAny(target, "DisplayedText", "displayedText") ?? ""
+                : "";
+            var dialogTitle = Native.GetText(dialog);
+            var windowDialogDetected = IsWindowPropertyDialogText(dialogTitle) || IsWindowPropertyDialogText(DialogText(dialog));
+            var tableWorkbenchDetected = !windowDialogDetected &&
+                                         !Native.GetClass(dialog).Equals("#32770", StringComparison.OrdinalIgnoreCase);
+            var tableScopeClassification = tableWorkbenchDetected
+                ? "tableWorkbenchOpened"
+                : windowDialogDetected
+                    ? "userWindowPropertyOpened"
+                    : "objectPropertyOpened";
+            var propertyScope = tableWorkbenchDetected
+                ? "table-workbench"
+                : windowDialogDetected
+                    ? "user-window-property"
+                    : "object-level";
+            var objectLevelPropertyDialog = !windowDialogDetected && !tableWorkbenchDetected;
+            var tableWorkbenchVerified = tableWorkbenchDetected;
+            var hasDisplayedText = !string.IsNullOrWhiteSpace(displayedText) && !ignoreDisplayedText;
+            var displayedTextMatched = hasDisplayedText && DialogTabsContainText(tabs, displayedText);
+            var selectionVerified = hasDisplayedText
+                ? displayedTextMatched && !windowDialogDetected
+                : tabs.Count > 0 && !windowDialogDetected && !tableWorkbenchDetected;
+            var status = tabs.Count > 0 && selectionVerified && objectLevelPropertyDialog ? "PASS" : "UNKNOWN";
+            var blockedReasons = new List<string>();
+            if (windowDialogDetected)
+                blockedReasons.Add("property dialog resolved to user-window properties instead of object properties");
+            if (tableWorkbenchDetected)
+                blockedReasons.Add("table workbench window opened; object-level property dialog is not proven");
+            if (hasDisplayedText && !displayedTextMatched)
+                blockedReasons.Add("property dialog content did not contain requested displayedText; coordinate may have selected an overlapping object");
 
             var result = new
             {
@@ -5860,26 +6109,42 @@ internal static partial class Program
                 createdAt = DateTimeOffset.Now.ToString("O"),
                 semanticMap,
                 objectId,
-                semanticKind = JsonStringAny(target, "SemanticKind", "semanticKind") ?? "",
+                targetFound,
+                semanticKind,
                 displayedText,
+                ignoreDisplayedText,
                 selectionVerified,
+                displayedTextMatched,
+                dialogTitle,
+                requireNonWindowDialog,
+                skipDoubleClick,
+                tableObjectFrameSelect,
+                targetRectSource = targetOverrideProvided ? "workflow-target-rect" : "semantic-map-object-rect",
                 rect = new { x, y, width, height },
+                tableScopeClassification,
+                propertyScope,
+                objectLevelPropertyDialog,
+                tableWorkbenchVerified,
                 dialog = WindowInfo.FromHandle(dialog),
                 tabs,
                 fontDialog,
                 permissionDialog,
                 revealOverlap,
-                blockedReasons = selectionVerified
-                    ? Array.Empty<string>()
-                    : new[] { "property dialog content did not contain requested displayedText; coordinate may have selected an overlapping object" },
+                blockedReasons,
                 evidenceSource = "property-dialog-readback",
-                nextProbe = tabs.Count > 0
+                nextProbe = status == "PASS"
                     ? "Parse property-readback tab/control text into property-map fields and add single-property diff samples for fields that remain ambiguous."
-                    : "Property dialog opened but no controls/tabs were captured; rerun with screenshot and window-tree evidence."
+                    : tableWorkbenchDetected
+                        ? "Record table workbench scope, then verify object-level table property read/write + save/reopen persistence before promoting readback PASS."
+                        : tableScopeClassification == "userWindowPropertyOpened"
+                            ? "Object selection resolved to user-window properties; retry object-level selection and verify selected object evidence."
+                            : "Property dialog opened but no controls/tabs were captured; rerun with screenshot and window-tree evidence."
             };
             File.WriteAllText(Path.Combine(outDir, "property-readback.json"),
                 JsonSerializer.Serialize(result, JsonOptions()), Encoding.UTF8);
             File.WriteAllLines(Path.Combine(outDir, "property-dialog.tree.txt"), UiAutomation.WindowTreeLines(dialog), Encoding.UTF8);
+            File.WriteAllLines(Path.Combine(outDir, "top-window-tree.txt"),
+                UiAutomation.TopWindowsForPid(process.Id).SelectMany(UiAutomation.WindowTreeLines), Encoding.UTF8);
             TryScreenshot(dialog, Path.Combine(outDir, "property-dialog.png"));
             UiAutomation.CloseWindow(dialog);
             Thread.Sleep(300);
@@ -6314,6 +6579,14 @@ internal static partial class Program
                 if (!string.Equals(JsonStringAny(doc.RootElement, "status", "Status"), "PASS", StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (JsonBoolAny(doc.RootElement, "selectionVerified", "SelectionVerified") == false)
+                    continue;
+                var scopeClassification = JsonStringAny(doc.RootElement, "tableScopeClassification", "TableScopeClassification") ?? "";
+                if (scopeClassification.Equals("tableCellPopupOpened", StringComparison.OrdinalIgnoreCase) ||
+                    scopeClassification.Equals("tableWorkbenchOpened", StringComparison.OrdinalIgnoreCase) ||
+                    scopeClassification.Equals("userWindowPropertyOpened", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (JsonBoolAny(doc.RootElement, "objectLevelPropertyDialog", "ObjectLevelPropertyDialog") == false &&
+                    !string.IsNullOrWhiteSpace(scopeClassification))
                     continue;
                 var evidence = ParsePropertyDialogEvidence(path, doc.RootElement);
                 if (!string.IsNullOrWhiteSpace(evidence.ObjectId))

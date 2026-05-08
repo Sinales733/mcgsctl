@@ -1970,6 +1970,353 @@ public sealed class FullCoverageTests : IDisposable
         Assert.Contains("functional normalized row-order diff", policy["smallestNoBoundaryValidation"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void PropertyMapRejectsUserWindowPropertyReadbackEvenWhenSelectionVerified()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var semantic = Path.Combine(_root, "semantic-map-user-window.json");
+        File.WriteAllText(semantic, BuildSemanticMap().ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+
+        var readbackRoot = Path.Combine(_root, "user-window-readback");
+        Directory.CreateDirectory(readbackRoot);
+        File.WriteAllText(Path.Combine(readbackRoot, "property-readback.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "selectionVerified": true,
+          "objectLevelPropertyDialog": false,
+          "tableScopeClassification": "userWindowPropertyOpened",
+          "objectId": "mce-sem-r2-0001",
+          "tabs": [
+            {
+              "Text": "属性",
+              "controls": [
+                { "sequence": 1, "className": "Static", "text": "字体", "visible": true, "rect": { "x": 1, "y": 1, "width": 10, "height": 10 } },
+                { "sequence": 2, "className": "Edit", "text": "wrong-family", "visible": true, "rect": { "x": 1, "y": 20, "width": 10, "height": 10 } }
+              ]
+            }
+          ],
+          "fontDialog": {
+            "status": "PASS",
+            "extracted": {
+              "fontFamily": "wrong-family",
+              "fontStyle": "wrong-style",
+              "fontSize": "wrong-size"
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var outDir = Path.Combine(_root, "property-map-user-window-readback");
+        var result = TestCli.Run("canvas", "property-map-probe", "--project", project, "--semantic-map", semantic,
+            "--row-key", "2", "--property-readback-dir", readbackRoot, "--out", outDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "property-map.json"), Encoding.UTF8))!.AsObject();
+        var properties = root["objects"]!.AsArray()[0]!.AsObject()["properties"]!.AsObject();
+        Assert.NotEqual("wrong-family", properties["fontFamily"]!["value"]!.GetValue<string>());
+        Assert.Equal("unresolved", properties["fontSize"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void PropertyMapRejectsTableWorkbenchReadbackEvenWhenSelectionVerified()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var semantic = Path.Combine(_root, "semantic-map-workbench.json");
+        File.WriteAllText(semantic, BuildSemanticMap().ToJsonString(new() { WriteIndented = true }), Encoding.UTF8);
+
+        var readbackRoot = Path.Combine(_root, "table-workbench-readback");
+        Directory.CreateDirectory(readbackRoot);
+        File.WriteAllText(Path.Combine(readbackRoot, "property-readback.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "selectionVerified": true,
+          "objectLevelPropertyDialog": false,
+          "tableScopeClassification": "tableWorkbenchOpened",
+          "propertyScope": "table-workbench",
+          "tableWorkbenchVerified": true,
+          "objectId": "mce-sem-r2-0001",
+          "tabs": [
+            {
+              "Text": "工作台",
+              "controls": [
+                { "sequence": 1, "className": "Static", "text": "字体", "visible": true, "rect": { "x": 1, "y": 1, "width": 10, "height": 10 } },
+                { "sequence": 2, "className": "Edit", "text": "wrong-family", "visible": true, "rect": { "x": 1, "y": 20, "width": 10, "height": 10 } }
+              ]
+            }
+          ],
+          "fontDialog": {
+            "status": "PASS",
+            "extracted": {
+              "fontFamily": "wrong-family",
+              "fontStyle": "wrong-style",
+              "fontSize": "wrong-size"
+            }
+          }
+        }
+        """, Encoding.UTF8);
+
+        var outDir = Path.Combine(_root, "property-map-table-workbench-readback");
+        var result = TestCli.Run("canvas", "property-map-probe", "--project", project, "--semantic-map", semantic,
+            "--row-key", "2", "--property-readback-dir", readbackRoot, "--out", outDir);
+
+        Assert.Equal(2, result.ExitCode);
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(outDir, "property-map.json"), Encoding.UTF8))!.AsObject();
+        var properties = root["objects"]!.AsArray()[0]!.AsObject()["properties"]!.AsObject();
+        Assert.NotEqual("wrong-family", properties["fontFamily"]!["value"]!.GetValue<string>());
+        Assert.Equal("unresolved", properties["fontSize"]!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepRequiresRealLayoutEvidenceBeforeLayoutIntegrated()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-rectangle-l4");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:9:3:32903",
+              "displayName": "rectangle",
+              "source": "toolbar",
+              "uiPath": "toolbox/button[3]",
+              "commandId": 32903,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32903",
+              "expectedEffect": "creates a rectangle object",
+              "evidenceSource": "workflow run window.rectangle.add",
+              "nextProbe": ""
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "rectangle-l4-only");
+        Directory.CreateDirectory(probeDir);
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:9:3:32903",
+          "commandId": 32903,
+          "context": "animation-draw-object",
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true,
+            "drawingCreateClosurePass": true
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "result.json"), """
+        {
+          "success": true,
+          "classDelta": true,
+          "propertyReadbackStatus": "PASS",
+          "propertyReadbackSelectionVerified": true
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-rectangle-l4");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal(0, sweep["layoutIntegratedCount"]!.GetValue<int>());
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("configurable", entry["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L5", entry["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepDowngradesTableWhenTableCellPopupScopeExists()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-free-table-table-cell-popup");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:9:24:32946",
+              "displayName": "free table",
+              "source": "toolbar",
+              "uiPath": "toolbox/button[24]",
+              "commandId": 32946,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32946",
+              "expectedEffect": "creates a free-table object",
+              "evidenceSource": "workflow run window.free-table.add",
+              "nextProbe": ""
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "free-table-cell-popup");
+        Directory.CreateDirectory(probeDir);
+        Directory.CreateDirectory(Path.Combine(probeDir, "property-readback"));
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:9:24:32946",
+          "commandId": 32946,
+          "context": "animation-draw-object",
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true,
+            "drawingCreateClosurePass": true
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "result.json"), """
+        {
+          "success": true,
+          "classDelta": true,
+          "propertyReadbackStatus": "PASS",
+          "propertyReadbackSelectionVerified": true
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "layout-apply-result.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "layout-readback.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "coordinate-calibration.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "candidate-summary.json"), """{ "verdict": "apply-ready" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "property-readback", "property-readback.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "selectionVerified": true,
+          "objectLevelPropertyDialog": false,
+          "tableScopeClassification": "tableCellPopupOpened",
+          "propertyScope": "table-cell-popup",
+          "tableWorkbenchVerified": false
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-free-table-cell-popup");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal(0, sweep["layoutIntegratedCount"]!.GetValue<int>());
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("drawable", entry["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L4", entry["nextProbe"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolSweepDowngradesHistoricalTableWhenTableCellPopupScopeExists()
+    {
+        Directory.CreateDirectory(_root);
+        var project = Path.Combine(_root, "candidate.MCE");
+        File.WriteAllBytes(project, Encoding.ASCII.GetBytes("dummy candidate"));
+        var catalogDir = Path.Combine(_root, "catalog-historical-table-table-cell-popup");
+        Directory.CreateDirectory(catalogDir);
+        File.WriteAllText(Path.Combine(catalogDir, "tool-catalog.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "UNKNOWN",
+          "tools": [
+            {
+              "toolId": "toolbar:9:25:32947",
+              "displayName": "historical table",
+              "source": "toolbar",
+              "uiPath": "toolbox/button[25]",
+              "commandId": 32947,
+              "enabled": true,
+              "hidden": false,
+              "supportStatus": "implemented",
+              "safetyClass": "candidate-safe-mutation",
+              "invocationRoute": "WM_COMMAND 32947",
+              "expectedEffect": "creates a historical-table object",
+              "evidenceSource": "workflow run window.historical-table.add",
+              "nextProbe": ""
+            }
+          ]
+        }
+        """, Encoding.UTF8);
+        var probeDir = Path.Combine(_root, "probe-root", "historical-table-cell-popup");
+        Directory.CreateDirectory(probeDir);
+        Directory.CreateDirectory(Path.Combine(probeDir, "property-readback"));
+        File.WriteAllText(Path.Combine(probeDir, "tool-probe.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "toolId": "toolbar:9:25:32947",
+          "commandId": 32947,
+          "context": "animation-draw-object",
+          "safetyClass": "candidate-safe-mutation",
+          "evidence": {
+            "candidateSafeMutation": true,
+            "candidateSafeMutationFunctionalDiff": true,
+            "drawingCreateClosurePass": true
+          }
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "result.json"), """
+        {
+          "success": true,
+          "classDelta": true,
+          "propertyReadbackStatus": "PASS",
+          "propertyReadbackSelectionVerified": true
+        }
+        """, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "layout-apply-result.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "layout-readback.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "coordinate-calibration.json"), """{ "status": "PASS" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "candidate-summary.json"), """{ "verdict": "apply-ready" }""", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(probeDir, "property-readback", "property-readback.json"), """
+        {
+          "schemaVersion": 1,
+          "status": "PASS",
+          "selectionVerified": true,
+          "objectLevelPropertyDialog": false,
+          "tableScopeClassification": "tableCellPopupOpened",
+          "propertyScope": "table-cell-popup",
+          "tableWorkbenchVerified": false
+        }
+        """, Encoding.UTF8);
+
+        var sweepDir = Path.Combine(_root, "sweep-historical-table-cell-popup");
+        var result = TestCli.Run("mcgs", "tool-sweep", "--project", project,
+            "--tool-catalog", Path.Combine(catalogDir, "tool-catalog.json"),
+            "--probe-root", Path.Combine(_root, "probe-root"),
+            "--out", sweepDir);
+
+        Assert.Equal(0, result.ExitCode);
+        var sweep = JsonNode.Parse(File.ReadAllText(Path.Combine(sweepDir, "tool-sweep.json"), Encoding.UTF8))!.AsObject();
+        Assert.Equal(0, sweep["layoutIntegratedCount"]!.GetValue<int>());
+        var entry = sweep["entries"]!.AsArray()[0]!.AsObject();
+        Assert.Equal("drawable", entry["capabilityLevel"]!.GetValue<string>());
+        Assert.Contains("L4", entry["nextProbe"]!.GetValue<string>());
+    }
+
     private static string BuildPropertyReadback(string family, string style, string size)
         => $$"""
         {
